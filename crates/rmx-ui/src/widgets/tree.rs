@@ -3,8 +3,8 @@
 use egui::{CornerRadius, Id, Key, Modifiers, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use crate::action::{NodeId, Protocol, UiAction};
-use crate::draw::{elided_at, icon, palette, vline};
-use crate::theme::{CONTROL_HEIGHT, RADIUS_SM, TEXT_SM, TREE_ICON, TREE_ROW_HEIGHT};
+use crate::draw::{elided_at, icon, palette};
+use crate::theme::{CONTROL_HEIGHT, RADIUS_SM, TEXT_SM, TEXT_XS, TREE_ICON, TREE_ROW_HEIGHT};
 use crate::virtual_list::{clamp_scroll, scroll_for_thumb, scroll_to_row, thumb, window};
 use crate::{fonts, icons};
 
@@ -283,7 +283,11 @@ pub fn connection_tree(
             };
             icon(&painter, pos2(indent + 6., center), chevron, 12., p.muted_fg);
         }
-        icon(&painter, pos2(indent + 21., center), glyph, TREE_ICON, p.muted_fg);
+        let tint = match node.kind {
+            NodeKind::Connection(protocol) => p.protocol(protocol),
+            NodeKind::Folder => p.folder,
+        };
+        icon(&painter, pos2(indent + 21., center), glyph, TREE_ICON, tint);
 
         // Under the pointer a connection offers what is done with it most.
         let hot = !is_folder && ui.rect_contains_pointer(row_rect.intersect(rect));
@@ -471,8 +475,6 @@ pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Op
     let id = Id::unique("sidebar-status");
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.sidebar);
-    crate::draw::hline(ui.painter(), rect.left(), rect.right(), rect.top(), p.border);
-    vline(ui.painter(), rect.right() - 1., rect.top(), rect.bottom(), p.border);
 
     let mut action = None;
     let mut right = rect.right() - 6.;
@@ -507,7 +509,7 @@ pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Op
     let x = rect.left() + 12.;
     let y = rect.center().y;
     let width = right - x - 4.;
-    elided_at(ui.painter(), x, y, status.text, fonts::regular(TEXT_SM), color, width);
+    elided_at(ui.painter(), x, y, status.text, fonts::regular(TEXT_XS), color, width);
     if status.failed {
         // The strip is too short for most reasons.
         let line = Rect::from_min_size(pos2(x, rect.top()), Vec2::new(width, rect.height()));
@@ -530,7 +532,6 @@ pub fn sidebar(
     let id = Id::unique("sidebar");
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.sidebar);
-    vline(ui.painter(), rect.right() - 1., rect.top(), rect.bottom(), p.border);
 
     let switcher = Rect::from_min_size(rect.min + vec2(8., 8.), vec2(rect.width() - 16., CONTROL_HEIGHT));
     let opened = ui.interact(switcher, id.with("vault"), Sense::click());
@@ -538,7 +539,10 @@ pub fn sidebar(
         ui.painter().rect_filled(switcher, CornerRadius::same(RADIUS_SM), p.hover);
     }
     let y = switcher.center().y;
-    crate::draw::icon(ui.painter(), pos2(switcher.left() + 16., y), icons::KEY_ROUND, 13., p.muted_fg);
+    let mark = Rect::from_center_size(pos2(switcher.left() + 16., y), Vec2::splat(18.));
+    ui.painter().rect_filled(mark, CornerRadius::same(RADIUS_SM), p.brand);
+    let initial: String = vault.chars().next().map(|first| first.to_uppercase().collect()).unwrap_or_default();
+    ui.painter().text(mark.center(), egui::Align2::CENTER_CENTER, initial, fonts::medium(TEXT_XS), p.brand_fg);
     let room = switcher.width() - 56.;
     elided_at(ui.painter(), switcher.left() + 32., y, vault, fonts::medium(TEXT_SM), p.foreground, room);
     crate::draw::icon(ui.painter(), pos2(switcher.right() - 14., y), icons::CHEVRON_DOWN, 13., p.muted_fg);

@@ -5,7 +5,7 @@ use std::time::Instant;
 use egui::{Id, Rect, Sense, Ui, Vec2, pos2};
 
 use crate::action::UiAction;
-use crate::draw::{hline, palette, vline};
+use crate::draw::palette;
 use crate::icons;
 use crate::theme::{STRIP_HEIGHT, TAB_HEIGHT};
 
@@ -44,11 +44,6 @@ pub fn title_bar(
     painter.rect_filled(rect, 0., p.chrome);
     let lead = if view.sidebar_open { view.sidebar_width } else { CONTROL + EDGE * 2. };
     let lead_rect = Rect::from_min_size(rect.min, egui::vec2(lead, rect.height()));
-    if view.sidebar_open {
-        painter.rect_filled(lead_rect, 0., p.sidebar);
-        vline(&painter, lead_rect.right() - 1., rect.top(), rect.bottom(), p.border);
-    }
-    hline(&painter, rect.left(), rect.right(), rect.bottom() - 1., p.border);
 
     // Everything else is laid on top of this, and egui gives the topmost widget the pointer.
     let drag = ui.interact(rect, id.with("drag"), Sense::click_and_drag());

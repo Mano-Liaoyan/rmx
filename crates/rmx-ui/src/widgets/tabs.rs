@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use egui::{CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{CornerRadius, Id, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use rmx_layout::anim::{Curve, Tween};
 
-use crate::action::{TabId, UiAction};
+use crate::action::{Protocol, TabId, UiAction};
 use crate::draw::{elided_at, icon, palette};
 use crate::theme::{RADIUS_SM, STRIP_HEIGHT, TAB_HEIGHT, TAB_SLIDE_MS, TEXT_SM};
 use crate::{fonts, icons};
@@ -30,6 +30,8 @@ pub struct TabView<'a> {
     pub id: TabId,
     pub label: &'a str,
     pub glyph: char,
+    /// What kind of connection it is, for the color of its icon.
+    pub protocol: Option<Protocol>,
     pub active: bool,
     pub status: PaneStatus,
 }
@@ -212,20 +214,15 @@ pub fn tab_strip(
 
         let p = palette(ui);
         if tab.active || held {
-            painter.rect(
-                tab_rect,
-                CornerRadius::same(RADIUS_SM),
-                p.background,
-                Stroke::new(1., p.border),
-                StrokeKind::Inside,
-            );
+            painter.rect_filled(tab_rect, CornerRadius::same(RADIUS_SM), p.accent);
         } else if hovered {
             painter.rect_filled(tab_rect, CornerRadius::same(RADIUS_SM), p.hover);
         }
 
         let color = if tab.active { p.foreground } else { p.muted_fg };
         let y = tab_rect.center().y;
-        icon(&painter, pos2(tab_rect.left() + 15., y), tab.glyph, 14., color);
+        let tint = tab.protocol.map_or(color, |protocol| p.protocol(protocol));
+        icon(&painter, pos2(tab_rect.left() + 15., y), tab.glyph, 14., tint);
         let dot = match tab.status {
             PaneStatus::Connected => None,
             PaneStatus::Connecting => Some(p.warning),

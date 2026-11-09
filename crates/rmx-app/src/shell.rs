@@ -444,19 +444,18 @@ fn pane_title(panes: &[Pane], id: PaneId) -> &str {
 }
 
 /// The icon of what the tab has focused: of its kind of connection, a terminal otherwise.
-fn tab_glyph(panes: &[Pane], common: &Common, tab: &Tab) -> char {
-    let remote = panes.iter().find(|pane| pane.id == tab.focus).and_then(|pane| pane.remote.as_ref());
-    let Some(remote) = remote else { return icons::TERMINAL };
+fn tab_protocol(panes: &[Pane], common: &Common, tab: &Tab) -> Option<Protocol> {
+    let remote = panes.iter().find(|pane| pane.id == tab.focus)?.remote.as_ref()?;
     let protocol = common.nodes.get(&remote.node).and_then(|info| match info.kind {
         NodeKind::Connection(protocol) => Some(protocol),
         NodeKind::Folder => None,
-    });
-    match (protocol, &remote.goal) {
-        // Files opened from a shell are not a shell.
-        (Some(Protocol::Ssh), Goal::Files { .. }) => Protocol::Sftp.icon(),
-        (Some(protocol), _) => protocol.icon(),
-        (None, _) => icons::TERMINAL,
-    }
+    })?;
+    // Files opened from a shell are not a shell.
+    Some(if protocol == Protocol::Ssh && matches!(remote.goal, Goal::Files { .. }) { Protocol::Sftp } else { protocol })
+}
+
+fn tab_glyph(panes: &[Pane], common: &Common, tab: &Tab) -> char {
+    tab_protocol(panes, common, tab).map_or(icons::TERMINAL, Protocol::icon)
 }
 
 fn tab_label(panes: &[Pane], tab: &Tab) -> String {
@@ -676,6 +675,7 @@ impl Shell {
                 id: TabId(tab.id),
                 label,
                 glyph: tab_glyph(view.panes, common, &view.workspace.tabs()[index]),
+                protocol: tab_protocol(view.panes, common, &view.workspace.tabs()[index]),
                 active: index == active,
                 status: view
                     .panes
@@ -842,7 +842,8 @@ impl Shell {
                     1 => "1 forward".to_owned(),
                     count => format!("{count} forwards"),
                 });
-            let tooltip: Vec<String> = pane.content.size_fact().into_iter().chain(forwards).collect();
+            let target = pane.remote.as_ref().map(|remote| remote.target.clone()).filter(|target| target != pane.label());
+            let tooltip: Vec<String> = target.into_iter().chain(pane.content.size_fact()).chain(forwards).collect();
             let tooltip = tooltip.join("  ");
             let ssh = pane.remote.as_ref().is_some_and(|remote| {
                 common.nodes.get(&remote.node).is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
@@ -851,7 +852,6 @@ impl Shell {
                 pane: rmx_ui::PaneId(id),
                 status: pane.status(),
                 title: pane.label(),
-                target: pane.remote.as_ref().map_or("", |remote| remote.target.as_str()),
                 tooltip: &tooltip,
                 focused: view.workspace.focused() == Some(id),
                 grouped,
@@ -909,11 +909,11 @@ impl Shell {
         for &(id, rest) in view.rects {
             let panel = points(view.motion.frame(id, view.now).unwrap_or(rest), scale);
             let painter = ui.painter_at(panel.expand(gutter));
-            let cut = Stroke::new(gutter, palette.background);
+            let cut = Stroke::new(gutter, palette.chrome);
             painter.rect_stroke(panel, radius, cut, StrokeKind::Outside);
 
             let light = view.motion.light(id, view.now);
-            let edge = palette.border.lerp_to_gamma(palette.muted_fg, light);
+            let edge = palette.border.lerp_to_gamma(palette.muted_fg, light * 0.45);
             painter.rect_stroke(panel, radius, Stroke::new(1., edge), StrokeKind::Inside);
         }
     }

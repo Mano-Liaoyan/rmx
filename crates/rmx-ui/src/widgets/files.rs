@@ -10,18 +10,18 @@ use std::time::SystemTime;
 use egui::{Align2, Color32, CornerRadius, Id, LayerId, Order, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::action::{FileSide, FilesAction, PaneId, UiAction};
-use crate::draw::{elided_at, hline, icon, palette, vline};
-use crate::theme::{CONTROL_HEIGHT, RADIUS_SM, TEXT_SM};
+use crate::draw::{elided_at, file_icon, hline, icon, palette, vline};
+use crate::theme::{CONTROL_HEIGHT, RADIUS_SM, TEXT_SM, TEXT_XS};
 use crate::virtual_list::{clamp_scroll, scroll_for_thumb, scroll_to_row, thumb, window};
 use crate::{fonts, icons};
 
-use super::controls::{InputOptions, paint_icon_button, segmented, submitted, text_input};
+use super::controls::{InputOptions, paint_icon_button, submitted, text_input};
 use super::panels::{FILES_DATE, FILES_QUEUE, FILES_SIZE, FILES_SPLIT, Panels, resize_handle};
 use super::text_view::{BodyState, FilesBody, show_body};
 
-const ROW: f32 = 24.;
-const BAR: f32 = 40.;
-const HEAD: f32 = 22.;
+const ROW: f32 = 26.;
+const BAR: f32 = 36.;
+const HEAD: f32 = 24.;
 const PAD: f32 = 8.;
 const SIZE_MIN: f32 = 44.;
 const DATE_MIN: f32 = 60.;
@@ -29,7 +29,7 @@ const NAME_MIN: f32 = 80.;
 const COLUMN_MIN: f32 = 200.;
 const THUMB_WIDTH: f32 = 6.;
 const THUMB_MIN: f32 = 24.;
-const QUEUE_BAR: f32 = 40.;
+const QUEUE_BAR: f32 = 36.;
 /// The most of a path bar the name of a column takes.
 const TITLE_MAX: f32 = 220.;
 /// Dragged this close to its bar, the queue folds down to it.
@@ -395,12 +395,6 @@ fn format_time(time: SystemTime) -> String {
     )
 }
 
-/// A plain page shape, as the icon font has no file.
-fn paint_file(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
-    let rect = Rect::from_center_size(center, vec2(9., 12.));
-    painter.rect_stroke(rect, CornerRadius::same(1), Stroke::new(1., color), StrokeKind::Inside);
-}
-
 #[allow(clippy::too_many_arguments)]
 fn show_column(
     ui: &mut Ui,
@@ -428,8 +422,10 @@ fn show_column(
     }
     // However long the name of the host, the path keeps most of the bar.
     let title_room = (bar.width() * 0.35).min(TITLE_MAX);
+    let active = focused && state.active_side() == side;
+    let title_color = if active { p.foreground } else { p.muted_fg };
     let title_width =
-        elided_at(ui.painter(), bar.left() + 10., bar.center().y, view.title, fonts::medium(TEXT_SM), p.foreground, title_room);
+        elided_at(ui.painter(), bar.left() + 10., bar.center().y, view.title, fonts::medium(TEXT_SM), title_color, title_room);
     let title_rect = Rect::from_min_size(bar.min, vec2(title_width + 10., BAR));
     ui.interact(title_rect, id.with("title"), Sense::hover()).on_hover_text(view.title);
     let up = Rect::from_center_size(pos2(bar.left() + 10. + title_width + 20., bar.center().y), vec2(26., 26.));
@@ -466,7 +462,7 @@ fn show_column(
 
     // The heads of the columns.
     let head = Rect::from_min_size(pos2(rect.left(), bar.bottom()), vec2(rect.width(), HEAD));
-    let font = fonts::regular(TEXT_SM);
+    let font = fonts::regular(TEXT_XS);
     let name_x = head.left() + 34.;
     let room = (head.right() - 18. - name_x - NAME_MIN).max(SIZE_MIN + DATE_MIN);
     let date_w = panels.files_date.clamp(DATE_MIN, (room - SIZE_MIN).max(DATE_MIN));
@@ -547,20 +543,20 @@ fn show_column(
         let center = row_rect.center().y;
         let at = pos2(row_rect.left() + 12., center);
         match row.kind {
-            FileKind::Dir => icon(&painter, at, icons::FOLDER, 13., p.muted_fg),
+            FileKind::Dir => icon(&painter, at, icons::FOLDER, 14., p.folder),
             FileKind::Link => icon(&painter, at, icons::CORNER_DOWN_LEFT, 13., p.muted_fg),
-            FileKind::File | FileKind::Other => paint_file(&painter, at, p.muted_fg),
+            FileKind::File | FileKind::Other => file_icon(&painter, at, 14., p.muted_fg),
         }
         let font = fonts::regular(TEXT_SM);
         let name_room = (size_right - size_w - name_x).max(20.);
         elided_at(&painter, name_x, center, &row.name, font.clone(), p.foreground, name_room);
         if let Some(size) = row.size.filter(|_| row.kind == FileKind::File) {
             let at = pos2(size_right, center);
-            painter.text(at, Align2::RIGHT_CENTER, format_size(size), font.clone(), p.muted_fg);
+            painter.text(at, Align2::RIGHT_CENTER, format_size(size), fonts::regular(TEXT_XS), p.muted_fg);
         }
         if let Some(modified) = row.modified {
             let at = pos2(date_x, center);
-            painter.text(at, Align2::LEFT_CENTER, format_time(modified), font.clone(), p.muted_fg);
+            painter.text(at, Align2::LEFT_CENTER, format_time(modified), fonts::regular(TEXT_XS), p.muted_fg);
         }
 
         if response.double_clicked() && row.openable() {
@@ -681,24 +677,26 @@ fn show_queue(
 
     // What to do about files in the way, and the buttons for copying what is selected.
     let bar = Rect::from_min_size(rect.min + vec2(0., 1.), vec2(rect.width(), QUEUE_BAR - 1.));
-    let row_ui_rect = bar.shrink2(vec2(PAD, 4.));
+    let row_ui_rect = bar.shrink2(vec2(PAD, 3.));
     let mut bar_ui = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(id.with("bar"))
             .max_rect(row_ui_rect)
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    let mut policy = view.policy;
-    let options: [&str; 5] = CONFLICT_POLICIES;
-    let width = 300f32.min((row_ui_rect.width() - 110.).max(120.));
-    let response = bar_ui
-        .allocate_ui(vec2(width, CONTROL_HEIGHT), |ui| {
-            segmented(ui, id.with("policy"), &options, &mut policy)
-        })
-        .inner
-        .on_hover_text("When a file already exists");
-    if response.changed() {
-        actions.push(UiAction::Files(pane, FilesAction::Policy(policy)));
+    let label = CONFLICT_POLICIES[view.policy.min(CONFLICT_POLICIES.len() - 1)];
+    let font = fonts::regular(TEXT_XS);
+    let text_width = bar_ui.painter().layout_no_wrap(label.to_owned(), font.clone(), p.muted_fg).size().x;
+    let width = text_width + 34.;
+    let (cell, _) = bar_ui.allocate_exact_size(vec2(width, 26.), Sense::hover());
+    let response = bar_ui.interact(cell, id.with("policy"), Sense::click()).on_hover_text("When a file already exists");
+    if response.hovered() {
+        bar_ui.painter().rect_filled(cell, CornerRadius::same(RADIUS_SM), p.hover);
+    }
+    bar_ui.painter().text(pos2(cell.left() + 8., cell.center().y), Align2::LEFT_CENTER, label, font, p.foreground);
+    icon(bar_ui.painter(), pos2(cell.right() - 12., cell.center().y), icons::CHEVRON_DOWN, 12., p.muted_fg);
+    if response.clicked() {
+        actions.push(UiAction::FilesPolicyMenu { pane, pos: cell.left_top() });
     }
     let upload: Vec<Arc<str>> = state.selected(FileSide::Local);
     let download: Vec<Arc<str>> = state.selected(FileSide::Remote);
@@ -779,7 +777,7 @@ fn show_queue(
         let detail_right = bar_left - 8.;
         let label_room = ((detail_right - 170.) - (row_rect.left() + 14.)).max(40.);
         elided_at(&painter, row_rect.left() + 14., center, &row.label, fonts::regular(TEXT_SM), p.foreground, label_room);
-        elided_at(&painter, detail_right - 160., center, &row.detail, fonts::regular(TEXT_SM), p.muted_fg, 160.);
+        elided_at(&painter, detail_right - 160., center, &row.detail, fonts::regular(TEXT_XS), p.muted_fg, 160.);
 
         let track = Rect::from_min_size(pos2(bar_left, center - 2.), vec2(bar_width, 4.));
         painter.rect_filled(track, CornerRadius::same(2), p.border);
@@ -1038,7 +1036,7 @@ mod tests {
         let rows = listing(100_000);
         let view = view(&rows, &[]);
         let mut state = FilesState::default();
-        state.sides[0].viewport = 240.;
+        state.sides[0].viewport = ROW * 10.;
         state.key(FilesKey::End, false, &view);
         assert_eq!(state.sides[0].cursor, 99_999);
         let top = state.sides[0].scroll;

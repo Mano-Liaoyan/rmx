@@ -6,7 +6,7 @@ use egui::{
 
 use crate::action::UiAction;
 use crate::draw::{elided_at, hline, icon, palette, snap};
-use crate::theme::{RADIUS_SM, TEXT_SM};
+use crate::theme::{RADIUS_SM, TEXT_SM, TEXT_XS};
 use crate::{float, fonts};
 
 const WIDTH: f32 = 224.;
@@ -162,7 +162,7 @@ fn menu_row(ui: &mut egui::Ui, id: Id, item: &MenuItem, selected: bool) -> (Opti
     let x = rect.left() + 30.;
     let mut right = rect.right() - 8.;
     if let Some(shortcut) = shortcut {
-        let hint = painter.layout_no_wrap(shortcut.clone(), fonts::regular(TEXT_SM), p.muted_fg);
+        let hint = painter.layout_no_wrap(shortcut.clone(), fonts::regular(TEXT_XS), p.muted_fg);
         right -= hint.size().x;
         let top = snap(painter, y - hint.size().y / 2.);
         painter.galley(pos2(right, top), hint, Color32::PLACEHOLDER);

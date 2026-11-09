@@ -14,7 +14,7 @@ use rmx_transfer::{
 #[cfg(feature = "bench")]
 use rmx_ui::egui;
 use rmx_ui::widgets::{
-    DiffView, FileColumnView, FileKind, FileRow, FilesBody, FilesView, TextView, TransferRow, TransferRowState,
+    DiffView, FileColumnView, Highlight, FileKind, FileRow, FilesBody, FilesView, TextView, TransferRow, TransferRowState,
 };
 use rmx_ui::{FileSide, FilesAction};
 use tokio::runtime::Handle;
@@ -23,6 +23,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::app::AppEvent;
 use crate::compare::{Comparison, compare};
+use crate::highlight::highlight;
 
 /// The longest file that can be edited: the field lays all of it out at every keystroke.
 const EDIT_LIMIT: usize = 512 * 1024;
@@ -74,6 +75,8 @@ pub enum FilesEvent {
     /// Two texts asked for have been compared, or could not be.
     Compared { token: u64, side: FileSide, result: Result<Box<Compared>, String> },
     Saved { document: u64, result: Result<Saved, String> },
+    /// The colors of the open file, as of the latest request.
+    Highlighted { document: u64, token: u64, highlight: Option<Highlight> },
     /// The file has changed since it was read: this is what was to be written over it.
     SaveConflict { document: u64, text: String },
 }
@@ -109,6 +112,9 @@ pub struct TextFile {
     error: Option<String>,
     /// What is waiting to be written once the user has said to overwrite.
     held: Option<String>,
+    highlight: Option<Highlight>,
+    /// Goes up with every new `highlight`.
+    highlight_id: u64,
 }
 
 /// Two texts lined up.
@@ -118,6 +124,7 @@ pub struct Compared {
     texts: [Arc<str>; 2],
     found: Comparison,
     note: Option<&'static str>,
+    highlights: [Option<Highlight>; 2],
 }
 
 /// The bytes of a file as text. `None` if they are not.
@@ -193,15 +200,18 @@ async fn read_text(fs: Arc<dyn RemoteFs>, side: FileSide, path: String, title: S
         saving: false,
         error: None,
         held: None,
+        highlight: None,
+        highlight_id: 0,
     }))
 }
 
 /// Line two texts up, off the main thread.
-async fn compared(titles: [String; 2], texts: [Arc<str>; 2], same_bytes: bool) -> Result<Box<Compared>, String> {
+async fn compared(names: [String; 2], titles: [String; 2], texts: [Arc<str>; 2], same_bytes: bool) -> Result<Box<Compared>, String> {
     tokio::task::spawn_blocking(move || {
+        let highlights = [highlight(&names[0], &texts[0]), highlight(&names[1], &texts[1])];
         let found = compare(&texts[0], &texts[1]);
         let note = found.changes.is_empty().then_some(if same_bytes { "Identical" } else { "Only line endings differ" });
-        Box::new(Compared { id: next_body(), titles, texts, found, note })
+        Box::new(Compared { id: next_body(), titles, texts, found, note, highlights })
     })
     .await
     .map_err(|err| err.to_string())
@@ -257,6 +267,8 @@ pub struct FilesPane {
     document: Option<Box<TextFile>>,
     /// Shown over `document`, if there is one, which it goes back to.
     diff: Option<Box<Compared>>,
+    /// Which request for colors is the latest.
+    highlight_token: u64,
     pane: PaneId,
     generation: u64,
     runtime: Handle,
@@ -437,6 +449,7 @@ impl FilesPane {
             opening: None,
             document: None,
             diff: None,
+            highlight_token: 0,
             pane,
             generation: tab,
             runtime,
@@ -554,6 +567,7 @@ impl FilesPane {
             },
             FilesAction::DiffEdits { text } => self.diff_edits(text),
             FilesAction::CloseBody => self.close_body(),
+            FilesAction::Highlight { text } => self.request_highlight(text),
             FilesAction::Up { side } => {
                 let path = parent(self.path(side));
                 if path != self.path(side) {
@@ -594,6 +608,23 @@ impl FilesPane {
             },
         }
         None
+    }
+
+    /// Which policy is picked, as an index into `CONFLICT_POLICIES`.
+    pub fn policy(&self) -> usize {
+        self.policy
+    }
+
+    /// Start working out the colors of `text`, what the open file says by now.
+    fn request_highlight(&mut self, text: String) {
+        let Some(file) = &self.document else { return };
+        self.highlight_token += 1;
+        let (token, document, name) = (self.highlight_token, file.id, file.path.clone());
+        let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
+        self.runtime.spawn_blocking(move || {
+            let highlight = highlight(&name, &text);
+            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Highlighted { document, token, highlight }));
+        });
     }
 
     /// Whether a file is open, on screen or not.
@@ -649,7 +680,8 @@ impl FilesPane {
                 (_, Err(reason)) => (FileSide::Remote, Err(reason)),
                 (Ok(left), Ok(right)) => {
                     let same = left.text == right.text && left.crlf == right.crlf && left.bom == right.bom;
-                    (FileSide::Remote, compared(titles, [left.text, right.text], same).await)
+                    let names = [left.path.clone(), right.path.clone()];
+                    (FileSide::Remote, compared(names, titles, [left.text, right.text], same).await)
                 },
             };
             let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Compared { token, side, result }));
@@ -661,12 +693,13 @@ impl FilesPane {
         let Some(file) = &self.document else { return };
         let token = next_body();
         let name = file.path.rsplit('/').next().unwrap_or(&file.path).to_owned();
+        let names = [name.clone(), name.clone()];
         let titles = [format!("{name}  saved"), format!("{name}  edited")];
         let (side, saved, same) = (file.side, file.text.clone(), *file.text == *text);
         self.opening = Some((token, name));
         let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
         self.runtime.spawn(async move {
-            let result = compared(titles, [saved, text.into()], same).await;
+            let result = compared(names, titles, [saved, text.into()], same).await;
             let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Compared { token, side, result }));
         });
     }
@@ -811,7 +844,11 @@ impl FilesPane {
                 }
                 self.opening = None;
                 match result {
-                    Ok(file) => self.document = Some(file),
+                    Ok(file) => {
+                        let text = file.text.to_string();
+                        self.document = Some(file);
+                        self.request_highlight(text);
+                    },
                     Err(reason) => self.column_mut(side).error = Some(reason),
                 }
             },
@@ -842,6 +879,14 @@ impl FilesPane {
                         outcome.refresh.push((file.side, parent(&file.path)));
                     },
                     Err(reason) => file.error = Some(reason),
+                }
+            },
+            FilesEvent::Highlighted { document, token, highlight } => {
+                if token == self.highlight_token
+                    && let Some(file) = self.document.as_mut().filter(|file| file.id == document)
+                {
+                    file.highlight = highlight;
+                    file.highlight_id += 1;
                 }
             },
             FilesEvent::SaveConflict { document, text } => {
@@ -942,6 +987,7 @@ impl FilesPane {
                 changes: &diff.found.changes,
                 longest: diff.found.longest,
                 note: diff.note,
+                highlights: [diff.highlights[0].as_ref(), diff.highlights[1].as_ref()],
             });
         }
         match &self.document {
@@ -954,6 +1000,8 @@ impl FilesPane {
                 lines: file.lines.as_ref().map(|lines| lines.as_slice()),
                 saving: file.saving,
                 error: file.error.as_deref(),
+                highlight: file.highlight.as_ref(),
+                highlight_id: file.highlight_id,
             }),
             None => FilesBody::Columns,
         }

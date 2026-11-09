@@ -117,6 +117,8 @@ pub enum FilesAction {
     DiffEdits { text: String },
     /// Go back from what is shown instead of the columns.
     CloseBody,
+    /// Color this, what the open file now says.
+    Highlight { text: String },
 }
 
 /// The kinds of connection.
@@ -353,6 +355,11 @@ pub enum UiAction {
         pane: PaneId,
         side: FileSide,
         name: Option<Arc<str>>,
+        pos: Pos2,
+    },
+    /// The menu of what to do about a file already at the destination.
+    FilesPolicyMenu {
+        pane: PaneId,
         pos: Pos2,
     },
     /// Ask what to call a new folder.

@@ -32,9 +32,7 @@ pub struct PaneBarView<'a> {
     pub pane: PaneId,
     pub status: PaneStatus,
     pub title: &'a str,
-    /// Where it is connected to, if that says more than the name.
-    pub target: &'a str,
-    /// What there is to know besides, shown on hovering the name.
+    /// What there is to know besides the name, shown on hovering it.
     pub tooltip: &'a str,
     pub focused: bool,
     /// The tab has other panes, so this one can be zoomed.
@@ -54,7 +52,7 @@ pub fn pane_bar(
 ) -> Option<UiAction> {
     let p = palette(ui);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0., p.chrome);
+    painter.rect_filled(rect, 0., p.background);
     hline(&painter, rect.left(), rect.right(), rect.bottom() - 1., p.border);
 
     let y = rect.center().y - 0.5;
@@ -134,12 +132,6 @@ pub fn pane_bar(
         (fonts::regular(TEXT_SM), p.muted_fg)
     };
     let title = elided_at(&painter, start, y, view.title, font, color, (end - start).max(0.));
-    if !view.target.is_empty() && view.target != view.title {
-        let at = start + title + 10.;
-        if end - at > 24. {
-            elided_at(&painter, at, y, view.target, fonts::regular(TEXT_SM), p.muted_fg, end - at);
-        }
-    }
     if grab.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::Grab);
         let name = Rect::from_min_max(pos2(start, rect.top()), pos2((start + title).min(end), rect.bottom()));

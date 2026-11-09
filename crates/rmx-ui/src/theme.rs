@@ -1,7 +1,7 @@
 //! Design tokens, and the egui style built from them.
 //!
-//! Neutral monochrome with no brand hue; color appears only for status. Inside the shell, depth
-//! comes from 1 px borders; only floating surfaces cast a shadow.
+//! Cool neutrals with one indigo. Besides it, color says only what a thing is or how it is doing.
+//! The panes are raised off one dark frame by a hairline; only floating surfaces cast a shadow.
 
 use egui::epaint::Shadow;
 use egui::style::{Selection, TextCursorStyle, WidgetVisuals, Widgets};
@@ -10,78 +10,177 @@ use egui::{
     Vec2, Visuals,
 };
 
+use crate::action::Protocol;
 use crate::fonts;
 
 const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
+/// What a run of source text is, for coloring it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Token {
+    Comment,
+    Keyword,
+    String,
+    Number,
+    Function,
+    Type,
+    Constant,
+}
+
 /// The color tokens of one theme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
+    /// Where work happens: panes and dialogs.
     pub background: Color32,
     pub sidebar: Color32,
+    /// The frame around the panes, one surface with the sidebar.
     pub chrome: Color32,
+    /// Menus and dialogs, a step above everything under them.
+    pub float: Color32,
+    /// The inside of a field.
+    pub input: Color32,
     pub foreground: Color32,
     pub muted_fg: Color32,
+    /// Under what is selected.
     pub accent: Color32,
     pub border: Color32,
+    /// The one color of the interface: the main button, the focused field, selected text.
+    pub brand: Color32,
+    /// Text on `brand`.
+    pub brand_fg: Color32,
+    pub folder: Color32,
     pub success: Color32,
     pub warning: Color32,
     pub info: Color32,
     pub danger: Color32,
-    /// Fill under a hovered item, a wash of the foreground. `accent` can't serve here: in the
-    /// light theme it equals `chrome`, so a hovered tab would not change at all.
+    /// Fill under a hovered item, a wash of the foreground. `accent` can't serve here: a hovered
+    /// row that is also selected would not change at all.
     pub hover: Color32,
     /// The dimming behind a modal dialog.
     pub scrim: Color32,
     /// The color of a floating surface's shadow.
     pub shadow: Color32,
+    /// What tells the kinds of connection apart at a glance, in the order of [`Protocol::ALL`].
+    protocols: [Color32; 7],
+    /// In the order of [`Token`].
+    syntax: [Color32; 7],
+}
+
+impl Palette {
+    /// The color of the icons of `protocol`.
+    pub fn protocol(&self, protocol: Protocol) -> Color32 {
+        let index = Protocol::ALL.iter().position(|known| *known == protocol).unwrap_or(0);
+        self.protocols[index]
+    }
+
+    /// The color of a run of source text.
+    pub fn token(&self, token: Token) -> Color32 {
+        self.syntax[token as usize]
+    }
+}
+
+/// `alpha` of 255 of white, premultiplied.
+const fn white(alpha: u8) -> Color32 {
+    Color32::from_rgba_premultiplied(alpha, alpha, alpha, alpha)
+}
+
+/// `alpha` of 255 of black, premultiplied.
+const fn black(alpha: u8) -> Color32 {
+    Color32::from_rgba_premultiplied(0, 0, 0, alpha)
 }
 
 /// The light theme.
 pub const LIGHT: Palette = Palette {
-    background: rgb(0xffffff),
-    sidebar: rgb(0xfafafa),
-    chrome: rgb(0xf5f5f5),
-    foreground: rgb(0x0a0a0a),
-    muted_fg: rgb(0x737373),
-    accent: rgb(0xf5f5f5),
-    border: rgb(0xe5e5e5),
-    success: rgb(0x16a34a),
-    warning: rgb(0xd97706),
-    info: rgb(0x2563eb),
-    danger: rgb(0xdc2626),
-    hover: Color32::from_rgba_premultiplied(0, 0, 0, 10),
-    scrim: Color32::from_rgba_premultiplied(0, 0, 0, 64),
-    shadow: Color32::from_rgba_premultiplied(0, 0, 0, 36),
+    background: rgb(0xfdfdfe),
+    sidebar: rgb(0xf4f4f6),
+    chrome: rgb(0xf4f4f6),
+    float: rgb(0xffffff),
+    input: black(8),
+    foreground: rgb(0x1c1d21),
+    muted_fg: rgb(0x6b6f76),
+    accent: rgb(0xe6e7ea),
+    border: black(22),
+    brand: rgb(0x5e6ad2),
+    brand_fg: rgb(0xffffff),
+    folder: rgb(0x4f7fd6),
+    success: rgb(0x2e9e6b),
+    warning: rgb(0xc98a0b),
+    info: rgb(0x2f7fd6),
+    danger: rgb(0xd64545),
+    hover: black(12),
+    scrim: black(64),
+    shadow: black(36),
+    protocols: [
+        rgb(0x2e9e6b),
+        rgb(0x2f7fd6),
+        rgb(0x1596a8),
+        rgb(0xd9772b),
+        rgb(0x8a63d2),
+        rgb(0xb5890d),
+        rgb(0xc9557f),
+    ],
+    syntax: [
+        rgb(0x8a8f98),
+        rgb(0x6a4fc4),
+        rgb(0x2b8a5f),
+        rgb(0xb5641f),
+        rgb(0x2f6fc2),
+        rgb(0x12808f),
+        rgb(0xb0487a),
+    ],
 };
 
 /// The dark theme.
 pub const DARK: Palette = Palette {
-    background: rgb(0x131416),
-    sidebar: rgb(0x19191c),
-    chrome: rgb(0x1b1b1e),
-    foreground: rgb(0xd7d7db),
-    muted_fg: rgb(0x97989d),
-    accent: rgb(0x2e2f33),
-    // rgb(110 110 114 / .28), premultiplied.
-    border: Color32::from_rgba_premultiplied(31, 31, 32, 71),
-    success: rgb(0x4ade80),
-    warning: rgb(0xfbbf24),
-    info: rgb(0x60a5fa),
-    danger: rgb(0xf87171),
-    hover: Color32::from_rgba_premultiplied(13, 13, 13, 13),
-    scrim: Color32::from_rgba_premultiplied(0, 0, 0, 115),
-    shadow: Color32::from_rgba_premultiplied(0, 0, 0, 110),
+    background: rgb(0x121316),
+    sidebar: rgb(0x0c0d0f),
+    chrome: rgb(0x0c0d0f),
+    float: rgb(0x1b1c20),
+    input: white(10),
+    foreground: rgb(0xe4e5e8),
+    muted_fg: rgb(0x8a8f98),
+    accent: rgb(0x26282d),
+    border: white(20),
+    brand: rgb(0x5e6ad2),
+    brand_fg: rgb(0xffffff),
+    folder: rgb(0x6f9ce8),
+    success: rgb(0x4cb782),
+    warning: rgb(0xf2c94c),
+    info: rgb(0x4ea7fc),
+    danger: rgb(0xeb5757),
+    hover: white(13),
+    scrim: black(115),
+    shadow: black(130),
+    protocols: [
+        rgb(0x4cb782),
+        rgb(0x4ea7fc),
+        rgb(0x3fc1d4),
+        rgb(0xf2994a),
+        rgb(0xb18cf5),
+        rgb(0xe8c15a),
+        rgb(0xeb8dac),
+    ],
+    syntax: [
+        rgb(0x6b7079),
+        rgb(0xb4a5f7),
+        rgb(0x82cfa4),
+        rgb(0xe8ab7c),
+        rgb(0x82b4f2),
+        rgb(0x73cdd4),
+        rgb(0xeb9cc0),
+    ],
 };
 
 /// Corner radius of small items: tabs, tree rows, segments.
 pub const RADIUS_SM: u8 = 4;
-/// Corner radius of controls and floating surfaces.
+/// Corner radius of controls and panes.
 pub const RADIUS: u8 = 6;
+/// Corner radius of floating surfaces.
+pub const RADIUS_LG: u8 = 10;
 /// Height of buttons and inputs.
-pub const CONTROL_HEIGHT: f32 = 32.;
+pub const CONTROL_HEIGHT: f32 = 30.;
 /// Height of the single row holding the title bar and tabs.
 pub const STRIP_HEIGHT: f32 = 40.;
 /// Height of one tab.
@@ -96,11 +195,13 @@ pub const SIDEBAR_WIDTH: f32 = 260.;
 pub const SIDEBAR_MIN: f32 = 180.;
 pub const SIDEBAR_MAX: f32 = 560.;
 /// Height of the bar on top of each pane.
-pub const PANE_BAR_HEIGHT: f32 = 24.;
-/// Small text, used for almost everything.
-pub const TEXT_SM: f32 = 12.;
-/// Large text, for titles.
-pub const TEXT_LG: f32 = 14.;
+pub const PANE_BAR_HEIGHT: f32 = 28.;
+/// Text about a thing rather than the thing: sizes, dates, keys.
+pub const TEXT_XS: f32 = 12.;
+/// Almost everything.
+pub const TEXT_SM: f32 = 13.;
+/// Titles.
+pub const TEXT_LG: f32 = 15.;
 /// How long a floating surface takes to appear, in seconds.
 pub const FLOAT_IN: f64 = 0.1;
 /// The scale a floating surface appears from.
@@ -154,7 +255,7 @@ fn widget(bg: Color32, border: Color32, fg: Color32) -> WidgetVisuals {
 }
 
 fn float_shadow(p: &Palette) -> Shadow {
-    Shadow { offset: [0, 4], blur: 16, spread: 0, color: p.shadow }
+    Shadow { offset: [0, 8], blur: 28, spread: 0, color: p.shadow }
 }
 
 fn style(mode: ThemeMode) -> Style {
@@ -171,9 +272,9 @@ fn style(mode: ThemeMode) -> Style {
         active: widget(p.accent, p.border, p.foreground),
         open: widget(p.accent, p.border, p.foreground),
     };
-    visuals.selection = Selection { bg_fill: p.accent, stroke: Stroke::new(1., p.foreground) };
+    visuals.selection = Selection { bg_fill: p.brand.gamma_multiply(0.45), stroke: Stroke::new(1., p.foreground) };
     visuals.text_cursor = TextCursorStyle {
-        stroke: Stroke::new(1., p.foreground),
+        stroke: Stroke::new(1.5, p.foreground),
         blink: false,
         ..visuals.text_cursor
     };
@@ -186,10 +287,10 @@ fn style(mode: ThemeMode) -> Style {
     visuals.warn_fg_color = p.warning;
     visuals.error_fg_color = p.danger;
     visuals.panel_fill = p.background;
-    visuals.window_fill = p.background;
+    visuals.window_fill = p.float;
     visuals.window_stroke = Stroke::new(1., p.border);
-    visuals.window_corner_radius = CornerRadius::same(RADIUS);
-    visuals.menu_corner_radius = CornerRadius::same(RADIUS);
+    visuals.window_corner_radius = CornerRadius::same(RADIUS_LG);
+    visuals.menu_corner_radius = CornerRadius::same(RADIUS_LG);
     visuals.window_shadow = float_shadow(p);
     visuals.popup_shadow = float_shadow(p);
     visuals.interact_cursor = None;
@@ -197,7 +298,7 @@ fn style(mode: ThemeMode) -> Style {
     let mut style = Style { visuals, ..Style::default() };
 
     style.text_styles = [
-        (TextStyle::Small, FontId::new(TEXT_SM, FontFamily::Proportional)),
+        (TextStyle::Small, FontId::new(TEXT_XS, FontFamily::Proportional)),
         (TextStyle::Body, FontId::new(TEXT_SM, FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(TEXT_SM, fonts::medium_family())),
         (TextStyle::Heading, FontId::new(TEXT_LG, fonts::medium_family())),

@@ -240,6 +240,7 @@ impl Gallery {
             .iter()
             .enumerate()
             .map(|(i, (label, glyph))| TabView {
+                protocol: None,
                 id: TabId(i as u64),
                 label,
                 glyph: *glyph,
@@ -263,7 +264,6 @@ impl Gallery {
             pane: PaneId(1),
             status: PaneStatus::Connected,
             title: "web-01",
-            target: "deploy@web-01.prod.internal",
             tooltip: "120 x 42",
             focused: true,
             grouped: false,

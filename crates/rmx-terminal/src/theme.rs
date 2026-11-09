@@ -40,7 +40,7 @@ impl Theme {
             (0x67, 0xe8, 0xf9),
             (0xfa, 0xfa, 0xfa),
         ];
-        Self::new(normal, bright, Rgb::new(0xd7, 0xd7, 0xdb), Rgb::new(0x13, 0x14, 0x16))
+        Self::new(normal, bright, Rgb::new(0xe4, 0xe5, 0xe8), Rgb::new(0x12, 0x13, 0x16))
     }
 
     /// The light theme, on the interface's neutral palette. The colors are the darker status
@@ -66,7 +66,7 @@ impl Theme {
             (0x0e, 0x74, 0x90),
             (0x52, 0x52, 0x52),
         ];
-        Self::new(normal, bright, Rgb::new(0x0a, 0x0a, 0x0a), Rgb::new(0xff, 0xff, 0xff))
+        Self::new(normal, bright, Rgb::new(0x1c, 0x1d, 0x21), Rgb::new(0xfd, 0xfd, 0xfe))
     }
 
     fn new(normal: [(u8, u8, u8); 8], bright: [(u8, u8, u8); 8], fg: Rgb, bg: Rgb) -> Self {

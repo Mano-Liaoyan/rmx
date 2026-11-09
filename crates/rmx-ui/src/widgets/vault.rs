@@ -1,19 +1,22 @@
 //! The screen shown until the vault is unlocked.
 
 use std::mem;
+use std::path::Path;
 
 use egui::text_edit::TextEditState;
 use egui::{Align2, CornerRadius, Id, Key, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::action::{Sensitive, UiAction};
 use crate::draw::{icon, palette};
-use crate::theme::{RADIUS, TEXT_LG, TEXT_SM};
+use crate::theme::{RADIUS, TEXT_SM};
 use crate::{fonts, icons};
 
 use super::controls::{ButtonKind, InputOptions, button_full, checkbox, text_input};
 use super::settings::{SyncDraft, SyncKind, sync_fields};
 
 const WIDTH: f32 = 320.;
+/// The size of the name of the vault.
+const TEXT_TITLE: f32 = 22.;
 
 /// What only the screen itself holds.
 #[derive(Default)]
@@ -36,6 +39,16 @@ pub struct VaultView<'a> {
     pub error: Option<&'a str>,
 }
 
+/// The name of the vault at `path`, big enough to be what the screen is about. All of the path shows
+/// on hovering it.
+fn vault_title(ui: &mut Ui, width: f32, path: &str) {
+    let p = palette(ui);
+    let name = Path::new(path).file_stem().and_then(|name| name.to_str()).unwrap_or(path);
+    let (title, response) = ui.allocate_exact_size(vec2(width, 44.), Sense::hover());
+    ui.painter().text(title.center(), Align2::CENTER_CENTER, name, fonts::medium(TEXT_TITLE), p.foreground);
+    response.on_hover_text(path);
+}
+
 /// Draw the unlock screen, filling `rect`.
 pub fn vault_unlock(
     ui: &mut Ui,
@@ -54,39 +67,14 @@ pub fn vault_unlock(
         ui.ctx().data_mut(|data| data.remove::<TextEditState>(ui.make_persistent_id(Id::unique("vault-password"))));
     }
 
-    let height = if view.error.is_some() { 296. } else { 274. };
+    let height = if view.error.is_some() { 244. } else { 222. };
     let area = Rect::from_center_size(rect.center(), vec2(WIDTH, height));
     let mut child = ui.new_child(
         egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Center)),
     );
     let ui = &mut child;
 
-    let (badge, _) = ui.allocate_exact_size(vec2(40., 40.), Sense::hover());
-    ui.painter().rect(
-        badge,
-        CornerRadius::same(RADIUS),
-        p.chrome,
-        Stroke::new(1., p.border),
-        StrokeKind::Inside,
-    );
-    icon(ui.painter(), badge.center(), icons::LOCK, 18., p.foreground);
-    ui.add_space(4.);
-
-    let (title, _) = ui.allocate_exact_size(vec2(WIDTH, 40.), Sense::hover());
-    ui.painter().text(
-        pos2(title.center().x, title.top() + 10.),
-        Align2::CENTER_CENTER,
-        "Unlock vault",
-        fonts::medium(TEXT_LG),
-        p.foreground,
-    );
-    ui.painter().text(
-        pos2(title.center().x, title.top() + 30.),
-        Align2::CENTER_CENTER,
-        view.name,
-        fonts::regular(TEXT_SM),
-        p.muted_fg,
-    );
+    vault_title(ui, WIDTH, view.name);
 
     let salt = Id::unique("vault-password");
     ui.add_enabled_ui(!view.busy, |ui| {
@@ -101,7 +89,7 @@ pub fn vault_unlock(
             state.focused_once = true;
         }
         text_input(ui, salt.with("key"), &mut state.key_file, InputOptions {
-            hint: "Key file, if the vault has one",
+            hint: "Key file",
             width: Some(WIDTH),
             ..Default::default()
         });
@@ -240,7 +228,7 @@ pub fn vault_setup(
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.background);
 
-    let height = f32::min(if state.joining { 560. } else { 360. } + WARNING_ROOM, rect.height() - 16.);
+    let height = f32::min(if state.joining { 520. } else { 320. } + WARNING_ROOM, rect.height() - 16.);
     let area = Rect::from_center_size(rect.center(), vec2(TALL_WIDTH, height));
     let mut child = ui.new_child(
         egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Center)),
@@ -248,36 +236,11 @@ pub fn vault_setup(
     let ui = &mut child;
     ui.spacing_mut().item_spacing.y = 8.;
 
-    let (badge, _) = ui.allocate_exact_size(vec2(40., 40.), Sense::hover());
-    ui.painter().rect(
-        badge,
-        CornerRadius::same(RADIUS),
-        p.chrome,
-        Stroke::new(1., p.border),
-        StrokeKind::Inside,
-    );
-    icon(ui.painter(), badge.center(), icons::LOCK, 18., p.foreground);
-
-    let (title, _) = ui.allocate_exact_size(vec2(TALL_WIDTH, 40.), Sense::hover());
-    let heading = if state.joining { "Join a synced vault" } else { "Create your vault" };
-    ui.painter().text(
-        pos2(title.center().x, title.top() + 10.),
-        Align2::CENTER_CENTER,
-        heading,
-        fonts::medium(TEXT_LG),
-        p.foreground,
-    );
-    ui.painter().text(
-        pos2(title.center().x, title.top() + 30.),
-        Align2::CENTER_CENTER,
-        view.path,
-        fonts::regular(TEXT_SM),
-        p.muted_fg,
-    );
+    vault_title(ui, TALL_WIDTH, view.path);
 
     let salt = Id::unique("vault-setup");
     ui.add_enabled_ui(!view.busy, |ui| {
-        let hint = if state.joining { "Master password, if the vault has one" } else { "Master password, optional" };
+        let hint = "Master password";
         let input = text_input(ui, salt.with("password"), &mut state.password, InputOptions {
             hint,
             password: true,
@@ -290,14 +253,14 @@ pub fn vault_setup(
         }
         if !state.joining {
             text_input(ui, salt.with("confirm"), &mut state.confirm, InputOptions {
-                hint: "Repeat the password",
+                hint: "Repeat password",
                 password: true,
                 width: Some(TALL_WIDTH),
                 ..Default::default()
             });
         }
         text_input(ui, salt.with("key"), &mut state.key_file, InputOptions {
-            hint: "Key file, optional",
+            hint: "Key file",
             width: Some(TALL_WIDTH),
             ..Default::default()
         });

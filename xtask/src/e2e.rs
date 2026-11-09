@@ -19,8 +19,8 @@ use crate::{Report, measure};
 const IMAGE: &str = "localhost/rmx-ssh-sshd-test:1";
 /// Disposable servers built from packages, made once and reused between runs.
 /// The buttons of a file open in a pane of a 1280 by 800 window with a tab strip and sidebar.
-const TEXT_DIFF: &str = "move:1149:87";
-const TEXT_SAVE: &str = "move:1201:87";
+const TEXT_DIFF: &str = "move:1149:90";
+const TEXT_SAVE: &str = "move:1201:90";
 const VNC_IMAGE: &str = "localhost/rmx-e2e-vnc:1";
 const FTP_IMAGE: &str = "localhost/rmx-e2e-ftp:1";
 const TELNET_IMAGE: &str = "localhost/rmx-e2e-telnet:1";
@@ -762,8 +762,8 @@ pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {
 }
 
 /// Where things are in the first-run form, at the 1280x800 every scripted run has.
-const SETUP_AGREE: &str = "move:600:486";
-const SETUP_CREATE: &str = "move:640:532";
+const SETUP_AGREE: &str = "move:600:457";
+const SETUP_CREATE: &str = "move:640:502";
 /// Where "New local shell" is on the empty page, with the sidebar open.
 const EMPTY_SHELL: &str = "move:770:400";
 
@@ -1345,6 +1345,8 @@ fn browse_and_copy(
     let local = home.join("ftp-side");
     fs::create_dir_all(&local).map_err(|err| err.to_string())?;
     fs::write(local.join("up.txt"), b"from-the-client").map_err(|err| err.to_string())?;
+    let sample = "#!/usr/bin/env python3\n# Say hello.\nimport sys\n\nclass Greeter:\n    def greet(self, name: str) -> str:\n        return f\"hello {name}\" * 2\n\nGreeter().greet(sys.argv[1])\n";
+    fs::write(local.join("sample.py"), sample).map_err(|err| err.to_string())?;
     let local = local.display().to_string();
     let shot = |file: &str| shot_step(shots, &format!("{name}-{file}"));
 
@@ -1401,11 +1403,23 @@ fn browse_and_copy(
         "files-fold,wait,press,release,await:files-folded:1,wait,wait".to_owned(),
         shot("ux-files-queue-folded.ppm"),
         "files-fold,wait,press,release,await:files-folded:0,wait,wait".to_owned(),
+        // What to do about a file in the way is a menu now.
+        "move:300:666,wait,press,release,await:menu,await:menu-offers:Overwrite,wait,wait".to_owned(),
+        shot("ux-files-policy-menu.ppm"),
+        "escape,await:no-menu,wait".to_owned(),
         // A file opened in the pane, written back, and compared with its local copy.
         "files-open:R|down.txt,await:files-text:from-the-server,wait,wait,wait".to_owned(),
         shot("ux-files-text.ppm"),
+        "files-close,await:files-columns,wait".to_owned(),
+        // Source text is colored by what it is.
+        "files-open:L|sample.py,await:files-text:Greeter,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-files-code-dark.ppm"),
+        "theme:light,wait,wait,wait,wait".to_owned(),
+        shot("ux-files-code-light.ppm"),
+        "theme:dark,wait,wait,files-close,await:files-columns,wait".to_owned(),
+        "files-open:R|down.txt,await:files-text:from-the-server,wait,wait,wait".to_owned(),
         // Typed into the field: its button shows the edits, and the other one saves them.
-        "enter,text:second-line,wait,wait,wait".to_owned(),
+        "text:second-line,enter,wait,wait,wait".to_owned(),
         shot("ux-files-text-edited.ppm"),
         format!("{TEXT_DIFF},wait,press,release,await:files-diff:2,wait,wait,wait"),
         shot("ux-files-edits-diff.ppm"),
@@ -1487,7 +1501,7 @@ pub fn files(bench_target: &Path, shots: &Path) -> Result<(), String> {
         return Err(format!("down.txt came through wrong: {got:?}"));
     }
     let edited = podman(&["exec", &server.name, "cat", "/home/alice/down.txt"])?;
-    if edited != "from-the-server\nsecond-line" {
+    if edited != "second-line\nfrom-the-server" {
         return Err(format!("the edited file came through wrong: {edited:?}"));
     }
     exec("printf 'from-the-server' > /home/alice/down.txt")?;
@@ -1577,7 +1591,7 @@ pub fn files(bench_target: &Path, shots: &Path) -> Result<(), String> {
         return Err(format!("the FTP upload came through wrong: {up:?}"));
     }
     let edited = podman(&["exec", &server.name, "cat", "/home/alice/down.txt"])?;
-    if edited != "from-the-server\nsecond-line" {
+    if edited != "second-line\nfrom-the-server" {
         return Err(format!("the file edited over FTP came through wrong: {edited:?}"));
     }
     seed_remote(|command| podman(&["exec", &server.name, "sh", "-c", command]), "/home/alice")?;

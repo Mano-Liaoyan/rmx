@@ -29,7 +29,7 @@ pub use files::{
     CONFLICT_POLICIES, FileColumnView, FileKind, FileRow, FilesKey, FilesState, FilesView, TransferRow,
     TransferRowState, file_row_point, files_edges, files_fold_point, files_pane,
 };
-pub use text_view::{DiffLine, DiffRow, DiffView, FilesBody, TextView};
+pub use text_view::{DiffLine, DiffRow, DiffView, FilesBody, Highlight, HighlightLine, TextView, TokenRun};
 pub use pane_bar::{PaneBarView, PaneStatus, pane_bar};
 pub use panels::{Handle, Panels, Reveal, paint_pill, resize_handle};
 pub use host_key::{HostKeyStatus, HostKeyView, host_key_body, host_key_dialog};

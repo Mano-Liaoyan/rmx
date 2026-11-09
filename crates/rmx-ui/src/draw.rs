@@ -59,6 +59,16 @@ pub(crate) fn lock_open(painter: &Painter, center: Pos2, size: f32, color: Color
     painter.add(Shape::line(shackle, stroke));
 }
 
+/// Lucide's `file`, which is not in the font subset, drawn from the same geometry.
+pub(crate) fn file_icon(painter: &Painter, center: Pos2, size: f32, color: Color32) {
+    let unit = size / 24.;
+    let at = |x: f32, y: f32| center + vec2((x - 12.) * unit, (y - 12.) * unit);
+    let stroke = Stroke::new(1.25, color);
+    let outline = vec![at(6., 2.), at(15., 2.), at(20., 7.), at(20., 20.), at(18., 22.), at(6., 22.), at(4., 20.), at(4., 4.), at(6., 2.)];
+    painter.add(Shape::line(outline, stroke));
+    painter.add(Shape::line(vec![at(14., 2.5), at(14., 8.), at(19.5, 8.)], stroke));
+}
+
 /// Lay `text` out on one line, ending in an ellipsis past `max_width`.
 pub(crate) fn elided(
     painter: &Painter,

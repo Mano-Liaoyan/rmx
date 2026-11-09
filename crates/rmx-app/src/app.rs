@@ -1294,7 +1294,7 @@ impl At<'_> {
             self.core.ui.files_reset(id, side);
         }
         if let Some(path) = &applied.conflict {
-            let mut state = PromptState::new(format!("{path} has changed"), "It was changed after you opened it. Your version would replace it.", Vec::new());
+            let mut state = PromptState::new(format!("{path} has changed since you opened it"), "", Vec::new());
             state.submit = "Overwrite".to_owned();
             self.ask_here(state, Reply::FilesOverwrite(id));
         }
@@ -2160,7 +2160,7 @@ impl At<'_> {
         if dirty.is_empty() {
             return false;
         }
-        let mut state = PromptState::new("Discard your changes?", "They have not been saved.", Vec::new());
+        let mut state = PromptState::new("Discard your changes?", "", Vec::new());
         state.submit = "Discard".to_owned();
         self.ask_here(state, Reply::LoseEdits(dirty, then));
         true
@@ -2189,7 +2189,7 @@ impl At<'_> {
     }
 
     fn ask_folder_name(&mut self, title: &str, value: String, reply: Reply) {
-        let field = PromptField { label: "Name".to_owned(), secret: false, value };
+        let field = PromptField { label: String::new(), secret: false, value };
         self.ask_here(PromptState::new(title, "", vec![field]), reply);
     }
 
@@ -2394,6 +2394,19 @@ impl At<'_> {
                 let items = self.files_menu(pane, side, name);
                 self.win.shell.open_menu(pos, items);
             },
+            UiAction::FilesPolicyMenu { pane: rmx_ui::PaneId(pane), pos } => {
+                let current = self.pane(pane).and_then(|found| found.content.files()).map_or(0, FilesPane::policy);
+                let act = |index| UiAction::Files(rmx_ui::PaneId(pane), FilesAction::Policy(index));
+                let row = |(index, label): (usize, &&str)| MenuItem::Action {
+                    glyph: (index == current).then_some(icons::CHECK),
+                    label: (*label).to_owned(),
+                    shortcut: None,
+                    action: act(index),
+                    danger: false,
+                };
+                let items = rmx_ui::widgets::CONFLICT_POLICIES.iter().enumerate().map(row).collect();
+                self.win.shell.open_menu(pos, items);
+            },
             UiAction::FilesAskNewFolder(rmx_ui::PaneId(pane), side) => {
                 self.ask_folder_name("New folder", String::new(), Reply::FilesNewFolder(pane, side));
             },
@@ -2405,7 +2418,7 @@ impl At<'_> {
                     [one] => format!("Delete {one}?"),
                     many => format!("Delete {} items?", many.len()),
                 };
-                let mut state = PromptState::new(title, "Folders go with what is in them. This cannot be undone.", Vec::new());
+                let mut state = PromptState::new(title, "This cannot be undone.", Vec::new());
                 state.submit = "Delete".to_owned();
                 self.ask_here(state, Reply::FilesDelete(pane, side, names));
             },
@@ -2443,7 +2456,7 @@ impl At<'_> {
                 } else {
                     ("Open vault", format!("{directory}/"))
                 };
-                let field = PromptField { label: "Path".to_owned(), secret: false, value };
+                let field = PromptField { label: String::new(), secret: false, value };
                 self.ask_here(PromptState::new(title, "", vec![field]), Reply::VaultPath);
             },
             UiAction::VaultUnlock { mut password, key_file } => {

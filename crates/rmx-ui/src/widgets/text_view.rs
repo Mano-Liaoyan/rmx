@@ -13,22 +13,63 @@ use egui::{
 
 use crate::action::{FilesAction, PaneId, UiAction};
 use crate::draw::{elided_at, hline, icon, palette, snap, vline};
-use crate::theme::{CONTROL_HEIGHT, Palette, TEXT_SM};
+use crate::theme::{CONTROL_HEIGHT, Palette, TEXT_SM, TEXT_XS, Token};
 use crate::virtual_list::{clamp_scroll, max_scroll, scroll_for_thumb, thumb, window};
 use crate::{fonts, icons};
 
 use super::controls::{ButtonKind, button_full, paint_icon_button};
 use super::files::FilesKey;
 
-const BAR: f32 = 40.;
+const BAR: f32 = 36.;
 /// Every line is this tall, whichever font its glyphs come from, so that numbers stay beside them.
-const LINE: f32 = 18.;
+const LINE: f32 = 20.;
+/// How long after the last keystroke the text is colored again, in seconds.
+const HIGHLIGHT_AFTER: f64 = 0.12;
 const THUMB_WIDTH: f32 = 6.;
 const THUMB_MIN: f32 = 24.;
 /// How much of a line is drawn: a minified file is one line, and nobody scrolls to its end.
 const LINE_BYTES: usize = 8192;
 /// Room around the numbers of a gutter, in points.
 const GUTTER_PAD: f32 = 20.;
+
+/// A run of source text, in bytes from the start of its line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenRun {
+    pub start: u32,
+    pub end: u32,
+    pub token: Token,
+}
+
+/// Where a line's runs start in [`Highlight::runs`], and how long the line was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HighlightLine {
+    pub first_run: u32,
+    pub len: u32,
+}
+
+/// What each part of a text is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Highlight {
+    pub runs: Vec<TokenRun>,
+    pub lines: Vec<HighlightLine>,
+}
+
+impl Highlight {
+    /// How long line `index` was when it was colored, and its runs.
+    pub fn line(&self, index: usize) -> Option<(usize, &[TokenRun])> {
+        let line = self.lines.get(index)?;
+        let end = self.lines.get(index + 1).map_or(self.runs.len(), |next| next.first_run as usize);
+        Some((line.len as usize, &self.runs[line.first_run as usize..end]))
+    }
+
+    /// The runs of line `index` if `text` could still be that line, which an edit may have moved.
+    fn runs_for(&self, index: usize, text: &str) -> &[TokenRun] {
+        match self.line(index) {
+            Some((len, runs)) if len == text.len() => runs,
+            _ => &[],
+        }
+    }
+}
 
 /// A text file as the pane shows it.
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +86,9 @@ pub struct TextView<'a> {
     pub lines: Option<&'a [u32]>,
     pub saving: bool,
     pub error: Option<&'a str>,
+    pub highlight: Option<&'a Highlight>,
+    /// Goes up with every new `highlight`.
+    pub highlight_id: u64,
 }
 
 /// One side of a row of a comparison, as offsets into its text.
@@ -78,6 +122,7 @@ pub struct DiffView<'a> {
     pub longest: usize,
     /// What to say when there are no changes to see.
     pub note: Option<&'a str>,
+    pub highlights: [Option<&'a Highlight>; 2],
 }
 
 /// What the pane shows.
@@ -109,6 +154,10 @@ pub struct BodyState {
     across: f32,
     viewport: f32,
     thumb_grab: Option<f32>,
+    /// When to color the text again, after the last keystroke.
+    highlight_due: Option<f64>,
+    /// The last layout, with which highlight and theme it was made.
+    galley: Option<(Arc<Galley>, u64, bool)>,
 }
 
 impl BodyState {
@@ -172,7 +221,7 @@ fn gutter_width(ui: &Ui, lines: usize) -> f32 {
 /// A line number, flush right against `right`.
 fn paint_number(painter: &Painter, right: f32, y: f32, number: usize, color: Color32) {
     let at = pos2(right, y + LINE / 2.);
-    painter.text(at, Align2::RIGHT_CENTER, number, fonts::mono(TEXT_SM), color);
+    painter.text(at, Align2::RIGHT_CENTER, number, fonts::mono(TEXT_XS), color);
 }
 
 /// `line` with no more of it than is drawn, and no line ending.
@@ -181,37 +230,79 @@ fn drawn_part(line: &str) -> &str {
     &line[..line.floor_char_boundary(LINE_BYTES)]
 }
 
-/// A line starting at `x`, with its `changed` bytes marked.
+/// The color of each stretch of `line`, split where a run or the `changed` part starts or ends.
+fn line_job(line: &str, runs: &[TokenRun], changed: Option<(usize, usize)>, p: &Palette, mark: Color32) -> LayoutJob {
+    let format = TextFormat { font_id: fonts::mono(TEXT_SM), color: p.foreground, line_height: Some(LINE), ..Default::default() };
+    let mut cuts = vec![0, line.len()];
+    let clamp = |at: usize| line.floor_char_boundary(at.min(line.len()));
+    for run in runs {
+        cuts.extend([clamp(run.start as usize), clamp(run.end as usize)]);
+    }
+    if let Some((start, end)) = changed {
+        cuts.extend([clamp(start), clamp(end)]);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut job = LayoutJob::default();
+    for pair in cuts.windows(2) {
+        let [start, end] = [pair[0], pair[1]];
+        let color = runs
+            .iter()
+            .find(|run| (run.start as usize) <= start && end <= run.end as usize)
+            .map_or(p.foreground, |run| p.token(run.token));
+        let marked = changed.is_some_and(|(from, to)| from < to && from <= start && end <= to);
+        let background = if marked { mark } else { Color32::TRANSPARENT };
+        job.append(&line[start..end], 0., TextFormat { color, background, ..format.clone() });
+    }
+    job
+}
+
+/// A line starting at `x`, colored by `runs`, with its `changed` bytes marked.
+#[allow(clippy::too_many_arguments)]
 fn paint_line(
     painter: &Painter,
     x: f32,
     y: f32,
     line: &str,
+    runs: &[TokenRun],
     changed: Option<(usize, usize)>,
-    color: Color32,
+    p: &Palette,
     mark: Color32,
 ) {
     let line = drawn_part(line);
     if line.is_empty() {
         return;
     }
-    let format = TextFormat { font_id: fonts::mono(TEXT_SM), color, line_height: Some(LINE), ..Default::default() };
+    let galley: Arc<Galley> = painter.layout_job(line_job(line, runs, changed, p, mark));
+    painter.galley(pos2(snap(painter, x), snap(painter, y)), galley, p.foreground);
+}
+
+/// All of `text`, each line colored by `highlight` as far as that still fits it.
+fn editor_job(text: &str, highlight: Option<&Highlight>, p: &Palette) -> LayoutJob {
+    let format = TextFormat { font_id: fonts::mono(TEXT_SM), color: p.foreground, line_height: Some(LINE), ..Default::default() };
     let mut job = LayoutJob::default();
-    let parts = match changed {
-        Some((start, end)) if start < end => {
-            let (start, end) = (line.floor_char_boundary(start), line.floor_char_boundary(end));
-            [(&line[..start], false), (&line[start..end], true), (&line[end..], false)]
-        },
-        _ => [(line, false), ("", false), ("", false)],
-    };
-    for (part, marked) in parts {
-        if !part.is_empty() {
-            let background = if marked { mark } else { Color32::TRANSPARENT };
-            job.append(part, 0., TextFormat { background, ..format.clone() });
+    let mut section = |range: std::ops::Range<usize>, color: Color32| {
+        if !range.is_empty() {
+            job.append(&text[range], 0., TextFormat { color, ..format.clone() });
         }
+    };
+    let mut line_start = 0;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        let content = line.trim_end_matches('\n').trim_end_matches('\r');
+        let mut at = 0;
+        for run in highlight.map_or(&[][..], |highlight| highlight.runs_for(index, content)) {
+            let (start, end) = (run.start as usize, (run.end as usize).min(content.len()));
+            if start < at || start >= end || !content.is_char_boundary(start) || !content.is_char_boundary(end) {
+                continue;
+            }
+            section(line_start + at..line_start + start, p.foreground);
+            section(line_start + start..line_start + end, p.token(run.token));
+            at = end;
+        }
+        section(line_start + at..line_start + line.len(), p.foreground);
+        line_start += line.len();
     }
-    let galley: Arc<Galley> = painter.layout_job(job);
-    painter.galley(pos2(snap(painter, x), snap(painter, y)), galley, color);
+    job
 }
 
 /// The bar over what the pane shows: `title`, then the elided `path`, in the room left of `right`.
@@ -296,7 +387,10 @@ fn show_lines(ui: &mut Ui, rows: Rect, id: Id, view: &TextView<'_>, lines: &[u32
         paint_number(&painter, rows.left() + gutter - 10., y, index + 1, p.muted_fg);
         let start = lines[index] as usize;
         let end = lines.get(index + 1).map_or(view.text.len(), |&next| next as usize);
-        paint_line(&text_painter, text_left - state.across, y, &view.text[start..end], None, p.foreground, p.accent);
+        let line = &view.text[start..end];
+        let content = line.trim_end_matches('\n').trim_end_matches('\r');
+        let runs = view.highlight.map_or(&[][..], |highlight| highlight.runs_for(index, content));
+        paint_line(&text_painter, text_left - state.across, y, line, runs, None, p, p.accent);
     }
     scrollbar(ui, rows, id, lines.len(), state, &[], p);
 }
@@ -313,20 +407,28 @@ fn show_editor(
     actions: &mut Vec<UiAction>,
 ) -> bool {
     let p = palette(ui);
-    let font = fonts::mono(TEXT_SM);
     let gutter = gutter_width(ui, state.line_count);
     let area = rows.with_min_x(rows.left() + gutter + 8.);
 
     let mut child = ui.new_child(UiBuilder::new().id_salt(id.with("editor")).max_rect(area).layout(Layout::top_down(Align::LEFT)));
-    let color = p.foreground;
+    let key = (view.highlight_id, ui.visuals().dark_mode);
+    let BodyState { buffer, galley: cache, .. } = state;
+    // With every token a section of its own, this is worth not building at every pass.
     let mut layouter = |ui: &Ui, text: &dyn TextBuffer, _wrap: f32| {
-        let format = TextFormat { font_id: font.clone(), color, line_height: Some(LINE), ..Default::default() };
-        ui.painter().layout_job(LayoutJob::single_section(text.as_str().to_owned(), format))
+        if let Some((galley, id, dark)) = cache.as_ref()
+            && (*id, *dark) == key
+            && galley.job.text == text.as_str()
+        {
+            return galley.clone();
+        }
+        let galley = ui.painter().layout_job(editor_job(text.as_str(), view.highlight, p));
+        *cache = Some((galley.clone(), key.0, key.1));
+        galley
     };
-    let buffer = &mut state.buffer;
-    let output = ScrollArea::both().id_salt("scroll").auto_shrink([false, false]).show(&mut child, |ui| {
+    let output = ScrollArea::both().id_salt(("scroll", view.id)).auto_shrink([false, false]).show(&mut child, |ui| {
         TextEdit::multiline(buffer)
-            .id_salt("text")
+            .id_salt(("text", view.id))
+            .cursor_at_end(false)
             .frame(Frame::NONE)
             .lock_focus(true)
             .desired_width(f32::INFINITY)
@@ -344,6 +446,16 @@ fn show_editor(
     if response.changed() {
         state.dirty = state.buffer != view.text;
         state.line_count = state.buffer.bytes().filter(|byte| *byte == b'\n').count() + 1;
+        state.highlight_due = Some(ui.input(|i| i.time) + HIGHLIGHT_AFTER);
+    }
+    if let Some(due) = state.highlight_due {
+        let now = ui.input(|i| i.time);
+        if now >= due {
+            state.highlight_due = None;
+            actions.push(UiAction::Files(pane, FilesAction::Highlight { text: state.buffer.clone() }));
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(due - now));
+        }
     }
 
     let painter = ui.painter_at(rows.with_max_x(area.left()));
@@ -377,6 +489,7 @@ fn show_text(
             state.line_count = state.buffer.bytes().filter(|byte| *byte == b'\n').count() + 1;
             state.scroll = 0.;
             state.across = 0.;
+            state.highlight_due = None;
         }
         state.shown = (view.id, view.revision);
         state.dirty = state.buffer != view.text;
@@ -505,7 +618,8 @@ fn show_diff(ui: &mut Ui, rect: Rect, view: &DiffView<'_>, pane: PaneId, state: 
             let changed = line.changed.map(|(start, end)| {
                 ((start - line.start) as usize, (end - line.start) as usize)
             });
-            paint_line(&text_painter, text_left - state.across, y, text, changed, p.foreground, marks[side]);
+            let runs = view.highlights[side].map_or(&[][..], |highlight| highlight.runs_for(line.number as usize - 1, text));
+            paint_line(&text_painter, text_left - state.across, y, text, runs, changed, p, marks[side]);
         }
     }
     vline(ui.painter(), middle, rows.top(), rows.bottom(), p.border);
@@ -566,6 +680,32 @@ mod tests {
         assert!(long.is_char_boundary(drawn.len()));
     }
 
+    fn run(start: u32, end: u32, token: Token) -> TokenRun {
+        TokenRun { start, end, token }
+    }
+
+    #[test]
+    fn colors_apply_only_to_a_line_that_still_is_the_length_it_was() {
+        let found = Highlight { runs: vec![run(0, 2, Token::Keyword)], lines: vec![HighlightLine { first_run: 0, len: 4 }] };
+        assert_eq!(found.runs_for(0, "abcd").len(), 1);
+        assert!(found.runs_for(0, "abcde").is_empty(), "edited since");
+        assert!(found.runs_for(1, "abcd").is_empty(), "added since");
+    }
+
+    #[test]
+    fn stretches_cover_a_line_whatever_marks_it() {
+        let p = &crate::theme::DARK;
+        let job = line_job("let 名 = 1", &[run(0, 3, Token::Keyword)], Some((2, 7)), p, p.accent);
+        assert_eq!(job.text, "let 名 = 1");
+    }
+
+    #[test]
+    fn an_edit_that_shifted_lines_cannot_cut_a_character() {
+        let p = &crate::theme::DARK;
+        let stale = Highlight { runs: vec![run(1, 2, Token::Keyword)], lines: vec![HighlightLine { first_run: 0, len: 3 }] };
+        assert_eq!(editor_job("字\n", Some(&stale), p).text, "字\n");
+    }
+
     #[test]
     fn keys_scroll_a_long_file_and_escape_closes_it() {
         let lines: Vec<u32> = (0..1000).collect();
@@ -578,6 +718,8 @@ mod tests {
             lines: Some(&lines),
             saving: false,
             error: None,
+            highlight: None,
+            highlight_id: 0,
         };
         let body = FilesBody::Text(view);
         let mut state = BodyState { viewport: 180., ..Default::default() };

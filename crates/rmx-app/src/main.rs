@@ -9,6 +9,7 @@ mod compare;
 mod connect;
 mod files;
 mod gfx;
+mod highlight;
 mod options;
 mod pacer;
 mod pane;

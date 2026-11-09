@@ -9,7 +9,7 @@ use egui::{
 use rmx_layout::anim::Curve;
 
 use crate::draw::palette;
-use crate::theme::{self, FLOAT_IN, FLOAT_SCALE, MENU_IN, MENU_SCALE, RADIUS};
+use crate::theme::{self, FLOAT_IN, FLOAT_SCALE, MENU_IN, MENU_SCALE, RADIUS_LG};
 use crate::widgets::panels::resize_handle;
 
 /// How far a float is through appearing, 0 to 1, restarting whenever it wasn't shown last frame.
@@ -55,9 +55,9 @@ fn grow(ui: &mut Ui, center: Pos2, progress: f32, eased: f32, from: f32) {
 pub fn float_frame(ui: &Ui) -> Frame {
     let p = palette(ui);
     Frame::new()
-        .fill(p.background)
+        .fill(p.float)
         .stroke(Stroke::new(1., p.border))
-        .corner_radius(CornerRadius::same(RADIUS))
+        .corner_radius(CornerRadius::same(RADIUS_LG))
         .shadow(ui.visuals().popup_shadow)
 }
 

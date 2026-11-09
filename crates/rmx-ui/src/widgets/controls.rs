@@ -50,8 +50,8 @@ pub fn button_full(
     let pressed = enabled && response.is_pointer_button_down_on();
     let (fill, border, text) = match kind {
         ButtonKind::Primary => {
-            let fill = if hovered { p.foreground.gamma_multiply(0.88) } else { p.foreground };
-            (fill, Color32::TRANSPARENT, p.background)
+            let fill = if hovered { p.brand.gamma_multiply(0.86) } else { p.brand };
+            (fill, Color32::TRANSPARENT, p.brand_fg)
         },
         ButtonKind::Secondary => {
             let fill = if pressed {
@@ -59,7 +59,7 @@ pub fn button_full(
             } else if hovered {
                 p.hover
             } else {
-                Color32::TRANSPARENT
+                p.input
             };
             (fill, p.border, p.foreground)
         },
@@ -201,15 +201,16 @@ pub fn text_input(ui: &mut Ui, salt: Id, text: &mut String, options: InputOption
 
     let rect = response.rect;
     if !options.borderless {
-        let border = if response.has_focus() { p.muted_fg } else { p.border };
+        let border = if response.has_focus() { p.brand } else { p.border };
         ui.painter().set(
             background,
-            Shape::rect_stroke(
+            Shape::Rect(egui::epaint::RectShape::new(
                 rect,
                 CornerRadius::same(RADIUS),
+                p.input,
                 Stroke::new(1., border),
                 StrokeKind::Inside,
-            ),
+            )),
         );
     }
     if let Some(glyph) = options.glyph {
@@ -220,7 +221,7 @@ pub fn text_input(ui: &mut Ui, salt: Id, text: &mut String, options: InputOption
 
 /// A row of mutually exclusive options. Returns a response marked changed on selection.
 pub fn segmented(ui: &mut Ui, salt: Id, options: &[&str], selected: &mut usize) -> Response {
-    const HEIGHT: f32 = 32.;
+    const HEIGHT: f32 = CONTROL_HEIGHT;
     const INSET: f32 = 2.;
     let p = palette(ui);
     let width = ui.available_width();
@@ -251,7 +252,7 @@ pub fn segmented(ui: &mut Ui, salt: Id, options: &[&str], selected: &mut usize) 
             painter.rect(
                 cell,
                 CornerRadius::same(RADIUS_SM),
-                p.background,
+                p.float,
                 Stroke::new(1., p.border),
                 StrokeKind::Inside,
             );

@@ -72,6 +72,7 @@ impl Harness {
 fn tabs_vm(ids: &[u64]) -> Vec<TabView<'static>> {
     ids.iter()
         .map(|&id| TabView {
+            protocol: None,
             id: TabId(id),
             label: "tab",
             glyph: rmx_ui::icons::TERMINAL,
@@ -405,7 +406,6 @@ fn pane_bar_routes_its_buttons() {
         pane: PaneId(7),
         status: PaneStatus::Connected,
         title: "t",
-        target: "",
         tooltip: "",
         focused: true,
         grouped: true,
@@ -416,12 +416,12 @@ fn pane_bar_routes_its_buttons() {
     let mut draw = |ui: &mut Ui| pane_bar(ui, rect, &view, &mut reveal, std::time::Instant::now());
     let y = rect.center().y;
     // Shown once the pointer is there. From the right: close, zoom, split down, split right, each
-    // 20 px and 2 px apart.
-    harness.click(pos2(800. - 12., y), &mut draw);
-    assert_eq!(harness.click(pos2(800. - 12., y), &mut draw), Some(UiAction::PaneClose(PaneId(7))));
-    assert_eq!(harness.click(pos2(800. - 34., y), &mut draw), Some(UiAction::PaneZoom(PaneId(7))));
-    assert_eq!(harness.click(pos2(800. - 56., y), &mut draw), Some(UiAction::PaneSplitDown(PaneId(7))));
-    assert_eq!(harness.click(pos2(800. - 78., y), &mut draw), Some(UiAction::PaneSplitRight(PaneId(7))));
+    // 24 px and 2 px apart.
+    harness.click(pos2(800. - 14., y), &mut draw);
+    assert_eq!(harness.click(pos2(800. - 14., y), &mut draw), Some(UiAction::PaneClose(PaneId(7))));
+    assert_eq!(harness.click(pos2(800. - 40., y), &mut draw), Some(UiAction::PaneZoom(PaneId(7))));
+    assert_eq!(harness.click(pos2(800. - 66., y), &mut draw), Some(UiAction::PaneSplitDown(PaneId(7))));
+    assert_eq!(harness.click(pos2(800. - 92., y), &mut draw), Some(UiAction::PaneSplitRight(PaneId(7))));
 }
 
 fn core() -> ChromeCore {
