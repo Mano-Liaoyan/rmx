@@ -412,7 +412,7 @@ pub fn ssh(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "await:unlocked".to_owned(),
         "await:tree:box-renamed".to_owned(),
         "wait,wait,wait".to_owned(),
-        "move:54:156,wait,press,release,press,release".to_owned(),
+        "move:54:194,wait,press,release,press,release".to_owned(),
         "await:live".to_owned(),
         "await:text:$ ".to_owned(),
         "wait,wait".to_owned(),
