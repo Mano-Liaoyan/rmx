@@ -253,7 +253,7 @@ impl Gallery {
         self.note(action);
 
         let side = Rect::from_min_max(pos2(0., STRIP_HEIGHT), pos2(SIDEBAR_WIDTH, screen.bottom()));
-        let action = sidebar(ui, side, &mut self.tree, &mut self.tree_state);
+        let action = sidebar(ui, side, "vault", &mut self.tree, &mut self.tree_state);
         self.note(action);
 
         let pane = Rect::from_min_max(pos2(SIDEBAR_WIDTH, STRIP_HEIGHT), screen.max);

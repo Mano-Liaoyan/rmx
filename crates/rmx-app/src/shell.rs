@@ -184,6 +184,14 @@ enum Pick {
     Snippet(u64),
 }
 
+/// `path` with the home directory as `~`.
+pub fn short_path(path: &str) -> String {
+    match std::env::var("HOME").ok().and_then(|home| path.strip_prefix(&home).map(str::to_owned)) {
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_owned(),
+    }
+}
+
 /// What the interface of every window shows alike.
 pub struct Common {
     pub tree: TreeModel,
@@ -207,6 +215,9 @@ pub struct Common {
     pub asking_window: u64,
     /// Where the user is in each file pane, which goes with the pane between windows.
     files: HashMap<PaneId, FilesState>,
+    /// The vault open or being asked about, and the others this device knows.
+    pub vault_path: String,
+    pub vault_others: Vec<String>,
     /// The vault's snippets. A new list is a new `Arc`, which is how the dialog tells.
     pub snippets: Arc<Vec<SnippetRow>>,
     /// The sizes the panels were dragged to, the same in every window.
@@ -231,6 +242,8 @@ impl Default for Common {
             asking_hidden: false,
             asking_window: 0,
             files: HashMap::new(),
+            vault_path: String::new(),
+            vault_others: Vec::new(),
             snippets: Arc::default(),
             panels: Panels::default(),
         }
@@ -257,6 +270,29 @@ impl Common {
     #[cfg(feature = "bench")]
     pub fn files_select(&mut self, pane: PaneId, side: FileSide, name: &str) {
         self.files.entry(pane).or_default().select(side, name);
+    }
+
+    /// Whether file pane `pane` has edits that would be lost.
+    pub fn files_dirty(&self, pane: PaneId) -> bool {
+        self.files.get(&pane).is_some_and(FilesState::dirty)
+    }
+
+    /// Let go of the edits in file pane `pane`.
+    pub fn files_forget_edits(&mut self, pane: PaneId) {
+        if let Some(files) = self.files.get_mut(&pane) {
+            files.forget_edits();
+        }
+    }
+
+    /// The files to compare from the menu of `name` in a column of file pane `pane`.
+    pub fn files_compare_pair(
+        &self,
+        pane: PaneId,
+        view: &rmx_ui::widgets::FilesView<'_>,
+        side: FileSide,
+        name: &Arc<str>,
+    ) -> Option<(Arc<str>, Arc<str>)> {
+        self.files.get(&pane)?.compare_pair(view, Some((side, name)))
     }
 
     /// What is selected in a column of file pane `pane`, or else `name`.
@@ -663,6 +699,8 @@ impl Shell {
         if common.locked() {
             let rect = egui::Rect::from_min_max(pos2(0., STRIP_HEIGHT), screen.max);
             self.show_gate(ui, rect, common);
+            let action = context_menu(&ctx, Id::unique("shell-menu"), &mut self.menu, &self.menu_items);
+            self.actions.extend(action);
             if !common.asking_hidden {
                 self.show_asking(&ctx, view, common);
             }
@@ -675,7 +713,8 @@ impl Shell {
                 pos2(0., STRIP_HEIGHT),
                 pos2(self.sidebar_width, screen.bottom() - status),
             );
-            let action = sidebar(ui, side, &mut common.tree, &mut common.tree_state);
+            let vault = std::path::Path::new(&common.vault_path).file_stem().and_then(|name| name.to_str()).unwrap_or("");
+            let action = sidebar(ui, side, vault, &mut common.tree, &mut common.tree_state);
             self.actions.extend(action);
             let foot = egui::Rect::from_min_max(
                 pos2(0., screen.bottom() - status),

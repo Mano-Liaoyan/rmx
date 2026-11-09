@@ -4,6 +4,7 @@ pub mod context_menu;
 pub mod controls;
 pub mod empty;
 pub mod files;
+mod text_view;
 pub mod host_key;
 pub mod new_connection;
 pub mod overlay;
@@ -26,8 +27,9 @@ pub use controls::{
 pub use empty::empty_state;
 pub use files::{
     CONFLICT_POLICIES, FileColumnView, FileKind, FileRow, FilesKey, FilesState, FilesView, TransferRow,
-    TransferRowState, file_row_point, files_edges, files_pane,
+    TransferRowState, file_row_point, files_edges, files_fold_point, files_pane,
 };
+pub use text_view::{DiffLine, DiffRow, DiffView, FilesBody, TextView};
 pub use pane_bar::{PaneBarView, PaneStatus, pane_bar};
 pub use panels::{Handle, Panels, Reveal, paint_pill, resize_handle};
 pub use host_key::{HostKeyStatus, HostKeyView, host_key_body, host_key_dialog};

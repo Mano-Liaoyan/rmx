@@ -107,6 +107,16 @@ pub enum FilesAction {
     Delete { side: FileSide, names: Vec<Arc<str>> },
     /// Pick the policy at this index of [`CONFLICT_POLICIES`](crate::widgets::CONFLICT_POLICIES).
     Policy(usize),
+    /// Compare the file `local` of the first column with the file `remote` of the second.
+    Compare { local: Arc<str>, remote: Arc<str> },
+    /// Write this over the open file, unless it has changed since it was read.
+    Save { text: String },
+    /// Write what was being saved over the open file, even though it has changed.
+    SaveAnyway,
+    /// Show how this differs from the open file as it was read.
+    DiffEdits { text: String },
+    /// Go back from what is shown instead of the columns.
+    CloseBody,
 }
 
 /// The kinds of connection.
@@ -266,6 +276,14 @@ pub enum UiAction {
     },
     /// Lock now.
     VaultLock,
+    /// Show the vaults there are to switch to.
+    VaultMenu(Pos2),
+    /// Close this vault and go to the one at this path.
+    VaultSwitch(String),
+    /// Ask for the path of a vault: an existing one, or else one to make.
+    VaultAskPath {
+        create: bool,
+    },
     HostKeyReject,
     HostKeyAcceptOnce,
     HostKeyAcceptAlways,

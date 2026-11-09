@@ -26,8 +26,9 @@
 //! `keys:<text>` (`~` is Enter), `center`, `clip-set:<text>`, `clip-offer`, `salute` and
 //! `scale-toggle`. For file panes, with `L` or `R` for the column: `files-goto:<side>|<path>`,
 //! `files-select:<side>|<name>`, `files-send:<side>`, `files-point:<side>|<name>`,
-//! `files-column:<side>`, `files-cancel:<name>`, `files-retry:<name>`, `files-policy:<index>`, and
-//! `open-files` from a shell.
+//! `files-column:<side>`, `files-cancel:<name>`, `files-retry:<name>`, `files-policy:<index>`,
+//! `files-open:<side>|<name>`, `files-compare:<local>|<remote>`, `files-close`, and `open-files`
+//! from a shell. `vault-switch:<path>` goes to another vault.
 //!
 //! `await:<condition>` holds the script until the condition is true, failing the run after 30 s:
 //! `setup`, `locked`, `unlocked`, `host-key`, `prompt`, `live`, `closed`, `failed`, `synced`,
@@ -70,7 +71,7 @@ use winit::event::{DeviceId, ElementState, Ime, MouseButton, WindowEvent};
 
 use rmx_ui::widgets::{FilesKey, AuthKind, ConnectionDraft, SettingsDraft, SyncDraft, SyncKind};
 use rmx_render::probe::{PHASE_NAMES, PHASES, Spent};
-use rmx_ui::{FileSide, Protocol, Sensitive, ThemeMode, UiAction};
+use rmx_ui::{FileSide, FilesAction, Protocol, Sensitive, ThemeMode, UiAction};
 
 use crate::app::Action;
 use crate::gfx::{FrameStats, Phases};
@@ -302,6 +303,8 @@ pub enum Point {
     SidebarEdge,
     FilesSplit,
     FilesQueue,
+    /// The button folding the queue.
+    FilesFold,
     MenuRow(String),
 }
 
@@ -356,6 +359,7 @@ pub enum Step {
     FilesCancel(String),
     FilesRetry(String),
     FilesPolicy(usize),
+    FilesBody(FilesAction),
     /// Press this key in the focused file pane, with Shift or not.
     FilesKey(FilesKey, bool),
     /// Show the connection form for this protocol.
@@ -451,6 +455,17 @@ pub enum Condition {
     Sidebar(f32, f32),
     FilesSplit(f32, f32),
     FilesQueue(f32, f32),
+    FilesFolded(bool),
+    /// The open file holds this.
+    FilesText(String),
+    /// A comparison of this many rows is on screen.
+    FilesDiff(usize),
+    /// No comparison is on screen.
+    NoDiff,
+    /// Neither a file nor a comparison is open.
+    FilesColumns,
+    /// The vault's path ends in this.
+    VaultNamed(String),
     /// The first divider of the active tab has a ratio between these.
     Ratio(f32, f32),
     /// The first split of the active tab is along this axis.
@@ -513,6 +528,7 @@ fn parse_point(step: &str) -> Option<Point> {
         "sidebar-edge" => Some(Point::SidebarEdge),
         "files-split" => Some(Point::FilesSplit),
         "files-queue" => Some(Point::FilesQueue),
+        "files-fold" => Some(Point::FilesFold),
         _ => None,
     }
 }
@@ -551,6 +567,7 @@ fn parse(step: &str) -> Option<Step> {
             "back" => FilesKey::Back,
             "tab" => FilesKey::Switch,
             "copy" => FilesKey::Copy,
+            "escape" => FilesKey::Escape,
             _ => return None,
         };
         return Some(Step::FilesKey(key, extend));
@@ -634,6 +651,24 @@ fn parse_condition(text: &str) -> Option<Condition> {
     if let Some(rest) = text.strip_prefix("files-split:") {
         let (low, high) = range(rest)?;
         return Some(Condition::FilesSplit(low, high));
+    }
+    if let Some(folded) = text.strip_prefix("files-folded:") {
+        return Some(Condition::FilesFolded(folded == "1"));
+    }
+    if let Some(found) = text.strip_prefix("files-text:") {
+        return Some(Condition::FilesText(found.to_owned()));
+    }
+    if let Some(rows) = text.strip_prefix("files-diff:") {
+        return Some(Condition::FilesDiff(rows.parse().ok()?));
+    }
+    if text == "no-diff" {
+        return Some(Condition::NoDiff);
+    }
+    if text == "files-columns" {
+        return Some(Condition::FilesColumns);
+    }
+    if let Some(name) = text.strip_prefix("vault-named:") {
+        return Some(Condition::VaultNamed(name.to_owned()));
     }
     if let Some(rest) = text.strip_prefix("files-queue:") {
         let (low, high) = range(rest)?;
@@ -854,6 +889,20 @@ fn parse_interface_step(step: &str) -> Option<Step> {
     }
     if let Some(name) = step.strip_prefix("files-retry:") {
         return Some(Step::FilesRetry(name.into()));
+    }
+    if let Some(rest) = step.strip_prefix("files-open:") {
+        let (side, name) = rest.split_once('|')?;
+        return Some(Step::FilesBody(FilesAction::Open { side: file_side(side)?, name: name.into() }));
+    }
+    if let Some(rest) = step.strip_prefix("files-compare:") {
+        let (local, remote) = rest.split_once('|')?;
+        return Some(Step::FilesBody(FilesAction::Compare { local: local.into(), remote: remote.into() }));
+    }
+    if step == "files-close" {
+        return Some(Step::FilesBody(FilesAction::CloseBody));
+    }
+    if let Some(path) = step.strip_prefix("vault-switch:") {
+        return Some(Step::Ui("vault-switch", UiAction::VaultSwitch(path.to_owned())));
     }
     if let Some(index) = step.strip_prefix("files-policy:") {
         return Some(Step::FilesPolicy(index.parse().ok()?));

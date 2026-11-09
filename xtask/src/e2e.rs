@@ -18,6 +18,9 @@ use crate::{Report, measure};
 
 const IMAGE: &str = "localhost/rmx-ssh-sshd-test:1";
 /// Disposable servers built from packages, made once and reused between runs.
+/// The buttons of a file open in a pane of a 1280 by 800 window with a tab strip and sidebar.
+const TEXT_DIFF: &str = "move:1149:87";
+const TEXT_SAVE: &str = "move:1201:87";
 const VNC_IMAGE: &str = "localhost/rmx-e2e-vnc:1";
 const FTP_IMAGE: &str = "localhost/rmx-e2e-ftp:1";
 const TELNET_IMAGE: &str = "localhost/rmx-e2e-telnet:1";
@@ -759,8 +762,8 @@ pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {
 }
 
 /// Where things are in the first-run form, at the 1280x800 every scripted run has.
-const SETUP_AGREE: &str = "move:600:506";
-const SETUP_CREATE: &str = "move:640:552";
+const SETUP_AGREE: &str = "move:600:486";
+const SETUP_CREATE: &str = "move:640:532";
 /// Where "New local shell" is on the empty page, with the sidebar open.
 const EMPTY_SHELL: &str = "move:770:400";
 
@@ -1394,9 +1397,68 @@ fn browse_and_copy(
         "await:listed:L|big.bin".to_owned(),
         "wait,wait".to_owned(),
         shot("done.ppm"),
+        // The queue folds away and back.
+        "files-fold,wait,press,release,await:files-folded:1,wait,wait".to_owned(),
+        shot("ux-files-queue-folded.ppm"),
+        "files-fold,wait,press,release,await:files-folded:0,wait,wait".to_owned(),
+        // A file opened in the pane, written back, and compared with its local copy.
+        "files-open:R|down.txt,await:files-text:from-the-server,wait,wait,wait".to_owned(),
+        shot("ux-files-text.ppm"),
+        // Typed into the field: its button shows the edits, and the other one saves them.
+        "enter,text:second-line,wait,wait,wait".to_owned(),
+        shot("ux-files-text-edited.ppm"),
+        format!("{TEXT_DIFF},wait,press,release,await:files-diff:2,wait,wait,wait"),
+        shot("ux-files-edits-diff.ppm"),
+        "files-close,await:no-diff,wait,wait".to_owned(),
+        format!("{TEXT_SAVE},wait,press,release,await:files-text:second-line,wait,wait"),
+        "files-close,await:files-columns,wait,wait".to_owned(),
+        // Leaving with unsaved edits asks first.
+        "files-open:R|down.txt,await:files-text:second-line,wait,wait,wait".to_owned(),
+        "text:lost,wait,wait,files-close,await:prompt,wait,wait".to_owned(),
+        shot("ux-files-discard.ppm"),
+        "confirm,await:files-columns,wait,wait".to_owned(),
+        "files-compare:down.txt|down.txt,await:files-diff:2,wait,wait,wait".to_owned(),
+        shot("ux-files-diff.ppm"),
+        "files-close,await:files-columns,wait".to_owned(),
     ]);
     let report = app_run(bench_target, scratch, device, &script.join(","))?;
     report_paths(name, &report);
+    Ok(())
+}
+
+/// Going from one vault to another and back: each shows its own connections and wants its own
+/// password.
+pub fn vaults(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let scratch = Scratch::new();
+    let second = scratch.path("second.rmxdb").display().to_string();
+    let shot = |name: &str| shot_step(shots, name);
+    let first = scratch.path("switch/vault.rmxdb").display().to_string();
+    let script = [
+        "await:setup".to_owned(),
+        "vault-create:first-password".to_owned(),
+        "await:unlocked".to_owned(),
+        "await:vault-named:vault.rmxdb".to_owned(),
+        "conn-as:SFTP|in-first|127.0.0.1|1|alice|pw||".to_owned(),
+        "await:tree:in-first".to_owned(),
+        "wait,wait,wait".to_owned(),
+        shot("ux-vault-switcher.ppm"),
+        format!("vault-switch:{second}"),
+        "await:setup,await:vault-named:second.rmxdb,wait,wait,wait".to_owned(),
+        shot("ux-vault-setup-other.ppm"),
+        "vault-create:second-password".to_owned(),
+        "await:unlocked".to_owned(),
+        "await:no-tree:in-first".to_owned(),
+        format!("vault-switch:{first}"),
+        "await:locked,await:vault-named:vault.rmxdb,wait,wait".to_owned(),
+        shot("ux-vault-unlock-other.ppm"),
+        "vault-unlock:first-password".to_owned(),
+        "await:unlocked".to_owned(),
+        "await:tree:in-first".to_owned(),
+    ]
+    .join(",");
+    let report = app_run(bench_target, &scratch, "switch", &script)?;
+    report_paths("vaults", &report);
+    println!("ok   vaults: switched to another vault and back");
     Ok(())
 }
 
@@ -1424,6 +1486,11 @@ pub fn files(bench_target: &Path, shots: &Path) -> Result<(), String> {
     if got != "from-the-server" {
         return Err(format!("down.txt came through wrong: {got:?}"));
     }
+    let edited = podman(&["exec", &server.name, "cat", "/home/alice/down.txt"])?;
+    if edited != "from-the-server\nsecond-line" {
+        return Err(format!("the edited file came through wrong: {edited:?}"));
+    }
+    exec("printf 'from-the-server' > /home/alice/down.txt")?;
     let up = podman(&["exec", &server.name, "cat", "/home/alice/up.txt"])?;
     if up != "from-the-client" {
         return Err(format!("the upload came through wrong: {up:?}"));
@@ -1509,6 +1576,11 @@ pub fn files(bench_target: &Path, shots: &Path) -> Result<(), String> {
     if up != "from-the-client" {
         return Err(format!("the FTP upload came through wrong: {up:?}"));
     }
+    let edited = podman(&["exec", &server.name, "cat", "/home/alice/down.txt"])?;
+    if edited != "from-the-server\nsecond-line" {
+        return Err(format!("the file edited over FTP came through wrong: {edited:?}"));
+    }
+    seed_remote(|command| podman(&["exec", &server.name, "sh", "-c", command]), "/home/alice")?;
     println!("ok   ftp: browsed, copied both ways, cancelled and retried");
 
     let scratch = Scratch::new();

@@ -519,10 +519,11 @@ pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Op
     action
 }
 
-/// The sidebar: search, new-connection button and tree. `rect` is the full column.
+/// The sidebar: the vault, then search, new-connection button and tree. `rect` is the full column.
 pub fn sidebar(
     ui: &mut Ui,
     rect: Rect,
+    vault: &str,
     tree: &mut TreeModel,
     state: &mut TreeState,
 ) -> Option<UiAction> {
@@ -531,8 +532,22 @@ pub fn sidebar(
     ui.painter().rect_filled(rect, 0., p.sidebar);
     vline(ui.painter(), rect.right() - 1., rect.top(), rect.bottom(), p.border);
 
-    let header =
-        Rect::from_min_size(rect.min + vec2(8., 8.), vec2(rect.width() - 16., CONTROL_HEIGHT));
+    let switcher = Rect::from_min_size(rect.min + vec2(8., 8.), vec2(rect.width() - 16., CONTROL_HEIGHT));
+    let opened = ui.interact(switcher, id.with("vault"), Sense::click());
+    if opened.hovered() {
+        ui.painter().rect_filled(switcher, CornerRadius::same(RADIUS_SM), p.hover);
+    }
+    let y = switcher.center().y;
+    crate::draw::icon(ui.painter(), pos2(switcher.left() + 16., y), icons::KEY_ROUND, 13., p.muted_fg);
+    let room = switcher.width() - 56.;
+    elided_at(ui.painter(), switcher.left() + 32., y, vault, fonts::medium(TEXT_SM), p.foreground, room);
+    crate::draw::icon(ui.painter(), pos2(switcher.right() - 14., y), icons::CHEVRON_DOWN, 13., p.muted_fg);
+    let vault_menu = opened.clicked().then(|| UiAction::VaultMenu(switcher.left_bottom() + vec2(0., 4.)));
+
+    let header = Rect::from_min_size(
+        pos2(switcher.left(), switcher.bottom() + 6.),
+        vec2(switcher.width(), CONTROL_HEIGHT),
+    );
     let input = header.with_max_x(header.right() - CONTROL_HEIGHT - 6.);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(input));
     let response = text_input(&mut child, id.with("search"), &mut state.search, InputOptions {
@@ -578,5 +593,5 @@ pub fn sidebar(
         pos2(rect.left(), header.bottom() + 6.),
         pos2(rect.right() - 1., rect.bottom() - 4.),
     );
-    action.or(connection_tree(ui, list, tree, state))
+    vault_menu.or(action).or(connection_tree(ui, list, tree, state))
 }

@@ -326,6 +326,10 @@ impl Running {
                 }
                 self.core.ui.sync = state;
             },
+            VaultEvent::Vaults { current, others } => {
+                self.core.ui.vault_path = current.display().to_string();
+                self.core.ui.vault_others = others.iter().map(|path| path.display().to_string()).collect();
+            },
             VaultEvent::Notice(text, bad) => self.core.ui.status_note = Some((text, bad)),
             VaultEvent::Settings(draft) => {
                 if let Some(at) = self.at_active() {

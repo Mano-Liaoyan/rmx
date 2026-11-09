@@ -97,6 +97,7 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("ssh", Box::new(|| e2e::ssh(&bench_target, &shots))),
         ("sync", Box::new(|| e2e::sync(&bench_target))),
         ("files", Box::new(|| e2e::files(&bench_target, &shots))),
+        ("vaults", Box::new(|| e2e::vaults(&bench_target, &shots))),
         ("vnc", Box::new(|| e2e::vnc(&bench_target, &shots))),
         ("rdp", Box::new(|| e2e::rdp(&bench_target, &shots))),
         ("windows", Box::new(|| e2e::windows(&bench_target, &shots))),

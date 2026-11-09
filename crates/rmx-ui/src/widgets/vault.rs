@@ -21,6 +21,8 @@ pub struct VaultState {
     password: String,
     key_file: String,
     focused_once: bool,
+    /// The vault that what was typed is for.
+    name: String,
 }
 
 /// What the app says about the vault.
@@ -44,7 +46,15 @@ pub fn vault_unlock(
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.background);
 
-    let height = if view.error.is_some() { 256. } else { 234. };
+    if state.name != view.name {
+        state.name = view.name.to_owned();
+        state.password.clear();
+        state.key_file.clear();
+        state.focused_once = false;
+        ui.ctx().data_mut(|data| data.remove::<TextEditState>(ui.make_persistent_id(Id::unique("vault-password"))));
+    }
+
+    let height = if view.error.is_some() { 296. } else { 274. };
     let area = Rect::from_center_size(rect.center(), vec2(WIDTH, height));
     let mut child = ui.new_child(
         egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Center)),
@@ -112,6 +122,10 @@ pub fn vault_unlock(
     let label = if view.busy { "Unlocking..." } else { "Unlock" };
     let glyph = view.busy.then_some(icons::LOADER_CIRCLE);
     let submit = button_full(ui, glyph, label, ButtonKind::Primary, ready, Some(WIDTH));
+    let other = button_full(ui, None, "Other vaults", ButtonKind::Ghost, !view.busy, Some(WIDTH));
+    if other.clicked() {
+        return Some(UiAction::VaultMenu(other.rect.left_bottom() + vec2(0., 4.)));
+    }
     if view.busy {
         // Slow enough not to hold the frame rate up while the key is derived.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
@@ -226,7 +240,7 @@ pub fn vault_setup(
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.background);
 
-    let height = f32::min(if state.joining { 520. } else { 320. } + WARNING_ROOM, rect.height() - 16.);
+    let height = f32::min(if state.joining { 560. } else { 360. } + WARNING_ROOM, rect.height() - 16.);
     let area = Rect::from_center_size(rect.center(), vec2(TALL_WIDTH, height));
     let mut child = ui.new_child(
         egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Center)),
@@ -327,6 +341,10 @@ pub fn vault_setup(
     if button_full(ui, None, other, ButtonKind::Ghost, !view.busy, Some(TALL_WIDTH)).clicked() {
         state.joining = !state.joining;
         ui.ctx().request_repaint();
+    }
+    let vaults = button_full(ui, None, "Other vaults", ButtonKind::Ghost, !view.busy, Some(TALL_WIDTH));
+    if vaults.clicked() {
+        return Some(UiAction::VaultMenu(vaults.rect.left_bottom() + vec2(0., 4.)));
     }
     if view.busy {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));

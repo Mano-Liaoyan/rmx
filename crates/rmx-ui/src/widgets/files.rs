@@ -17,6 +17,7 @@ use crate::{fonts, icons};
 
 use super::controls::{InputOptions, paint_icon_button, segmented, submitted, text_input};
 use super::panels::{FILES_DATE, FILES_QUEUE, FILES_SIZE, FILES_SPLIT, Panels, resize_handle};
+use super::text_view::{BodyState, FilesBody, show_body};
 
 const ROW: f32 = 24.;
 const BAR: f32 = 40.;
@@ -29,6 +30,10 @@ const COLUMN_MIN: f32 = 200.;
 const THUMB_WIDTH: f32 = 6.;
 const THUMB_MIN: f32 = 24.;
 const QUEUE_BAR: f32 = 40.;
+/// The most of a path bar the name of a column takes.
+const TITLE_MAX: f32 = 220.;
+/// Dragged this close to its bar, the queue folds down to it.
+const QUEUE_FOLD_AT: f32 = QUEUE_BAR + ROW / 2.;
 /// How far apart the columns are.
 const GAP: f32 = 1.;
 
@@ -62,9 +67,15 @@ impl FileRow {
         Self { name: name.into(), sort: name.to_lowercase().into(), kind, size, modified }
     }
 
-    /// Whether going into it makes sense.
+    /// Whether going into it, or reading it, makes sense. What is neither a file nor a directory
+    /// could block whoever reads it for ever.
     pub fn openable(&self) -> bool {
-        matches!(self.kind, FileKind::Dir | FileKind::Link)
+        matches!(self.kind, FileKind::Dir | FileKind::Link | FileKind::File)
+    }
+
+    /// Whether it can be compared with another file.
+    fn comparable(&self) -> bool {
+        matches!(self.kind, FileKind::File | FileKind::Link)
     }
 }
 
@@ -110,6 +121,8 @@ pub struct FilesView<'a> {
     pub transfers: &'a [TransferRow],
     /// Index into [`CONFLICT_POLICIES`].
     pub policy: usize,
+    /// What is shown instead of the columns, if anything.
+    pub body: FilesBody<'a>,
 }
 
 /// What a key does in a file pane.
@@ -129,6 +142,8 @@ pub enum FilesKey {
     Switch,
     /// Copy what is selected, or else what the cursor is on, to the other column.
     Copy,
+    /// Go back from what is shown instead of the columns.
+    Escape,
 }
 
 #[derive(Debug, Default)]
@@ -163,6 +178,7 @@ pub struct FilesState {
     second_active: bool,
     /// Whether to show where the keyboard is: not for someone just using the pointer.
     keyboard_used: bool,
+    body: BodyState,
 }
 
 impl FilesState {
@@ -174,7 +190,10 @@ impl FilesState {
     /// Act on a key. However long the listing, this takes the same few steps and allocates
     /// nothing, except for copying, which lists what to copy. `extend` keeps what is selected.
     pub fn key(&mut self, key: FilesKey, extend: bool, view: &FilesView<'_>) -> Option<FilesAction> {
-        self.keyboard_used = true;
+        if !matches!(view.body, FilesBody::Columns) {
+            return self.body.key(key, &view.body);
+        }
+        self.keyboard_used |= key != FilesKey::Escape;
         let side = self.active_side();
         let column = &view.columns[side.index()];
         let rows = column.rows;
@@ -198,6 +217,7 @@ impl FilesState {
                 self.second_active = !self.second_active;
                 return None;
             },
+            FilesKey::Escape => return None,
             FilesKey::Copy => {
                 let names: Vec<Arc<str>> = if state.selected.is_empty() {
                     rows.get(state.cursor).map(|row| row.name.clone()).into_iter().collect()
@@ -236,6 +256,46 @@ impl FilesState {
         self.sides[side.index()].selected.iter().cloned().collect()
     }
 
+    /// Whether there are edits to a file that would be lost.
+    pub fn dirty(&self) -> bool {
+        self.body.dirty()
+    }
+
+    /// Let go of the edits to a file.
+    pub fn forget_edits(&mut self) {
+        self.body.forget_edits();
+    }
+
+    /// Which two files to compare, the one of the first column and the one of the second: what is
+    /// selected or else `at`, with what is selected across from it or else the file of that name.
+    pub fn compare_pair(
+        &self,
+        view: &FilesView<'_>,
+        at: Option<(FileSide, &Arc<str>)>,
+    ) -> Option<(Arc<str>, Arc<str>)> {
+        let sole = |side: FileSide| {
+            let selected = &self.sides[side.index()].selected;
+            let mut names = selected.iter();
+            names.next().filter(|_| names.next().is_none()).cloned()
+        };
+        let file = |side: FileSide, name: &Arc<str>| {
+            view.columns[side.index()].rows.iter().find(|row| row.name == *name && row.comparable()).map(|row| row.name.clone())
+        };
+        let (side, name) = match at {
+            Some((side, name)) => (side, name.clone()),
+            None => {
+                let side = self.active_side();
+                match sole(side) {
+                    Some(name) => (side, name),
+                    None => (side.other(), sole(side.other())?),
+                }
+            },
+        };
+        let here = file(side, &name)?;
+        let there = sole(side.other()).and_then(|other| file(side.other(), &other)).or_else(|| file(side.other(), &name))?;
+        Some(if side == FileSide::Local { (here, there) } else { (there, here) })
+    }
+
     /// Forget what was selected and scrolled in the column: it shows another directory now.
     pub fn reset_side(&mut self, side: FileSide) {
         let state = &mut self.sides[side.index()];
@@ -266,6 +326,9 @@ fn column_rect(area: Rect, side: FileSide, panels: &Panels) -> Rect {
 
 /// How tall the queue is in `area`: at least its bar and a row, and leaving the columns a few.
 fn queue_height(area: Rect, panels: &Panels) -> f32 {
+    if panels.files_queue_folded {
+        return QUEUE_BAR.min(area.height());
+    }
     let low = QUEUE_BAR + ROW;
     let high = (area.height() - BAR - HEAD - ROW * 3.).max(low);
     panels.files_queue.clamp(low, high).min(area.height())
@@ -286,6 +349,13 @@ pub fn file_row_point(area: Rect, side: FileSide, index: usize, panels: &Panels)
 /// queue. For driving the pane from a script.
 pub fn files_edges(area: Rect, panels: &Panels) -> (f32, f32) {
     (split_x(area, panels), column_rect(area, FileSide::Local, panels).bottom())
+}
+
+/// Where the button folding the queue is in a pane drawn in `area`. For driving the pane from a
+/// script.
+pub fn files_fold_point(area: Rect, panels: &Panels) -> egui::Pos2 {
+    let top = column_rect(area, FileSide::Local, panels).bottom();
+    pos2(area.right() - PAD - 13., top + QUEUE_BAR / 2.)
 }
 
 /// A size, in the units people read.
@@ -326,9 +396,8 @@ fn format_time(time: SystemTime) -> String {
 }
 
 /// A plain page shape, as the icon font has no file.
-fn paint_file(ui: &Ui, center: egui::Pos2, color: Color32) {
+fn paint_file(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
     let rect = Rect::from_center_size(center, vec2(9., 12.));
-    let painter = ui.painter();
     painter.rect_stroke(rect, CornerRadius::same(1), Stroke::new(1., color), StrokeKind::Inside);
 }
 
@@ -357,14 +426,13 @@ fn show_column(
             side_state.typed = view.path.to_owned();
         }
     }
-    ui.painter().text(
-        pos2(bar.left() + 10., bar.center().y),
-        Align2::LEFT_CENTER,
-        view.title,
-        fonts::medium(TEXT_SM),
-        p.foreground,
-    );
-    let up = Rect::from_center_size(pos2(bar.left() + 62., bar.center().y), vec2(26., 26.));
+    // However long the name of the host, the path keeps most of the bar.
+    let title_room = (bar.width() * 0.35).min(TITLE_MAX);
+    let title_width =
+        elided_at(ui.painter(), bar.left() + 10., bar.center().y, view.title, fonts::medium(TEXT_SM), p.foreground, title_room);
+    let title_rect = Rect::from_min_size(bar.min, vec2(title_width + 10., BAR));
+    ui.interact(title_rect, id.with("title"), Sense::hover()).on_hover_text(view.title);
+    let up = Rect::from_center_size(pos2(bar.left() + 10. + title_width + 20., bar.center().y), vec2(26., 26.));
     let response = ui.interact(up, id.with("up"), Sense::click());
     paint_icon_button(ui, up, icons::CHEVRON_UP, 13., &response);
     if response.clicked() {
@@ -481,7 +549,7 @@ fn show_column(
         match row.kind {
             FileKind::Dir => icon(&painter, at, icons::FOLDER, 13., p.muted_fg),
             FileKind::Link => icon(&painter, at, icons::CORNER_DOWN_LEFT, 13., p.muted_fg),
-            FileKind::File | FileKind::Other => paint_file(ui, at, p.muted_fg),
+            FileKind::File | FileKind::Other => paint_file(&painter, at, p.muted_fg),
         }
         let font = fonts::regular(TEXT_SM);
         let name_room = (size_right - size_w - name_x).max(20.);
@@ -586,6 +654,8 @@ fn show_column(
     // What the listing says about itself, over the rows.
     let note = |text: &str, color: Color32| {
         let at = pos2(rows.left() + 14., rows.top() + 16.);
+        let band = Rect::from_min_size(pos2(rows.left(), rows.top() + 4.), vec2(rows.width(), ROW));
+        painter.rect_filled(band, 0., p.background);
         elided_at(&painter, at.x, at.y, text, fonts::regular(TEXT_SM), color, rows.width() - 28.);
     };
     if let Some(error) = view.error {
@@ -600,10 +670,12 @@ fn show_queue(
     rect: Rect,
     view: &FilesView<'_>,
     state: &mut FilesState,
+    panels: &mut Panels,
     actions: &mut Vec<UiAction>,
 ) {
     let p = palette(ui);
     let pane = view.pane;
+    let folded = panels.files_queue_folded;
     let id = Id::unique(("files-queue", pane.0));
     hline(ui.painter(), rect.left(), rect.right(), rect.top(), p.border);
 
@@ -633,7 +705,8 @@ fn show_queue(
     let any_finished = view.transfers.iter().any(|t| {
         matches!(t.state, TransferRowState::Done | TransferRowState::Failed | TransferRowState::Cancelled)
     });
-    bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    let compare = state.compare_pair(view, None);
+    let tools_left = bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.set_min_height(CONTROL_HEIGHT);
         let tool = |ui: &mut Ui, salt: &str, glyph: char, tip: &str, enabled: bool| {
             let (cell, _) = ui.allocate_exact_size(vec2(26., 26.), Sense::hover());
@@ -642,6 +715,11 @@ fn show_queue(
             paint_icon_button(ui, cell, glyph, 13., &response);
             enabled && response.clicked()
         };
+        let (glyph, tip) = if folded { (icons::CHEVRON_UP, "Show transfers") } else { (icons::CHEVRON_DOWN, "Hide transfers") };
+        if tool(ui, "fold", glyph, tip, true) {
+            panels.files_queue_folded = !folded;
+            actions.push(UiAction::PanelsChanged);
+        }
         if tool(ui, "clear", icons::TRASH_2, "Clear finished", any_finished) {
             actions.push(UiAction::Files(pane, FilesAction::ClearFinished));
         }
@@ -653,7 +731,18 @@ fn show_queue(
             let names = upload.clone();
             actions.push(UiAction::Files(pane, FilesAction::Transfer { from: FileSide::Local, names }));
         }
-    });
+        if tool(ui, "compare", icons::COLUMNS_2, "Compare", compare.is_some())
+            && let Some((local, remote)) = compare.clone()
+        {
+            actions.push(UiAction::Files(pane, FilesAction::Compare { local, remote }));
+        }
+        ui.min_rect().left()
+    }).inner;
+
+    if folded {
+        paint_folded_queue(ui, bar, row_ui_rect.left() + width + 12., tools_left - 8., view.transfers);
+        return;
+    }
 
     // The transfers.
     let list = Rect::from_min_max(pos2(rect.left(), bar.bottom()), rect.max);
@@ -666,6 +755,8 @@ fn show_queue(
     state.queue_scroll = clamp_scroll(state.queue_scroll, len, ROW, viewport);
     let visible = window(state.queue_scroll, len, ROW, viewport);
     let painter = ui.painter_at(list);
+    let mut list_ui = ui.new_child(egui::UiBuilder::new().id_salt(id.with("list")).max_rect(list));
+    list_ui.set_clip_rect(list.intersect(ui.clip_rect()));
     for index in visible.first..visible.end {
         let row = &view.transfers[index];
         let y = list.top() + visible.top + (index - visible.first) as f32 * ROW;
@@ -700,13 +791,38 @@ fn show_queue(
         let button = Rect::from_center_size(pos2(actions_x + 13., center), vec2(22., 22.));
         if cancel || retry {
             let glyph = if cancel { icons::X } else { icons::FOLDER_SYNC };
-            let response = ui.interact(button.intersect(list), id.with(("act", row.id)), Sense::click());
-            paint_icon_button(ui, button, glyph, 12., &response);
+            let response = list_ui.interact(button.intersect(list), id.with(("act", row.id)), Sense::click());
+            paint_icon_button(&list_ui, button, glyph, 12., &response);
             if response.clicked() {
                 let action = if cancel { FilesAction::Cancel(row.id) } else { FilesAction::Retry(row.id) };
                 actions.push(UiAction::Files(pane, action));
             }
         }
+    }
+}
+
+/// What a folded queue still says: what is being copied, and how far along it all is.
+fn paint_folded_queue(ui: &Ui, bar: Rect, left: f32, right: f32, transfers: &[TransferRow]) {
+    let p = palette(ui);
+    let active = || transfers.iter().filter(|t| matches!(t.state, TransferRowState::Queued | TransferRowState::Running));
+    let failed = transfers.iter().filter(|t| t.state == TransferRowState::Failed).count();
+    let current = active().find(|t| t.state == TransferRowState::Running).or_else(|| active().next());
+    let room = right - left;
+    let font = fonts::regular(TEXT_SM);
+    let y = bar.center().y;
+    if let Some(current) = current {
+        let more = active().count() - 1;
+        let text = if more > 0 { format!("{} +{more}", current.label) } else { current.label.clone() };
+        elided_at(ui.painter(), left, y, &text, font, p.muted_fg, room);
+        let (mut done, mut count) = (0., 0.);
+        for transfer in active() {
+            done += transfer.fraction.unwrap_or(0.);
+            count += 1.;
+        }
+        let line = Rect::from_min_size(bar.min, vec2(bar.width() * done / f32::max(count, 1.), 2.));
+        ui.painter().rect_filled(line, 0., p.info);
+    } else if failed > 0 {
+        elided_at(ui.painter(), left, y, &format!("{failed} failed"), font, p.danger, room);
     }
 }
 
@@ -733,35 +849,51 @@ pub fn files_pane(
 
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(area));
     let ui = &mut child;
-    for column in &view.columns {
-        let rect = column_rect(area, column.side, panels);
-        show_column(ui, rect, column, view.pane, focused, state, panels, actions);
-    }
     let middle = split_x(area, panels);
     let bottom = column_rect(area, FileSide::Local, panels).bottom();
-    vline(ui.painter(), middle, area.top(), bottom, p.border);
+    let columns = matches!(view.body, FilesBody::Columns);
+    if columns {
+        for column in &view.columns {
+            let rect = column_rect(area, column.side, panels);
+            show_column(ui, rect, column, view.pane, focused, state, panels, actions);
+        }
+        vline(ui.painter(), middle, area.top(), bottom, p.border);
+    } else {
+        let rect = Rect::from_min_max(area.min, pos2(area.right(), bottom));
+        show_body(ui, rect, &view.body, view.pane, focused, &mut state.body, actions);
+    }
 
     let queue = Rect::from_min_max(pos2(area.left(), bottom), area.max);
-    show_queue(ui, queue, view, state, actions);
+    show_queue(ui, queue, view, state, panels, actions);
 
     // Between the columns, and above the queue.
-    let band = Rect::from_min_max(pos2(middle - 3., area.top()), pos2(middle + 3., bottom));
-    let split = resize_handle(ui, band, id.with("edge-split"), true, middle);
-    if let Some(x) = split.to {
-        panels.files_split = ((x - area.left()) / area.width()).clamp(0., 1.);
-    }
-    if split.reset {
-        panels.files_split = FILES_SPLIT;
+    if columns {
+        let band = Rect::from_min_max(pos2(middle - 3., area.top()), pos2(middle + 3., bottom));
+        let split = resize_handle(ui, band, id.with("edge-split"), true, middle);
+        if let Some(x) = split.to {
+            panels.files_split = ((x - area.left()) / area.width()).clamp(0., 1.);
+        }
+        if split.reset {
+            panels.files_split = FILES_SPLIT;
+        }
+        if split.released || split.reset {
+            actions.push(UiAction::PanelsChanged);
+        }
     }
     let band = Rect::from_min_max(pos2(area.left(), bottom - 3.), pos2(area.right(), bottom + 3.));
     let height = resize_handle(ui, band, id.with("edge-queue"), false, bottom);
     if let Some(y) = height.to {
-        panels.files_queue = area.bottom() - y;
+        let wanted = area.bottom() - y;
+        panels.files_queue_folded = wanted < QUEUE_FOLD_AT;
+        if !panels.files_queue_folded {
+            panels.files_queue = wanted;
+        }
     }
     if height.reset {
         panels.files_queue = FILES_QUEUE;
+        panels.files_queue_folded = false;
     }
-    if split.released || split.reset || height.released || height.reset {
+    if height.released || height.reset {
         actions.push(UiAction::PanelsChanged);
     }
 
@@ -820,8 +952,9 @@ mod tests {
     fn the_rows_of_a_directory_list_their_own_paths() {
         let row = FileRow::new("Foo.TXT", FileKind::File, Some(1), None);
         assert_eq!(row.sort.as_ref(), "foo.txt");
-        assert!(!row.openable());
+        assert!(row.openable());
         assert!(FileRow::new("d", FileKind::Dir, None, None).openable());
+        assert!(!FileRow::new("fifo", FileKind::Other, None, None).openable(), "reading one could block for ever");
     }
 
     #[test]
@@ -845,6 +978,7 @@ mod tests {
             columns: [column(FileSide::Local, rows), column(FileSide::Remote, other)],
             transfers: &[],
             policy: 0,
+            body: FilesBody::Columns,
         }
     }
 
@@ -870,13 +1004,13 @@ mod tests {
     }
 
     #[test]
-    fn enter_opens_directories_only_and_backspace_goes_up() {
+    fn enter_opens_what_the_cursor_is_on_and_backspace_goes_up() {
         let rows = listing(3);
         let view = view(&rows, &[]);
         let mut state = FilesState::default();
-        assert_eq!(state.key(FilesKey::Open, false, &view), None, "the cursor is on a file");
-        state.key(FilesKey::Down, false, &view);
         let side = FileSide::Local;
+        assert_eq!(state.key(FilesKey::Open, false, &view), Some(FilesAction::Open { side, name: "f0".into() }));
+        state.key(FilesKey::Down, false, &view);
         assert_eq!(state.key(FilesKey::Open, false, &view), Some(FilesAction::Open { side, name: "f1".into() }));
         assert_eq!(state.key(FilesKey::Back, false, &view), Some(FilesAction::Up { side }));
     }
@@ -938,6 +1072,40 @@ mod tests {
         assert_eq!(split_x(area, &wide), 700.);
         let thirds = Panels { files_split: 0.25, ..Panels::default() };
         assert_eq!(split_x(area, &thirds), 300.);
+    }
+
+    #[test]
+    fn a_folded_queue_is_just_its_bar_and_gives_the_rest_to_the_columns() {
+        let area = Rect::from_min_size(pos2(0., 0.), vec2(800., 600.));
+        let folded = Panels { files_queue_folded: true, ..Panels::default() };
+        assert_eq!(queue_height(area, &folded), QUEUE_BAR);
+        assert_eq!(column_rect(area, FileSide::Local, &folded).bottom(), 600. - QUEUE_BAR);
+    }
+
+    #[test]
+    fn what_to_compare_is_the_selection_or_the_file_of_the_same_name() {
+        let rows = listing(3);
+        let other = vec![FileRow::new("f0", FileKind::File, None, None), FileRow::new("other", FileKind::File, None, None)];
+        let view = view(&rows, &other);
+        let mut state = FilesState::default();
+        assert_eq!(state.compare_pair(&view, None), None, "nothing is selected");
+
+        state.select(FileSide::Local, "f0");
+        assert_eq!(state.compare_pair(&view, None), Some(("f0".into(), "f0".into())));
+        state.select(FileSide::Remote, "other");
+        assert_eq!(state.compare_pair(&view, None), Some(("f0".into(), "other".into())));
+
+        state.select(FileSide::Local, "f2");
+        state.select(FileSide::Remote, "missing");
+        assert_eq!(state.compare_pair(&view, None), None, "nothing of that name across from it");
+        state.select(FileSide::Local, "f1");
+        state.select(FileSide::Remote, "f0");
+        assert_eq!(state.compare_pair(&view, None), None, "f1 is a directory");
+
+        let at: Arc<str> = "other".into();
+        let mut state = FilesState::default();
+        state.select(FileSide::Local, "f2");
+        assert_eq!(state.compare_pair(&view, Some((FileSide::Remote, &at))), Some(("f2".into(), "other".into())));
     }
 
     #[test]

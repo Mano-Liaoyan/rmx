@@ -193,6 +193,12 @@ enum Reply {
     FilesNewFolder(PaneId, rmx_ui::FileSide),
     FilesRename(PaneId, rmx_ui::FileSide, Arc<str>),
     FilesDelete(PaneId, rmx_ui::FileSide, Vec<Arc<str>>),
+    /// Write over a file that changed since it was opened.
+    FilesOverwrite(PaneId),
+    /// Go on with `then`, losing the edits in these panes.
+    LoseEdits(Vec<PaneId>, UiAction),
+    /// Go to the vault at the path typed.
+    VaultPath,
 }
 
 /// What `key` does in a file pane, and whether Shift is adding to the selection.
@@ -212,6 +218,7 @@ fn files_key_for(key: Key<&str>, mods: ModifiersState) -> Option<(FilesKey, bool
         NamedKey::Backspace => FilesKey::Back,
         NamedKey::Tab => FilesKey::Switch,
         NamedKey::F5 => FilesKey::Copy,
+        NamedKey::Escape => FilesKey::Escape,
         _ => return None,
     };
     Some((found, mods.shift_key()))
@@ -1286,6 +1293,11 @@ impl At<'_> {
         if let Some(side) = applied.moved {
             self.core.ui.files_reset(id, side);
         }
+        if let Some(path) = &applied.conflict {
+            let mut state = PromptState::new(format!("{path} has changed"), "It was changed after you opened it. Your version would replace it.", Vec::new());
+            state.submit = "Overwrite".to_owned();
+            self.ask_here(state, Reply::FilesOverwrite(id));
+        }
         if let Some(files) = self.pane_mut(id).and_then(|pane| pane.content.files_mut()) {
             for (side, directory) in &applied.refresh {
                 files.refresh_if_showing(*side, directory);
@@ -1616,6 +1628,29 @@ impl At<'_> {
                     self.files_action(pane, FilesAction::Delete { side, names });
                 }
             },
+            Reply::FilesOverwrite(pane) => {
+                if fields.is_some() {
+                    self.files_action(pane, FilesAction::SaveAnyway);
+                }
+            },
+            Reply::LoseEdits(panes, then) => {
+                if fields.is_some() {
+                    for pane in panes {
+                        self.core.ui.files_forget_edits(pane);
+                    }
+                    if then == UiAction::WindowClose {
+                        self.win.exit = true;
+                    } else {
+                        self.ui_action(then);
+                    }
+                }
+            },
+            Reply::VaultPath => {
+                if let Some(path) = first.filter(|path| !path.is_empty()) {
+                    self.core.ui.vault_error = None;
+                    self.core.vault.send(Request::Switch(path));
+                }
+            },
             Reply::DeleteConnection(node) => {
                 if fields.is_some() {
                     self.core.vault.send(Request::DeleteConnection(node));
@@ -1731,7 +1766,7 @@ impl At<'_> {
             Action::SplitLocal(axis) => self.split_local(axis),
             Action::ClosePane => {
                 if let Some(id) = self.win.workspace.focused() {
-                    self.close(id);
+                    self.ui_action(UiAction::PaneClose(rmx_ui::PaneId(id)));
                 }
             },
             Action::Focus(direction) => {
@@ -2081,6 +2116,9 @@ impl At<'_> {
         if row.is_some_and(rmx_ui::widgets::FileRow::openable) {
             items.push(menu_item(icons::FOLDER_OPEN, "Open", act(FilesAction::Open { side, name: name.clone() }), false));
         }
+        if let Some((local, remote)) = self.core.ui.files_compare_pair(pane, &files.view(id), side, &name) {
+            items.push(menu_item(icons::COLUMNS_2, "Compare", act(FilesAction::Compare { local, remote }), false));
+        }
         let (glyph, label) = match side {
             rmx_ui::FileSide::Local => (icons::ARROW_RIGHT, "Upload"),
             rmx_ui::FileSide::Remote => (icons::ARROW_LEFT, "Download"),
@@ -2096,6 +2134,36 @@ impl At<'_> {
         items.push(MenuItem::Separator);
         items.push(menu_item(icons::TRASH_2, "Delete", UiAction::FilesAskDelete(id, side, names), true));
         items
+    }
+
+    /// What can be done from the vault switcher.
+    fn vault_menu(&self) -> Vec<MenuItem> {
+        let ui = &self.core.ui;
+        let row = |glyph, path: &str| menu_item(glyph, &shell::short_path(path), UiAction::VaultSwitch(path.to_owned()), false);
+        let mut items = vec![row(icons::CHECK, &ui.vault_path)];
+        items.extend(ui.vault_others.iter().map(|path| row(icons::KEY_ROUND, path)));
+        items.push(MenuItem::Separator);
+        items.push(menu_item(icons::FOLDER_OPEN, "Open vault", UiAction::VaultAskPath { create: false }, false));
+        items.push(menu_item(icons::PLUS, "New vault", UiAction::VaultAskPath { create: true }, false));
+        items
+    }
+
+    /// Ask before `then` loses edits made in any of `panes`. Returns whether it was asked.
+    fn ask_before_losing_edits(&mut self, panes: Vec<PaneId>, then: UiAction) -> bool {
+        let dirty: Vec<PaneId> = panes
+            .into_iter()
+            .filter(|&pane| {
+                self.core.ui.files_dirty(pane)
+                    && self.pane(pane).and_then(|found| found.content.files()).is_some_and(FilesPane::has_document)
+            })
+            .collect();
+        if dirty.is_empty() {
+            return false;
+        }
+        let mut state = PromptState::new("Discard your changes?", "They have not been saved.", Vec::new());
+        state.submit = "Discard".to_owned();
+        self.ask_here(state, Reply::LoseEdits(dirty, then));
+        true
     }
 
     fn ask_delete(&mut self, node: u64) {
@@ -2146,6 +2214,9 @@ impl At<'_> {
                     | UiAction::VaultUnlock { .. }
                     | UiAction::VaultCreate { .. }
                     | UiAction::VaultJoin { .. }
+                    | UiAction::VaultMenu(_)
+                    | UiAction::VaultSwitch(_)
+                    | UiAction::VaultAskPath { .. }
                     | UiAction::HostKeyAcceptAlways
                     | UiAction::HostKeyAcceptOnce
                     | UiAction::HostKeyReject
@@ -2161,7 +2232,13 @@ impl At<'_> {
                 let maximized = !self.win.gfx.window.is_maximized();
                 self.win.gfx.window.set_maximized(maximized);
             },
-            UiAction::WindowClose => return false,
+            UiAction::WindowClose => {
+                let key = self.win.key;
+                let here = self.core.panes.iter().filter(|pane| pane.window == key).map(|pane| pane.id).collect();
+                if !self.ask_before_losing_edits(here, UiAction::WindowClose) {
+                    return false;
+                }
+            },
             UiAction::WindowDrag => {
                 if let Err(err) = self.win.gfx.window.drag_window() {
                     log::warn!("Could not move the window: {err}");
@@ -2176,7 +2253,10 @@ impl At<'_> {
             },
             UiAction::TabClose(TabId(id)) => {
                 if let Some(index) = self.win.workspace.tab_index(id) {
-                    self.close_tab(index);
+                    let panes = self.win.workspace.tabs()[index].layout.panes().to_vec();
+                    if !self.ask_before_losing_edits(panes, UiAction::TabClose(TabId(id))) {
+                        self.close_tab(index);
+                    }
                 }
             },
             UiAction::TabNew => self.perform(Action::NewTab),
@@ -2348,6 +2428,24 @@ impl At<'_> {
                 self.ask_folder_name("Rename folder", name.unwrap_or_default(), Reply::RenameFolder(node));
             },
             UiAction::VaultLock => self.core.vault.send(Request::Lock),
+            UiAction::VaultMenu(pos) => {
+                let items = self.vault_menu();
+                self.win.shell.open_menu(pos, items);
+            },
+            UiAction::VaultSwitch(path) => {
+                self.core.ui.vault_error = None;
+                self.core.vault.send(Request::Switch(path));
+            },
+            UiAction::VaultAskPath { create } => {
+                let directory = std::path::Path::new(&self.core.ui.vault_path).parent().map_or(String::new(), |dir| dir.display().to_string());
+                let (title, value) = if create {
+                    ("New vault", format!("{directory}/new.rmxdb"))
+                } else {
+                    ("Open vault", format!("{directory}/"))
+                };
+                let field = PromptField { label: "Path".to_owned(), secret: false, value };
+                self.ask_here(PromptState::new(title, "", vec![field]), Reply::VaultPath);
+            },
             UiAction::VaultUnlock { mut password, key_file } => {
                 let password = Secret::new(password.take());
                 self.core.vault.send(Request::Unlock { password, key_file: key_path(&key_file) });
@@ -2376,7 +2474,11 @@ impl At<'_> {
                 }
                 self.start_session(pane);
             },
-            UiAction::PaneClose(rmx_ui::PaneId(pane)) => self.close(pane),
+            UiAction::PaneClose(rmx_ui::PaneId(pane)) => {
+                if !self.ask_before_losing_edits(vec![pane], UiAction::PaneClose(rmx_ui::PaneId(pane))) {
+                    self.close(pane);
+                }
+            },
             UiAction::PaneFocus(rmx_ui::PaneId(pane)) => self.focus_pane(pane),
             UiAction::PaneCtrlAltDel(rmx_ui::PaneId(pane)) => self.salute(pane),
             UiAction::PaneToggleScale(rmx_ui::PaneId(pane)) => self.toggle_scale(pane),
@@ -2485,6 +2587,12 @@ impl At<'_> {
 
     /// Do what a file pane asked.
     fn files_action(&mut self, id: PaneId, action: FilesAction) {
+        let editing = self.pane(id).and_then(|pane| pane.content.files()).is_some_and(FilesPane::editing);
+        if action == FilesAction::CloseBody && editing && self.core.ui.files_dirty(id) {
+            let then = UiAction::Files(rmx_ui::PaneId(id), FilesAction::CloseBody);
+            self.ask_before_losing_edits(vec![id], then);
+            return;
+        }
         let Some(files) = self.pane_mut(id).and_then(|pane| pane.content.files_mut()) else { return };
         if let Some(side) = files.action(action) {
             self.core.ui.files_reset(id, side);
@@ -3358,7 +3466,13 @@ impl ApplicationHandler<AppEvent> for App {
         }
 
         match event {
-            WindowEvent::CloseRequested => at.win.exit = true,
+            WindowEvent::CloseRequested => {
+                let key = at.win.key;
+                let here = at.core.panes.iter().filter(|pane| pane.window == key).map(|pane| pane.id).collect();
+                if !at.ask_before_losing_edits(here, UiAction::WindowClose) {
+                    at.win.exit = true;
+                }
+            },
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 if at.win.motion.running(now) || at.win.chrome.needs_update(now) {
@@ -3718,6 +3832,11 @@ impl At<'_> {
                 let (_, height) = self.win.gfx.window_size();
                 Some((self.sidebar_width(), height / 2.))
             },
+            P::FilesFold => {
+                let area = self.files_area()?;
+                let at = rmx_ui::widgets::files_fold_point(area, &self.core.ui.panels);
+                Some((at.x * scale, at.y * scale))
+            },
             P::FilesSplit | P::FilesQueue => {
                 let area = self.files_area()?;
                 let (x, y) = rmx_ui::widgets::files_edges(area, &self.core.ui.panels);
@@ -3799,6 +3918,12 @@ impl At<'_> {
             C::Sidebar(low, high) => (*low..=*high).contains(&self.win.shell.sidebar_width),
             C::FilesSplit(low, high) => (*low..=*high).contains(&self.core.ui.panels.files_split),
             C::FilesQueue(low, high) => (*low..=*high).contains(&self.core.ui.panels.files_queue),
+            C::FilesFolded(folded) => self.core.ui.panels.files_queue_folded == *folded,
+            C::FilesText(found) => self.focused_files().and_then(FilesPane::document_text).is_some_and(|text| text.contains(found.as_str())),
+            C::FilesDiff(rows) => self.focused_files().and_then(FilesPane::diff_rows).is_some_and(|found| found.len() == *rows),
+            C::NoDiff => self.focused_files().is_some_and(|files| files.diff_rows().is_none()),
+            C::FilesColumns => self.focused_files().is_some_and(|files| files.document_text().is_none() && files.diff_rows().is_none()),
+            C::VaultNamed(name) => self.core.ui.vault_path.ends_with(name.as_str()),
             C::Ratio(low, high) => {
                 let tab = self.win.workspace.active();
                 let dividers = tab.map(|tab| tab.layout.dividers(self.area(), self.spacing()));
@@ -4047,6 +4172,11 @@ impl App {
             },
             Some(Step::FilesCancel(name)) => at.files_row_action(&name, FilesAction::Cancel),
             Some(Step::FilesRetry(name)) => at.files_row_action(&name, FilesAction::Retry),
+            Some(Step::FilesBody(action)) => {
+                if let Some(id) = at.win.workspace.focused() {
+                    at.ui_action(UiAction::Files(rmx_ui::PaneId(id), action));
+                }
+            },
             Some(Step::FilesPolicy(index)) => {
                 if let Some(id) = at.win.workspace.focused() {
                     at.ui_action(UiAction::Files(rmx_ui::PaneId(id), FilesAction::Policy(index)));

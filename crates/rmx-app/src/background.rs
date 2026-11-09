@@ -22,6 +22,9 @@ const KEY_MAXIMIZED: &str = "window.maximized";
 const KEY_SIDEBAR: &str = "sidebar.open";
 const KEY_THEME: &str = "theme";
 const KEY_LAST_VAULT: &str = "last_vault";
+const KEY_RECENT_VAULTS: &str = "recent_vaults";
+/// How many vaults the switcher remembers.
+const RECENT_VAULTS: usize = 12;
 const KEY_SESSION: &str = "session";
 const KEY_PANELS: &str = "panels";
 
@@ -186,11 +189,25 @@ impl AppState {
     }
 
     pub fn set_last_vault(&self, path: &Path) {
-        if let Some(path) = path.to_str()
-            && let Err(err) = self.0.set(KEY_LAST_VAULT, path)
+        if let Some(text) = path.to_str()
+            && let Err(err) = self.0.set(KEY_LAST_VAULT, text)
         {
             log::warn!("Could not remember the vault: {err}");
         }
+        let mut recent = self.recent_vaults();
+        recent.retain(|known| known != path);
+        recent.insert(0, path.to_owned());
+        recent.truncate(RECENT_VAULTS);
+        let lines: Vec<&str> = recent.iter().filter_map(|known| known.to_str()).collect();
+        if let Err(err) = self.0.set(KEY_RECENT_VAULTS, &lines.join("\n")) {
+            log::warn!("Could not remember the vault: {err}");
+        }
+    }
+
+    /// The vaults opened on this device, the latest first.
+    pub fn recent_vaults(&self) -> Vec<PathBuf> {
+        let text = self.0.get(KEY_RECENT_VAULTS).ok().flatten().unwrap_or_default();
+        text.lines().filter(|line| !line.is_empty()).map(PathBuf::from).collect()
     }
 }
 
@@ -283,5 +300,20 @@ mod tests {
         let state = AppState::open(&paths).unwrap();
         assert_eq!(state.layout(), layout);
         assert_eq!(state.last_vault(), Some(PathBuf::from("/some/where.rmxdb")));
+    }
+
+    #[test]
+    fn the_latest_vault_comes_first_and_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
+        let state = AppState::open(&paths).unwrap();
+        for name in ["/a", "/b", "/a"] {
+            state.set_last_vault(Path::new(name));
+        }
+        assert_eq!(state.recent_vaults(), [PathBuf::from("/a"), PathBuf::from("/b")]);
+        for number in 0..RECENT_VAULTS * 2 {
+            state.set_last_vault(Path::new(&format!("/{number}")));
+        }
+        assert_eq!(state.recent_vaults().len(), RECENT_VAULTS);
     }
 }

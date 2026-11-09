@@ -23,6 +23,7 @@ winit.workspace = true
 copypasta = { version = "0.10.2", default-features = false, features = ["wayland", "x11"] }
 async-trait = { version = "0.1", default-features = false }
 bytes = { version = "1", default-features = false, features = ["std"] }
+similar = { version = "2", default-features = false }
 libc = { version = "0.2", default-features = false }
 rmx-rdp = { path = "../rmx-rdp" }
 rmx-serial.workspace = true

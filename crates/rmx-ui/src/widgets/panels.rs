@@ -36,6 +36,8 @@ pub struct Panels {
     pub files_queue: f32,
     pub files_size: f32,
     pub files_date: f32,
+    /// Whether the queue is folded down to its bar.
+    pub files_queue_folded: bool,
     /// Sizes of dialogs, 0 being their defaults.
     pub settings: [f32; 2],
     pub snippets: [f32; 2],
@@ -50,6 +52,7 @@ impl Default for Panels {
             files_queue: FILES_QUEUE,
             files_size: FILES_SIZE,
             files_date: FILES_DATE,
+            files_queue_folded: false,
             settings: [0.; 2],
             snippets: [0.; 2],
             snippets_list: SNIPPETS_LIST,
@@ -63,8 +66,14 @@ impl Panels {
         let [sw, sh] = self.settings;
         let [nw, nh] = self.snippets;
         format!(
-            "{} {} {} {} {} {sw} {sh} {nw} {nh} {}",
-            self.sidebar, self.files_split, self.files_queue, self.files_size, self.files_date, self.snippets_list,
+            "{} {} {} {} {} {sw} {sh} {nw} {nh} {} {}",
+            self.sidebar,
+            self.files_split,
+            self.files_queue,
+            self.files_size,
+            self.files_date,
+            self.snippets_list,
+            u8::from(self.files_queue_folded),
         )
     }
 
@@ -72,11 +81,13 @@ impl Panels {
     /// version.
     pub fn read(text: &str) -> Self {
         let values: Vec<f32> = text.split(' ').filter_map(|part| part.parse().ok()).collect();
-        let &[sidebar, files_split, files_queue, files_size, files_date, sw, sh, nw, nh, snippets_list] =
-            values.as_slice()
+        // A file from before the queue could be folded has one value fewer.
+        let (Some(&[sidebar, files_split, files_queue, files_size, files_date, sw, sh, nw, nh, snippets_list]), true) =
+            (values.first_chunk::<10>(), values.len() <= 11)
         else {
             return Self::default();
         };
+        let folded = values.get(10).is_some_and(|value| *value != 0.);
         if values.iter().any(|value| !value.is_finite() || *value < 0.) {
             return Self::default();
         }
@@ -86,6 +97,7 @@ impl Panels {
             files_queue,
             files_size,
             files_date,
+            files_queue_folded: folded,
             settings: [sw, sh],
             snippets: [nw, nh],
             snippets_list,
@@ -240,6 +252,11 @@ mod tests {
         assert_eq!(Panels::read("nonsense"), Panels::default());
         assert_eq!(Panels::read("1 2 3"), Panels::default());
         assert_eq!(Panels::read("NaN 0 0 0 0 0 0 0 0 0"), Panels::default());
+        let folded = Panels { files_queue_folded: true, ..Panels::default() };
+        assert_eq!(Panels::read(&folded.spell()), folded);
+        let before_folding = Panels { sidebar: 300., ..Panels::default() };
+        let old = before_folding.spell();
+        assert_eq!(Panels::read(old.rsplit_once(' ').unwrap().0), before_folding, "older files still read");
     }
 
     #[test]

@@ -2,17 +2,19 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime};
 
 use rmx_layout::PaneId;
+use bytes::Bytes;
 use rmx_transfer::{
-    DirStream, Entry, EntryKind, ListOptions, LocalFs, OverwritePolicy, ProgressUpdate, QueueConfig,
-    RemoteFs, TransferId, TransferQueue, TransferRequest, TransferState,
+    DirStream, Entry, EntryKind, Error as FsError, ListOptions, LocalFs, OverwritePolicy, ProgressUpdate,
+    QueueConfig, RemoteFs, TransferId, TransferQueue, TransferRequest, TransferState, WriteStart, read_all,
 };
 #[cfg(feature = "bench")]
 use rmx_ui::egui;
 use rmx_ui::widgets::{
-    FileColumnView, FileKind, FileRow, FilesView, TransferRow, TransferRowState,
+    DiffView, FileColumnView, FileKind, FileRow, FilesBody, FilesView, TextView, TransferRow, TransferRowState,
 };
 use rmx_ui::{FileSide, FilesAction};
 use tokio::runtime::Handle;
@@ -20,6 +22,24 @@ use tokio::task::AbortHandle;
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::AppEvent;
+use crate::compare::{Comparison, compare};
+
+/// The longest file that can be edited: the field lays all of it out at every keystroke.
+const EDIT_LIMIT: usize = 512 * 1024;
+/// The longest file that is shown at all, line by line.
+const OPEN_LIMIT: u64 = 64 * 1024 * 1024;
+/// How much is handed to a writer at a time.
+const WRITE_CHUNK: usize = 64 * 1024;
+/// How much of the start of a file is looked at for telling text from anything else.
+const SNIFF: usize = 8192;
+const NOT_TEXT: &str = "This is not a UTF-8 text file";
+
+/// Tells every opening of a file and comparison from the others, in every pane.
+static NEXT_BODY: AtomicU64 = AtomicU64::new(1);
+
+fn next_body() -> u64 {
+    NEXT_BODY.fetch_add(1, Ordering::Relaxed)
+}
 
 /// How often a growing listing is shown again.
 const PUBLISH_EVERY: Duration = Duration::from_millis(100);
@@ -49,6 +69,155 @@ pub enum FilesEvent {
     Progress(Box<ProgressUpdate>),
     /// Making, renaming or removing something in the column is over.
     Changed { side: FileSide, directory: String, error: Option<String> },
+    /// A file asked for has been read, or could not be.
+    Opened { token: u64, side: FileSide, result: Result<Box<TextFile>, String> },
+    /// Two texts asked for have been compared, or could not be.
+    Compared { token: u64, side: FileSide, result: Result<Box<Compared>, String> },
+    Saved { document: u64, result: Result<Saved, String> },
+    /// The file has changed since it was read: this is what was to be written over it.
+    SaveConflict { document: u64, text: String },
+}
+
+/// What tells whether a file has changed since it was last looked at.
+type Stamp = (Option<u64>, Option<SystemTime>);
+
+fn stamp_of(entry: &Entry) -> Stamp {
+    (entry.size, entry.modified)
+}
+
+/// A file that has just been written.
+pub struct Saved {
+    text: Arc<str>,
+    stamp: Stamp,
+}
+
+/// A text file, as what is shown and how to write it back as it was.
+pub struct TextFile {
+    id: u64,
+    revision: u64,
+    side: FileSide,
+    title: String,
+    path: String,
+    /// With `\n` for line endings, if the whole file was consistent about them.
+    text: Arc<str>,
+    /// Where lines start, in a file too long to edit.
+    lines: Option<Arc<Vec<u32>>>,
+    crlf: bool,
+    bom: bool,
+    stamp: Stamp,
+    saving: bool,
+    error: Option<String>,
+    /// What is waiting to be written once the user has said to overwrite.
+    held: Option<String>,
+}
+
+/// Two texts lined up.
+pub struct Compared {
+    id: u64,
+    titles: [String; 2],
+    texts: [Arc<str>; 2],
+    found: Comparison,
+    note: Option<&'static str>,
+}
+
+/// The bytes of a file as text. `None` if they are not.
+fn decode(data: Vec<u8>) -> Option<(String, bool, bool)> {
+    if data[..data.len().min(SNIFF)].contains(&0) {
+        return None;
+    }
+    const BOM: &[u8] = b"\xEF\xBB\xBF";
+    let bom = data.starts_with(BOM);
+    let mut text = String::from_utf8(data).ok()?;
+    if bom {
+        text.drain(..BOM.len());
+    }
+    let breaks = text.bytes().filter(|byte| *byte == b'\n').count();
+    let crlf = breaks > 0 && text.matches("\r\n").count() == breaks;
+    if crlf {
+        text = text.replace("\r\n", "\n");
+    }
+    Some((text, crlf, bom))
+}
+
+/// What goes in the file for `text`.
+fn encode(text: &str, crlf: bool, bom: bool) -> Vec<u8> {
+    let body = if crlf { text.replace('\n', "\r\n") } else { text.to_owned() };
+    let mut data = Vec::with_capacity(body.len() + 3);
+    if bom {
+        data.extend_from_slice(b"\xEF\xBB\xBF");
+    }
+    data.extend_from_slice(body.as_bytes());
+    data
+}
+
+/// Where each line of `text` starts.
+fn line_starts(text: &str) -> Vec<u32> {
+    let mut starts = vec![0];
+    starts.extend(text.bytes().enumerate().filter(|(_, byte)| *byte == b'\n').map(|(at, _)| at as u32 + 1));
+    if text.ends_with('\n') {
+        starts.pop();
+    }
+    starts
+}
+
+/// Read the text file at `path`, off the main thread.
+async fn read_text(fs: Arc<dyn RemoteFs>, side: FileSide, path: String, title: String) -> Result<Box<TextFile>, String> {
+    let entry = fs.stat(&path).await.map_err(|err| err.to_string())?;
+    if entry.kind != EntryKind::File {
+        return Err(NOT_TEXT.to_owned());
+    }
+    if entry.size.is_some_and(|size| size > OPEN_LIMIT) {
+        return Err("This file is too large to open here".to_owned());
+    }
+    let data = read_all(fs.as_ref(), &path, 0, Some(OPEN_LIMIT + 1)).await.map_err(|err| err.to_string())?;
+    if data.len() as u64 > OPEN_LIMIT {
+        return Err("This file is too large to open here".to_owned());
+    }
+    let stamp = stamp_of(&entry);
+    let (text, crlf, bom) = tokio::task::spawn_blocking(move || decode(data))
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| NOT_TEXT.to_owned())?;
+    let lines = (text.len() > EDIT_LIMIT).then(|| Arc::new(line_starts(&text)));
+    Ok(Box::new(TextFile {
+        id: next_body(),
+        revision: 0,
+        side,
+        title,
+        path,
+        text: text.into(),
+        lines,
+        crlf,
+        bom,
+        stamp,
+        saving: false,
+        error: None,
+        held: None,
+    }))
+}
+
+/// Line two texts up, off the main thread.
+async fn compared(titles: [String; 2], texts: [Arc<str>; 2], same_bytes: bool) -> Result<Box<Compared>, String> {
+    tokio::task::spawn_blocking(move || {
+        let found = compare(&texts[0], &texts[1]);
+        let note = found.changes.is_empty().then_some(if same_bytes { "Identical" } else { "Only line endings differ" });
+        Box::new(Compared { id: next_body(), titles, texts, found, note })
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+/// Write `data` over the file at `path`.
+async fn write_file(fs: &dyn RemoteFs, path: &str, data: Vec<u8>) -> Result<(), String> {
+    let mut writer = fs.write_range(path, WriteStart::Truncate).await.map_err(|err| err.to_string())?;
+    let data = Bytes::from(data);
+    let mut at = 0;
+    while at < data.len() {
+        let end = (at + WRITE_CHUNK).min(data.len());
+        writer.write(data.slice(at..end)).await.map_err(|err| err.to_string())?;
+        at = end;
+    }
+    writer.finish().await.map_err(|err| err.to_string())
 }
 
 struct Column {
@@ -83,6 +252,11 @@ pub struct FilesPane {
     policy: usize,
     /// Rows of the transfer queue, kept in the shape the interface draws.
     rows: Vec<TransferRow>,
+    /// What is being fetched to show instead of the columns: which request, and what to call it.
+    opening: Option<(u64, String)>,
+    document: Option<Box<TextFile>>,
+    /// Shown over `document`, if there is one, which it goes back to.
+    diff: Option<Box<Compared>>,
     pane: PaneId,
     generation: u64,
     runtime: Handle,
@@ -260,6 +434,9 @@ impl FilesPane {
             next_number: 0,
             policy: 0,
             rows: Vec::new(),
+            opening: None,
+            document: None,
+            diff: None,
             pane,
             generation: tab,
             runtime,
@@ -364,9 +541,19 @@ impl FilesPane {
                         return Some(side);
                     },
                     FileKind::Link => self.follow_link(side, path),
-                    _ => (),
+                    FileKind::File => self.open_text(side, path),
+                    FileKind::Other => (),
                 }
             },
+            FilesAction::Compare { local, remote } => self.compare_files(&local, &remote),
+            FilesAction::Save { text } => self.save(text, false),
+            FilesAction::SaveAnyway => {
+                if let Some(text) = self.document.as_mut().and_then(|file| file.held.take()) {
+                    self.save(text, true);
+                }
+            },
+            FilesAction::DiffEdits { text } => self.diff_edits(text),
+            FilesAction::CloseBody => self.close_body(),
             FilesAction::Up { side } => {
                 let path = parent(self.path(side));
                 if path != self.path(side) {
@@ -407,6 +594,119 @@ impl FilesPane {
             },
         }
         None
+    }
+
+    /// Whether a file is open, on screen or not.
+    pub fn has_document(&self) -> bool {
+        self.document.is_some()
+    }
+
+    /// Whether a file is being edited on screen, rather than looked at or compared.
+    pub fn editing(&self) -> bool {
+        self.opening.is_none() && self.diff.is_none() && self.document.is_some()
+    }
+
+    /// Go back from what is shown instead of the columns.
+    pub fn close_body(&mut self) {
+        if self.opening.take().is_none() && self.diff.take().is_none() {
+            self.document = None;
+        }
+    }
+
+    /// Start reading the file at `path` to show it.
+    fn open_text(&mut self, side: FileSide, path: String) {
+        let token = next_body();
+        let title = self.column(side).title.clone();
+        self.opening = Some((token, path.rsplit('/').next().unwrap_or(&path).to_owned()));
+        let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
+        let fs = self.column(side).fs.clone();
+        self.runtime.spawn(async move {
+            let result = read_text(fs, side, path, title).await;
+            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Opened { token, side, result }));
+        });
+    }
+
+    /// Start comparing a file of each column.
+    fn compare_files(&mut self, local: &str, remote: &str) {
+        let token = next_body();
+        self.opening = Some((token, if local == remote { local.to_owned() } else { format!("{local}, {remote}") }));
+        let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
+        let path = |side| join(self.path(side), if side == FileSide::Local { local } else { remote });
+        let (left_path, right_path) = (path(FileSide::Local), path(FileSide::Remote));
+        let titles = [
+            format!("{}  {left_path}", self.column(FileSide::Local).title),
+            format!("{}  {right_path}", self.column(FileSide::Remote).title),
+        ];
+        let left_fs = self.column(FileSide::Local).fs.clone();
+        let right_fs = self.column(FileSide::Remote).fs.clone();
+        self.runtime.spawn(async move {
+            let (left, right) = tokio::join!(
+                read_text(left_fs, FileSide::Local, left_path, String::new()),
+                read_text(right_fs, FileSide::Remote, right_path, String::new()),
+            );
+            let (side, result) = match (left, right) {
+                (Err(reason), _) => (FileSide::Local, Err(reason)),
+                (_, Err(reason)) => (FileSide::Remote, Err(reason)),
+                (Ok(left), Ok(right)) => {
+                    let same = left.text == right.text && left.crlf == right.crlf && left.bom == right.bom;
+                    (FileSide::Remote, compared(titles, [left.text, right.text], same).await)
+                },
+            };
+            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Compared { token, side, result }));
+        });
+    }
+
+    /// Start comparing `text` with the open file as it was read.
+    fn diff_edits(&mut self, text: String) {
+        let Some(file) = &self.document else { return };
+        let token = next_body();
+        let name = file.path.rsplit('/').next().unwrap_or(&file.path).to_owned();
+        let titles = [format!("{name}  saved"), format!("{name}  edited")];
+        let (side, saved, same) = (file.side, file.text.clone(), *file.text == *text);
+        self.opening = Some((token, name));
+        let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
+        self.runtime.spawn(async move {
+            let result = compared(titles, [saved, text.into()], same).await;
+            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Compared { token, side, result }));
+        });
+    }
+
+    /// Write `text` to the open file. Unless `force`, not over a change someone else made.
+    fn save(&mut self, text: String, force: bool) {
+        let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
+        let Some(file) = self.document.as_mut().filter(|file| !file.saving && file.lines.is_none()) else { return };
+        file.saving = true;
+        file.error = None;
+        let (document, path, stamp, crlf, bom) = (file.id, file.path.clone(), file.stamp, file.crlf, file.bom);
+        let side = file.side;
+        let fs = self.columns[side.index()].fs.clone();
+        self.runtime.spawn(async move {
+            let send = |event| {
+                let _ = proxy.send_event(AppEvent::Files(pane, tab, event));
+            };
+            if !force {
+                match fs.stat(&path).await {
+                    Ok(entry) if stamp_of(&entry) != stamp => {
+                        send(FilesEvent::SaveConflict { document, text });
+                        return;
+                    },
+                    Ok(_) | Err(FsError::NotFound(_)) => (),
+                    Err(err) => {
+                        send(FilesEvent::Saved { document, result: Err(err.to_string()) });
+                        return;
+                    },
+                }
+            }
+            let written = write_file(fs.as_ref(), &path, encode(&text, crlf, bom)).await;
+            let result = match written {
+                Ok(()) => match fs.stat(&path).await {
+                    Ok(entry) => Ok(Saved { text: text.into(), stamp: stamp_of(&entry) }),
+                    Err(err) => Err(err.to_string()),
+                },
+                Err(reason) => Err(reason),
+            };
+            send(FilesEvent::Saved { document, result });
+        });
     }
 
     fn find(&self, number: u64) -> Option<&Transfer> {
@@ -501,6 +801,54 @@ impl FilesPane {
                 if directory {
                     self.go(side, path);
                     outcome.moved = Some(side);
+                } else {
+                    self.open_text(side, path);
+                }
+            },
+            FilesEvent::Opened { token, side, result } => {
+                if self.opening.as_ref().is_none_or(|(current, _)| *current != token) {
+                    return outcome;
+                }
+                self.opening = None;
+                match result {
+                    Ok(file) => self.document = Some(file),
+                    Err(reason) => self.column_mut(side).error = Some(reason),
+                }
+            },
+            FilesEvent::Compared { token, side, result } => {
+                if self.opening.as_ref().is_none_or(|(current, _)| *current != token) {
+                    return outcome;
+                }
+                self.opening = None;
+                match result {
+                    Ok(diff) => self.diff = Some(diff),
+                    Err(reason) => match &mut self.document {
+                        Some(document) => document.error = Some(reason),
+                        None => self.column_mut(side).error = Some(reason),
+                    },
+                }
+            },
+            FilesEvent::Saved { document, result } => {
+                let Some(file) = self.document.as_mut().filter(|file| file.id == document) else {
+                    return outcome;
+                };
+                file.saving = false;
+                match result {
+                    Ok(saved) => {
+                        file.text = saved.text;
+                        file.stamp = saved.stamp;
+                        file.revision += 1;
+                        file.error = None;
+                        outcome.refresh.push((file.side, parent(&file.path)));
+                    },
+                    Err(reason) => file.error = Some(reason),
+                }
+            },
+            FilesEvent::SaveConflict { document, text } => {
+                if let Some(file) = self.document.as_mut().filter(|file| file.id == document) {
+                    file.saving = false;
+                    file.held = Some(text);
+                    outcome.conflict = Some(file.path.clone());
                 }
             },
             FilesEvent::Progress(update) => {
@@ -577,7 +925,50 @@ impl FilesPane {
             columns: [column(FileSide::Local), column(FileSide::Remote)],
             transfers: &self.rows,
             policy: self.policy,
+            body: self.body(),
         }
+    }
+
+    fn body(&self) -> FilesBody<'_> {
+        if let Some((_, name)) = &self.opening {
+            return FilesBody::Loading(name);
+        }
+        if let Some(diff) = &self.diff {
+            return FilesBody::Diff(DiffView {
+                id: diff.id,
+                titles: [&diff.titles[0], &diff.titles[1]],
+                texts: [&diff.texts[0], &diff.texts[1]],
+                rows: &diff.found.rows,
+                changes: &diff.found.changes,
+                longest: diff.found.longest,
+                note: diff.note,
+            });
+        }
+        match &self.document {
+            Some(file) => FilesBody::Text(TextView {
+                id: file.id,
+                revision: file.revision,
+                title: &file.title,
+                path: &file.path,
+                text: &file.text,
+                lines: file.lines.as_ref().map(|lines| lines.as_slice()),
+                saving: file.saving,
+                error: file.error.as_deref(),
+            }),
+            None => FilesBody::Columns,
+        }
+    }
+
+    /// What the file open in the pane holds, for checking from a script.
+    #[cfg(feature = "bench")]
+    pub fn document_text(&self) -> Option<&str> {
+        self.document.as_ref().map(|file| file.text.as_ref())
+    }
+
+    /// The rows of the comparison on screen.
+    #[cfg(feature = "bench")]
+    pub fn diff_rows(&self) -> Option<&[rmx_ui::widgets::DiffRow]> {
+        self.diff.as_ref().map(|diff| diff.found.rows.as_slice())
     }
 
     /// The interface's rows of the queue.
@@ -609,6 +1000,8 @@ pub struct Applied {
     pub moved: Option<FileSide>,
     /// Columns that a transfer finished landing in, and the directory it landed in.
     pub refresh: Vec<(FileSide, String)>,
+    /// A save was held back: the file at this path changed since it was read.
+    pub conflict: Option<String>,
 }
 
 /// The directory the local column opens at.
@@ -645,6 +1038,34 @@ mod tests {
         sort_rows(&mut rows);
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(rows[0].name.as_ref(), "000001");
+    }
+
+    #[test]
+    fn line_endings_and_a_byte_order_mark_come_back_as_they_were() {
+        for original in ["a\nb\n", "a\r\nb\r\n", "\u{FEFF}a\r\nb", "mixed\r\nends\n", "no end", ""] {
+            let (text, crlf, bom) = decode(original.as_bytes().to_vec()).unwrap();
+            assert_eq!(encode(&text, crlf, bom), original.as_bytes(), "{original:?}");
+        }
+    }
+
+    #[test]
+    fn crlf_is_shown_as_plain_lines_only_when_the_whole_file_uses_it() {
+        assert_eq!(decode(b"a\r\nb\r\n".to_vec()).unwrap(), ("a\nb\n".to_owned(), true, false));
+        assert_eq!(decode(b"a\r\nb\n".to_vec()).unwrap(), ("a\r\nb\n".to_owned(), false, false));
+    }
+
+    #[test]
+    fn what_is_not_text_is_refused() {
+        assert_eq!(decode(b"ELF\0binary".to_vec()), None);
+        assert_eq!(decode(vec![0xC4, 0xE3, 0xBA, 0xC3]), None, "GBK, which would not survive a save");
+        assert!(decode("中文".as_bytes().to_vec()).is_some());
+    }
+
+    #[test]
+    fn lines_start_after_each_break_and_the_last_break_opens_no_line() {
+        assert_eq!(line_starts("a\nbc\nd"), [0, 2, 5]);
+        assert_eq!(line_starts("a\nb\n"), [0, 2]);
+        assert_eq!(line_starts(""), [0]);
     }
 
     #[test]

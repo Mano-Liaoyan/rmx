@@ -5,6 +5,7 @@ mod background;
 #[cfg(feature = "bench")]
 mod bench;
 mod clipboard;
+mod compare;
 mod connect;
 mod files;
 mod gfx;

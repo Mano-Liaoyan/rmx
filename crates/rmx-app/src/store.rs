@@ -63,6 +63,8 @@ pub enum Request {
     Unlock { password: Secret, key_file: Option<PathBuf> },
     Join { password: Secret, key_file: Option<PathBuf>, sync: Box<SyncDraft>, plain_ok: bool },
     Lock,
+    /// Close the vault and go to the one at this path, which need not exist yet.
+    Switch(String),
     /// The user did something: the auto-lock starts over.
     Touch,
     SaveConnection(Box<ConnectionDraft>),
@@ -167,6 +169,8 @@ pub enum VaultEvent {
     Draft(Box<ConnectionDraft>),
     /// The connection was saved from "save and connect".
     Saved { node: u64, connect: bool },
+    /// Which vault this is, and the others this device knows.
+    Vaults { current: PathBuf, others: Vec<PathBuf> },
 }
 
 /// The number the tree knows a row by, stable across reloads and devices.
@@ -294,6 +298,7 @@ impl Actor {
         let _context = runtime.enter();
 
         self.first_open();
+        self.announce_vaults();
         loop {
             let request = match self.next_deadline() {
                 Some(at) => requests.recv_timeout(at.saturating_duration_since(Instant::now())),
@@ -333,6 +338,41 @@ impl Actor {
         if let Some(state) = &self.state {
             state.save_layout(layout);
         }
+    }
+
+    /// Say which vaults there are to switch between. One whose file has gone is not offered.
+    fn announce_vaults(&self) {
+        let known = self.state.as_ref().map_or_else(Vec::new, AppState::recent_vaults);
+        let others = known.into_iter().filter(|path| *path != self.path && path.is_file()).collect();
+        self.send(VaultEvent::Vaults { current: self.path.clone(), others });
+    }
+
+    /// Close this vault and go to the one at `typed`. Sessions it started keep running.
+    fn switch(&mut self, typed: &str) {
+        let expanded = expand_home(typed.trim());
+        let Ok(path) = std::path::absolute(&expanded) else { return };
+        if path.is_dir() {
+            let reason = format!("{} is a folder", path.display());
+            self.send(VaultEvent::OpenFailed(reason.clone()));
+            self.notice(reason, true);
+            return;
+        }
+        if path == self.path && self.is_open() {
+            return;
+        }
+        if self.is_open() && self.sync_due.take().is_some() {
+            self.run_sync(false);
+        }
+        self.vault = None;
+        self.path = path;
+        self.ids.clear();
+        self.collapsed.clear();
+        self.auto_lock = None;
+        self.sync = None;
+        self.sync_due = None;
+        self.next_interval = None;
+        self.first_open();
+        self.announce_vaults();
     }
 
     /// What to show with nothing open. A database that cannot be told apart from nothing there
@@ -412,6 +452,7 @@ impl Actor {
                 self.join(password, key_file, *sync, plain_ok);
             },
             Request::Lock => self.lock(),
+            Request::Switch(path) => self.switch(&path),
             Request::Touch => self.active = Instant::now(),
             Request::SaveLayout(layout) => self.save_layout(&layout),
             Request::SaveSession(session) => self.save_session(&session),
@@ -637,6 +678,7 @@ impl Actor {
         self.vault = Some(vault);
         self.schedule_interval();
         self.send(VaultEvent::Phase(Phase::Unlocked { unencrypted }));
+        self.announce_vaults();
         self.send_tree();
         self.announce_sync();
     }
