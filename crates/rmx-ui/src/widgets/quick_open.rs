@@ -144,7 +144,7 @@ pub fn quick_open_body(
 
     let input_id = id.with("input");
     let input = text_input(ui, input_id, &mut state.query, InputOptions {
-        hint: "Search connections and commands",
+        hint: "Search",
         glyph: Some(icons::SEARCH),
         width: Some(WIDTH),
         borderless: true,
@@ -187,14 +187,6 @@ pub fn quick_open_body(
     }
 
     if rows == 0 {
-        let (rect, _) = ui.allocate_exact_size(vec2(WIDTH, 48.), Sense::hover());
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "No results",
-            fonts::regular(TEXT_SM),
-            p.muted_fg,
-        );
         return action;
     }
 

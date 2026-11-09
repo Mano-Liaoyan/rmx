@@ -23,4 +23,4 @@ pub use transport::{
 };
 
 pub use alacritty_terminal::event::{Event as TermEvent, WindowSize};
-pub use alacritty_terminal::term::ClipboardType;
+pub use alacritty_terminal::term::{ClipboardType, TermMode};

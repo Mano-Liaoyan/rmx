@@ -18,7 +18,7 @@ use super::controls::{
 
 const WIDTH: f32 = 540.;
 const LABEL: f32 = 96.;
-const TILE_H: f32 = 84.;
+const TILE_H: f32 = 64.;
 const TILES_PER_ROW: usize = 4;
 const TILE_GAP: f32 = 8.;
 const PAD: i8 = 16;
@@ -231,14 +231,14 @@ pub fn new_connection_body(ui: &mut Ui, state: &mut NewConnectionState) -> Optio
     }
 }
 
-fn header(ui: &mut Ui, title: &str, subtitle: &str, back: Option<&mut bool>) {
+fn header(ui: &mut Ui, title: &str, back: Option<&mut bool>) {
     let p = palette(ui);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 52.), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.), Sense::hover());
     let mut x = rect.left() + f32::from(PAD);
     if let Some(back) = back {
         let mut child = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(Rect::from_min_size(pos2(x - 4., rect.top() + 12.), vec2(28., 28.))),
+                .max_rect(Rect::from_min_size(pos2(x - 4., rect.top() + 8.), vec2(28., 28.))),
         );
         if icon_button(&mut child, icons::ARROW_LEFT, 28., 14.).clicked() {
             *back = true;
@@ -247,18 +247,11 @@ fn header(ui: &mut Ui, title: &str, subtitle: &str, back: Option<&mut bool>) {
     }
     let painter = ui.painter();
     painter.text(
-        pos2(x, rect.top() + 18.),
+        pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         title,
         fonts::medium(TEXT_LG),
         p.foreground,
-    );
-    painter.text(
-        pos2(x, rect.top() + 36.),
-        Align2::LEFT_CENTER,
-        subtitle,
-        fonts::regular(TEXT_SM),
-        p.muted_fg,
     );
     hline(painter, rect.left(), rect.right(), rect.bottom() - 1., p.border);
 }
@@ -266,7 +259,7 @@ fn header(ui: &mut Ui, title: &str, subtitle: &str, back: Option<&mut bool>) {
 fn tiles_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
     let p = palette(ui);
     let mut action = None;
-    header(ui, "New connection", "Choose a protocol", None);
+    header(ui, "New connection", None);
     let mut picked = None;
     egui::Frame::new().inner_margin(PAD).show(ui, |ui| {
         let row = |i: usize| i / TILES_PER_ROW;
@@ -296,24 +289,17 @@ fn tiles_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
             );
             icon(
                 painter,
-                pos2(cell.left() + 21., cell.top() + 23.),
+                pos2(cell.left() + 21., cell.top() + 21.),
                 protocol.icon(),
                 16.,
                 p.foreground,
             );
             painter.text(
-                pos2(cell.left() + 12., cell.top() + 48.),
+                pos2(cell.left() + 12., cell.top() + 46.),
                 Align2::LEFT_CENTER,
                 protocol.label(),
                 fonts::medium(TEXT_SM),
                 p.foreground,
-            );
-            painter.text(
-                pos2(cell.left() + 12., cell.top() + 65.),
-                Align2::LEFT_CENTER,
-                protocol.blurb(),
-                fonts::regular(TEXT_SM),
-                p.muted_fg,
             );
             if response.clicked() {
                 picked = Some(protocol);
@@ -342,16 +328,11 @@ fn footer_rule(ui: &mut Ui) {
     hline(ui.painter(), line.left(), line.right(), line.top(), p.border);
 }
 
-fn section(ui: &mut Ui, title: &str) {
-    let p = palette(ui);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.), Sense::hover());
-    ui.painter().text(
-        rect.left_center(),
-        Align2::LEFT_CENTER,
-        title,
-        fonts::medium(TEXT_SM),
-        p.muted_fg,
-    );
+/// A gap and a hairline between groups of fields, which say what they are themselves.
+fn section(ui: &mut Ui) {
+    ui.add_space(2.);
+    super::panels::group_rule(ui);
+    ui.add_space(2.);
 }
 
 /// A line of warning, under what it is about.
@@ -382,15 +363,13 @@ fn port_choices(ui: &mut Ui, ports: Option<&[SerialPortChoice]>, device: &mut St
             }
         }
         match ports {
-            None => {
-                ui.label(egui::RichText::new("Looking for ports...").size(TEXT_SM).color(p.muted_fg));
-            },
+            None => (),
             Some([]) => {
                 ui.label(egui::RichText::new("No serial ports found").size(TEXT_SM).color(p.muted_fg));
             },
             Some(_) => (),
         }
-        if button_full(ui, Some(icons::FOLDER_SYNC), "Refresh", ButtonKind::Ghost, true, None).clicked() {
+        if icon_button(ui, icons::FOLDER_SYNC, CONTROL_HEIGHT, 14.).on_hover_text("Look again").clicked() {
             again = true;
         }
     });
@@ -458,27 +437,23 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
     let mut action = None;
     let draft = state.draft.as_deref_mut()?;
     let protocol = draft.protocol;
-    let subtitle = protocol.blurb();
     let editing = draft.editing.is_some();
     let verb = if editing { "Edit" } else { "New" };
     let title = format!("{verb} {} connection", protocol.label());
     let backward = (!editing).then_some(&mut back);
-    header(ui, &title, subtitle, backward);
+    header(ui, &title, backward);
     let ports = state.ports.as_deref();
     let mut look_again = false;
 
     egui::Frame::new().inner_margin(PAD).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 8.;
-        section(ui, "General");
-        field(ui, "cd-name", "Name", &mut draft.name, "Optional", false);
-        field(ui, "cd-group", "Group", &mut draft.group, "None", false);
-        ui.add_space(8.);
-
-        section(ui, "Connection");
+        field(ui, "cd-name", "Name", &mut draft.name, "", false);
+        field(ui, "cd-group", "Group", &mut draft.group, "", false);
+        section(ui);
         if protocol == Protocol::Serial {
-            field(ui, "cd-device", "Device", &mut draft.device, "/dev/ttyUSB0", false);
+            field(ui, "cd-device", "Device", &mut draft.device, "", false);
             look_again = port_choices(ui, ports, &mut draft.device);
-            field(ui, "cd-baud", "Baud rate", &mut draft.baud, "115200", false);
+            field(ui, "cd-baud", "Baud rate", &mut draft.baud, "", false);
             let mut choice = |label, salt: &'static str, options: &[&str], value: &mut usize| {
                 row(ui, label, |ui| {
                     let mut selected = *value;
@@ -495,7 +470,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
             row(ui, "Host", |ui| {
                 let width = ui.available_width() - 88.;
                 text_input(ui, Id::unique("cd-host"), &mut draft.host, InputOptions {
-                    hint: "example.com",
+                    hint: "",
                     width: Some(width),
                     ..Default::default()
                 });
@@ -509,14 +484,13 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
 
         match protocol {
             Protocol::Ssh | Protocol::Sftp => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "Saved connection, optional", false);
+                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                 if protocol == Protocol::Ssh {
                     let hint = "L8080:db:5432, D1080, R9000:localhost:80";
                     field(ui, "cd-forwards", "Forwards", &mut draft.forwards, hint, false);
                 }
-                ui.add_space(8.);
-                section(ui, "Authentication");
-                field(ui, "cd-user", "Username", &mut draft.username, "root", false);
+                section(ui);
+                field(ui, "cd-user", "Username", &mut draft.username, "", false);
                 row(ui, "Method", |ui| {
                     let mut selected = draft.auth as usize;
                     let response = segmented(
@@ -536,7 +510,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                             "cd-password",
                             "Password",
                             &mut draft.password,
-                            "Stored in the vault",
+                            "",
                             true,
                         );
                     },
@@ -546,7 +520,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                             "cd-key",
                             "Key file",
                             &mut draft.key_path,
-                            "~/.ssh/id_ed25519",
+                            "",
                             false,
                         );
                     },
@@ -554,11 +528,11 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 }
             },
             Protocol::Telnet => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "Saved connection, optional", false);
+                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                 warning(ui, "Telnet is not encrypted: anyone on the network can read what is typed.");
             },
             Protocol::Ftp => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "Saved connection, optional", false);
+                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                 row(ui, "Encryption", |ui| {
                     let mut selected = usize::from(draft.ftps);
                     let options = ["None", "FTPS (AUTH TLS)"];
@@ -566,20 +540,19 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         draft.ftps = selected == 1;
                     }
                 });
-                ui.add_space(8.);
-                section(ui, "Authentication");
-                field(ui, "cd-user", "Username", &mut draft.username, "Optional", false);
+                section(ui);
+                field(ui, "cd-user", "Username", &mut draft.username, "", false);
                 field(
                     ui,
                     "cd-password",
                     "Password",
                     &mut draft.password,
-                    "Stored in the vault",
+                    "",
                     true,
                 );
             },
             Protocol::Rdp => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "Saved connection, optional", false);
+                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                 display_options(ui, draft);
                 row(ui, "Security", |ui| {
                     let mut selected = draft.rdp_security as usize;
@@ -589,30 +562,28 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                             [RdpSecurity::Negotiate, RdpSecurity::Nla, RdpSecurity::Tls][selected];
                     }
                 });
-                ui.add_space(8.);
-                section(ui, "Authentication");
-                field(ui, "cd-user", "Username", &mut draft.username, "Administrator", false);
-                field(ui, "cd-domain", "Domain", &mut draft.domain, "Optional", false);
+                section(ui);
+                field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                field(ui, "cd-domain", "Domain", &mut draft.domain, "", false);
                 field(
                     ui,
                     "cd-password",
                     "Password",
                     &mut draft.password,
-                    "Stored in the vault",
+                    "",
                     true,
                 );
             },
             Protocol::Vnc => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "Saved connection, optional", false);
+                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                 display_options(ui, draft);
-                ui.add_space(8.);
-                section(ui, "Authentication");
+                section(ui);
                 field(
                     ui,
                     "cd-password",
                     "Password",
                     &mut draft.password,
-                    "Stored in the vault",
+                    "",
                     true,
                 );
             },

@@ -59,8 +59,9 @@ fn account(local: &LocalState) -> Result<String> {
 impl Vault {
     /// Saves the unlocked vault's key to `store` for [`open_quick`](Self::open_quick).
     pub fn enable_quick_unlock(&mut self, store: &dyn KeyStore) -> Result<()> {
+        self.require_encrypted()?;
         let account = account(&self.local)?;
-        let key = self.session()?.key.clone();
+        let key = self.session()?.key.clone().ok_or(Error::Unencrypted)?;
         store.store(&account, key.raw())
     }
 

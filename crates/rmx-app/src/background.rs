@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle, ThreadId};
 
 use rmx_layout::session::{self, SavedWindow};
 use rmx_ui::ThemeMode;
+use rmx_ui::widgets::Panels;
 use rmx_vault::LocalState;
 use tokio::runtime::{Builder, Runtime};
 
@@ -22,6 +23,7 @@ const KEY_SIDEBAR: &str = "sidebar.open";
 const KEY_THEME: &str = "theme";
 const KEY_LAST_VAULT: &str = "last_vault";
 const KEY_SESSION: &str = "session";
+const KEY_PANELS: &str = "panels";
 
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
@@ -90,11 +92,12 @@ pub struct Layout {
     pub maximized: bool,
     pub sidebar_open: bool,
     pub theme: ThemeMode,
+    pub panels: Panels,
 }
 
 impl Default for Layout {
     fn default() -> Self {
-        Self { width: 1280., height: 800., maximized: false, sidebar_open: true, theme: ThemeMode::Dark }
+        Self { width: 1280., height: 800., maximized: false, sidebar_open: true, theme: ThemeMode::Dark, panels: Panels::default() }
     }
 }
 
@@ -145,6 +148,7 @@ impl AppState {
             maximized: flag(KEY_MAXIMIZED, false),
             sidebar_open: flag(KEY_SIDEBAR, true),
             theme: if theme.as_deref() == Some("light") { ThemeMode::Light } else { ThemeMode::Dark },
+            panels: self.0.get(KEY_PANELS).ok().flatten().map_or_else(Panels::default, |text| Panels::read(&text)),
         }
     }
 
@@ -157,6 +161,7 @@ impl AppState {
             (KEY_MAXIMIZED, flag(layout.maximized).to_owned()),
             (KEY_SIDEBAR, flag(layout.sidebar_open).to_owned()),
             (KEY_THEME, theme.to_owned()),
+            (KEY_PANELS, layout.panels.spell()),
         ];
         for (key, value) in entries {
             if let Err(err) = self.0.set(key, &value) {
@@ -236,14 +241,14 @@ mod tests {
         let paths = Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
         let state = AppState::open(&paths).unwrap();
         assert_eq!(state.session(), None);
-        let tab = SavedTab { layout: Split::Pane(SavedPane::Node(9)), focus: 0, zoomed: false };
+        let tab = SavedTab { layout: Split::Pane(SavedPane::Node(9)), focus: 0, zoomed: false, name: None };
         let windows = vec![SavedWindow {
             width: 900.,
             height: 600.,
             maximized: false,
             sidebar_open: true,
             active: 0,
-            tabs: vec![tab, SavedTab { layout: Split::Pane(SavedPane::Files(7)), focus: 0, zoomed: false }, SavedTab { layout: Split::Pane(SavedPane::Local), focus: 0, zoomed: false }],
+            tabs: vec![tab, SavedTab { layout: Split::Pane(SavedPane::Files(7)), focus: 0, zoomed: false, name: None }, SavedTab { layout: Split::Pane(SavedPane::Local), focus: 0, zoomed: false, name: None }],
         }];
         state.save_session(&session::encode(&windows, |pane| pane.spell()));
         drop(state);
@@ -269,6 +274,7 @@ mod tests {
             maximized: true,
             sidebar_open: false,
             theme: ThemeMode::Light,
+            panels: Panels { sidebar: 321., files_split: 0.3, ..Panels::default() },
         };
         state.save_layout(&layout);
         state.set_last_vault(Path::new("/some/where.rmxdb"));

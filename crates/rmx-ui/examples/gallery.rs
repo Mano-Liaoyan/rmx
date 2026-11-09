@@ -24,13 +24,13 @@ use glutin::context::{
 };
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface};
-use rmx_ui::theme::{self, CONTROL_HEIGHT, FOOTER_HEIGHT, SIDEBAR_WIDTH, STRIP_HEIGHT};
+use rmx_ui::theme::{self, CONTROL_HEIGHT, PANE_BAR_HEIGHT, SIDEBAR_WIDTH, STRIP_HEIGHT};
 use rmx_ui::widgets::{
     ButtonKind, ContextMenu, HostKeyStatus, HostKeyView, InputOptions, MenuItem,
-    NewConnectionState, NodeKind, PaneFooterView, PaneStatus, QuickItem, QuickOpenState,
+    NewConnectionState, NodeKind, PaneBarView, PaneStatus, Reveal, SessionDot, QuickItem, QuickOpenState,
     TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState, VaultState, VaultView,
     button, button_full, context_menu, host_key_body, host_key_dialog, icon_button,
-    new_connection_body, new_connection_dialog, pane_footer, quick_open, quick_open_body,
+    new_connection_body, new_connection_dialog, pane_bar, quick_open, quick_open_body,
     segmented, sidebar, text_input, title_bar, vault_unlock,
 };
 use rmx_ui::{Chrome, NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction, icons};
@@ -80,7 +80,7 @@ fn sample_tree() -> Vec<TreeNode> {
         depth,
         kind: NodeKind::Folder,
         label: label.into(),
-        live: false,
+        state: SessionDot::None,
         expanded,
     };
     let conn = |id, depth, protocol, label: &str, live| TreeNode {
@@ -88,7 +88,7 @@ fn sample_tree() -> Vec<TreeNode> {
         depth,
         kind: NodeKind::Connection(protocol),
         label: label.into(),
-        live,
+        state: if live { SessionDot::Live } else { SessionDot::None },
         expanded: false,
     };
     vec![
@@ -133,7 +133,7 @@ fn big_tree(rows: u64) -> Vec<TreeNode> {
                 } else {
                     format!("host-{i}.example.internal")
                 },
-                live: i % 7 == 0,
+                state: if i % 7 == 0 { SessionDot::Live } else { SessionDot::None },
                 expanded: true,
             }
         })
@@ -163,6 +163,7 @@ struct Gallery {
     tabs: TabStripState,
     tree: TreeModel,
     tree_state: TreeState,
+    bar_reveal: Reveal,
     new_connection: NewConnectionState,
     new_tiles: NewConnectionState,
     new_form: NewConnectionState,
@@ -204,6 +205,7 @@ impl Gallery {
             tabs: TabStripState::default(),
             tree: TreeModel::new(nodes),
             tree_state,
+            bar_reveal: Reveal::default(),
             new_connection,
             new_tiles,
             new_form,
@@ -242,10 +244,11 @@ impl Gallery {
                 label,
                 glyph: *glyph,
                 active: i == 0,
+                status: PaneStatus::Connected,
             })
             .collect();
         let bar = Rect::from_min_size(screen.min, vec2(screen.width(), STRIP_HEIGHT));
-        let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true };
+        let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: SIDEBAR_WIDTH };
         let action = title_bar(ui, bar, &view, &mut self.tabs, now);
         self.note(action);
 
@@ -255,17 +258,22 @@ impl Gallery {
 
         let pane = Rect::from_min_max(pos2(SIDEBAR_WIDTH, STRIP_HEIGHT), screen.max);
         ui.painter().rect_filled(pane, 0., p.background);
-        let foot = Rect::from_min_max(pos2(pane.left(), pane.bottom() - FOOTER_HEIGHT), pane.max);
-        let footer = PaneFooterView {
+        let top = Rect::from_min_max(pane.min, pos2(pane.right(), pane.top() + PANE_BAR_HEIGHT));
+        let bar = PaneBarView {
             pane: PaneId(1),
             status: PaneStatus::Connected,
-            title: "deploy@web-01.prod.internal",
-            facts: &["120 x 42", "12 ms", "UTF-8"],
+            title: "web-01",
+            target: "deploy@web-01.prod.internal",
+            tooltip: "120 x 42",
+            focused: true,
+            grouped: false,
+            zoomed: false,
+            files: true,
         };
-        let action = pane_footer(ui, foot, &footer);
+        let action = pane_bar(ui, top, &bar, &mut self.bar_reveal, std::time::Instant::now());
         self.note(action);
 
-        let content = Rect::from_min_max(pane.min, pos2(pane.right(), foot.top()));
+        let content = Rect::from_min_max(pos2(pane.left(), top.bottom()), pane.max);
         if self.page == Page::Board {
             self.board(ui, content);
         } else {
@@ -403,11 +411,11 @@ fn quick_items() -> Vec<QuickItem<'static>> {
 }
 
 fn menu_items() -> Vec<MenuItem> {
-    let entry = |glyph, label: &str, shortcut: Option<&str>, command, danger| MenuItem::Action {
+    let entry = |glyph, label: &str, shortcut: Option<&str>, command: u64, danger| MenuItem::Action {
         glyph: Some(glyph),
         label: label.into(),
         shortcut: shortcut.map(Into::into),
-        action: UiAction::Command(command),
+        action: UiAction::TreeOpen(NodeId(command)),
         danger,
     };
     vec![

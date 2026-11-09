@@ -114,14 +114,18 @@ impl Running {
         let windows: Vec<SavedWindow<SavedPane>> = self
             .windows
             .iter()
-            .filter(|win| !win.workspace.tabs().is_empty())
+            // The last window stays with nothing in it, which is how it comes back. But only
+            // once there has been something in it: before that, nothing is what it starts with.
+            .filter(|win| {
+                !win.workspace.tabs().is_empty() || (self.windows.len() == 1 && core.opened_first_tab)
+            })
             .map(|win| {
                 let (width, height) = win.logical_size();
                 let tabs = win.workspace.tabs().iter().map(|tab| {
                     let order = tab.layout.panes();
                     let focus = order.iter().position(|&id| id == tab.focus).unwrap_or(0);
                     let layout = tab.layout.clone().map(&mut |id| core.saved_pane(id));
-                    SavedTab { layout, focus, zoomed: tab.zoomed }
+                    SavedTab { layout, focus, zoomed: tab.zoomed, name: tab.name.clone() }
                 });
                 SavedWindow {
                     width,
@@ -141,6 +145,7 @@ impl Running {
         let Some(session) = self.core.restoring.take() else { return };
         let scale = self.windows[0].gfx.window.scale_factor();
         let theme = self.core.theme;
+        let left_empty = session.first().is_some_and(|window| window.tabs.is_empty());
         let mut windows = session.into_iter();
         if let Some(first) = windows.next()
             && let Some(mut at) = self.at_index(0)
@@ -151,15 +156,16 @@ impl Running {
             windows
                 .map(|window| (Early::start(scale, (window.width, window.height), theme), window)),
         );
-        // Nothing left of what it held: as if there had been nothing saved.
-        if self.windows[0].workspace.tabs().is_empty() && !self.core.opened_first_tab {
-            self.core.opened_first_tab = true;
-            if let Some(mut at) = self.at_index(0)
-                && !at.perform(Action::NewTab)
-            {
-                at.win.exit = true;
-            }
+        // Nothing left of what it held: as if there had been nothing saved. Unless that is how
+        // it was left.
+        if !left_empty
+            && self.windows[0].workspace.tabs().is_empty()
+            && !self.core.opened_first_tab
+            && let Some(mut at) = self.at_index(0)
+        {
+            at.perform(Action::NewTab);
         }
+        self.core.opened_first_tab = true;
         self.core.session_changed();
     }
 
@@ -211,8 +217,24 @@ impl Running {
         }
     }
 
+    /// Decide on the windows whose last tab went. One at a time, so that two emptied by the same
+    /// batch of events do not each count on the other to stay.
+    fn settle_vacated(&mut self) {
+        while let Some(index) = self.windows.iter().position(|win| win.vacated.is_some()) {
+            let when_last = self.windows[index].vacated.take();
+            if !self.windows[index].workspace.tabs().is_empty() {
+                continue;
+            }
+            let others = self.windows.iter().enumerate().any(|(at, win)| at != index && !win.exit);
+            if others || when_last == Some(WhenLast::Quit) {
+                self.windows[index].exit = true;
+            }
+        }
+    }
+
     /// Windows that have ended, and with them the application once none are left.
     pub(super) fn close_finished(&mut self, event_loop: &ActiveEventLoop) {
+        self.settle_vacated();
         while let Some(index) = self.windows.iter().position(|win| win.exit) {
             if self.windows.len() == 1 {
                 // Stays for `exiting`, which saves what it shows.
@@ -249,6 +271,9 @@ impl Running {
             VaultEvent::Phase(phase) => {
                 let was_locked = self.core.ui.locked();
                 self.core.ui.gate = Gate::from(&phase);
+                if let store::Phase::Unlocked { unencrypted } = phase {
+                    self.core.ui.unencrypted = unencrypted;
+                }
                 self.core.ui.asking_hidden =
                     self.core.ui.locked() && matches!(self.core.answer, Some((_, Some(_))));
                 self.core.ui.vault_busy = false;
@@ -272,10 +297,8 @@ impl Running {
                         && self.windows[0].workspace.tabs().is_empty()
                     {
                         self.core.opened_first_tab = true;
-                        if let Some(mut at) = self.at_index(0)
-                            && !at.perform(Action::NewTab)
-                        {
-                            at.win.exit = true;
+                        if let Some(mut at) = self.at_index(0) {
+                            at.perform(Action::NewTab);
                         }
                     }
                     for index in 0..self.windows.len() {
@@ -389,6 +412,7 @@ impl Running {
         self.core.next_window += 1;
         // The tree is the first window's; a torn-off tab gets all of its own.
         shell.sidebar_open = false;
+        shell.sidebar_width = self.core.ui.panels.sidebar;
         self.windows.push(Win::new(key, gfx, chrome, shell, self.core.wayland));
         self.core.window_keys.push(key);
         Ok(self.windows.len() - 1)

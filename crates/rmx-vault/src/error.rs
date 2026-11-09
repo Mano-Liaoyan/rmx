@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::kind::VaultKind;
+
 /// Everything a vault operation can fail with.
 ///
 /// No variant ever carries key material, passwords or signed URLs.
@@ -45,6 +47,17 @@ pub enum Error {
     /// The remote copy has a different vault identity.
     #[error("the remote copy belongs to a different vault")]
     VaultMismatch,
+    /// One of two copies is encrypted and the other is not. Neither was changed.
+    #[error("{}", kind_mismatch(*.local))]
+    KindMismatch {
+        /// What the working copy is.
+        local: VaultKind,
+        /// What the other copy is.
+        remote: VaultKind,
+    },
+    /// That only makes sense for an encrypted vault, and this one has no master password.
+    #[error("this database has no master password")]
+    Unencrypted,
     /// The remote copy is encrypted under other credentials; the master password was changed.
     #[error("the remote copy is encrypted with different credentials")]
     RemoteKeyChanged,
@@ -74,6 +87,14 @@ pub enum Error {
     #[cfg(feature = "keyring")]
     #[error("no quick-unlock key is stored for this vault")]
     NoQuickUnlock,
+}
+
+/// A short sentence, since it ends up at the foot of the sidebar.
+fn kind_mismatch(local: VaultKind) -> &'static str {
+    match local {
+        VaultKind::Plain => "Not synced: the remote copy is encrypted, this database is not",
+        VaultKind::Encrypted => "Not synced: the remote copy is unencrypted, this database is encrypted",
+    }
 }
 
 /// Failures of a [`SyncBackend`](crate::SyncBackend).

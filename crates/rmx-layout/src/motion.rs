@@ -46,7 +46,9 @@ impl Motion {
     pub fn place(&mut self, rects: &[(PaneId, Rect)], now: Instant, animate: bool) {
         let area = rects.iter().map(|&(_, rect)| rect).reduce(union);
         let shown = rects.iter().any(|&(id, _)| self.entry(id).is_some());
-        let animate = animate && shown && area == self.area;
+        // The last pane going has nothing to slide over, but it leaves like any other.
+        let emptied = rects.is_empty() && !self.panes.is_empty();
+        let animate = animate && (emptied || (shown && area == self.area));
         self.area = area;
 
         // Panes still leaving keep the moment they are covered; covered ones are gone.
@@ -73,6 +75,11 @@ impl Motion {
             .collect();
 
         if animate {
+            if emptied {
+                for (entry, _) in &mut old {
+                    entry.frame.to(popped(entry.frame.get(now)), now, MOVE_MS, Curve::SNAP);
+                }
+            }
             let until = now + Duration::from_millis(MOVE_MS).mul_f32(scale());
             let old = old.into_iter().map(|(entry, since)| (entry, since.unwrap_or(until)));
             self.leaving = old.filter(|&(_, until)| until > now).collect();
@@ -146,6 +153,33 @@ mod tests {
         assert_eq!(motion.frame(1, later), Some(LEFT));
         assert_eq!(motion.frame(2, later), Some(RIGHT));
         assert!(!motion.running(later));
+    }
+
+    #[test]
+    fn the_last_pane_leaves_like_any_other_and_then_nothing_runs() {
+        let now = Instant::now();
+        let mut motion = Motion::default();
+        motion.place(&[(1, WHOLE)], now, false);
+        motion.place(&[], now, true);
+
+        assert_eq!(motion.frame(1, now), None);
+        assert_eq!(motion.leaving(now).map(|(id, _)| id).collect::<Vec<_>>(), [1]);
+        assert!(motion.running(now));
+        let soon = now + Duration::from_millis(MOVE_MS / 2);
+        let (_, frame) = motion.leaving(soon).next().unwrap();
+        assert!(frame.w < WHOLE.w, "it shrinks as it goes");
+
+        let later = now + Duration::from_millis(MOVE_MS + 1);
+        assert_eq!(motion.leaving(later).count(), 0);
+        assert!(!motion.running(later));
+    }
+
+    #[test]
+    fn nothing_to_place_does_not_animate() {
+        let now = Instant::now();
+        let mut motion = Motion::default();
+        motion.place(&[], now, true);
+        assert!(!motion.running(now));
     }
 
     #[test]

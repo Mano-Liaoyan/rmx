@@ -15,17 +15,19 @@ use crate::theme::{CONTROL_HEIGHT, RADIUS_SM, TEXT_SM};
 use crate::virtual_list::{clamp_scroll, scroll_for_thumb, scroll_to_row, thumb, window};
 use crate::{fonts, icons};
 
-use super::controls::{ButtonKind, InputOptions, button_full, paint_icon_button, segmented, text_input};
+use super::controls::{InputOptions, paint_icon_button, segmented, submitted, text_input};
+use super::panels::{FILES_DATE, FILES_QUEUE, FILES_SIZE, FILES_SPLIT, Panels, resize_handle};
 
 const ROW: f32 = 24.;
 const BAR: f32 = 40.;
 const HEAD: f32 = 22.;
 const PAD: f32 = 8.;
-const SIZE_COLUMN: f32 = 76.;
-const DATE_COLUMN: f32 = 112.;
+const SIZE_MIN: f32 = 44.;
+const DATE_MIN: f32 = 60.;
+const NAME_MIN: f32 = 80.;
+const COLUMN_MIN: f32 = 200.;
 const THUMB_WIDTH: f32 = 6.;
 const THUMB_MIN: f32 = 24.;
-const QUEUE_ROWS: f32 = 4.5;
 const QUEUE_BAR: f32 = 40.;
 /// How far apart the columns are.
 const GAP: f32 = 1.;
@@ -244,19 +246,29 @@ impl FilesState {
     }
 }
 
+/// Where the two columns meet in a pane drawn in `area`.
+fn split_x(area: Rect, panels: &Panels) -> f32 {
+    let wanted = area.left() + area.width() * panels.files_split;
+    let (low, high) = (area.left() + COLUMN_MIN, area.right() - COLUMN_MIN);
+    if low < high { wanted.clamp(low, high) } else { area.center().x }
+}
+
 /// Where the rows of a column sit in a pane drawn in `area`.
-fn column_rect(area: Rect, side: FileSide) -> Rect {
+fn column_rect(area: Rect, side: FileSide, panels: &Panels) -> Rect {
     let top = area.top();
-    let bottom = area.bottom() - queue_height(area);
-    let middle = area.center().x;
+    let bottom = area.bottom() - queue_height(area, panels);
+    let middle = split_x(area, panels);
     match side {
         FileSide::Local => Rect::from_min_max(pos2(area.left(), top), pos2(middle - GAP, bottom)),
         FileSide::Remote => Rect::from_min_max(pos2(middle + GAP, top), pos2(area.right(), bottom)),
     }
 }
 
-fn queue_height(area: Rect) -> f32 {
-    (QUEUE_BAR + ROW * QUEUE_ROWS).min(area.height() * 0.4)
+/// How tall the queue is in `area`: at least its bar and a row, and leaving the columns a few.
+fn queue_height(area: Rect, panels: &Panels) -> f32 {
+    let low = QUEUE_BAR + ROW;
+    let high = (area.height() - BAR - HEAD - ROW * 3.).max(low);
+    panels.files_queue.clamp(low, high).min(area.height())
 }
 
 fn rows_rect(column: Rect) -> Rect {
@@ -265,9 +277,15 @@ fn rows_rect(column: Rect) -> Rect {
 
 /// Where the pointer goes to reach row `index` of a column, in points, for driving the pane from a
 /// script: the middle of its name.
-pub fn file_row_point(area: Rect, side: FileSide, index: usize) -> egui::Pos2 {
-    let rows = rows_rect(column_rect(area, side));
+pub fn file_row_point(area: Rect, side: FileSide, index: usize, panels: &Panels) -> egui::Pos2 {
+    let rows = rows_rect(column_rect(area, side, panels));
     pos2(rows.left() + 60., rows.top() + (index as f32 + 0.5) * ROW)
+}
+
+/// Where the edges a pane drawn in `area` is resized by are: between the columns, and over the
+/// queue. For driving the pane from a script.
+pub fn files_edges(area: Rect, panels: &Panels) -> (f32, f32) {
+    (split_x(area, panels), column_rect(area, FileSide::Local, panels).bottom())
 }
 
 /// A size, in the units people read.
@@ -314,6 +332,7 @@ fn paint_file(ui: &Ui, center: egui::Pos2, color: Color32) {
     painter.rect_stroke(rect, CornerRadius::same(1), Stroke::new(1., color), StrokeKind::Inside);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_column(
     ui: &mut Ui,
     rect: Rect,
@@ -321,6 +340,7 @@ fn show_column(
     pane: PaneId,
     focused: bool,
     state: &mut FilesState,
+    panels: &mut Panels,
     actions: &mut Vec<UiAction>,
 ) {
     let p = palette(ui);
@@ -363,13 +383,12 @@ fn show_column(
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(input));
     let side_state = &mut state.sides[side.index()];
     let path_input = text_input(&mut child, id.with("path"), &mut side_state.typed, InputOptions {
-        hint: "Path",
         mono: true,
         width: Some(input.width()),
         height: Some(input.height()),
         ..Default::default()
     });
-    if path_input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if submitted(ui, &path_input) {
         let path = side_state.typed.trim().to_owned();
         if !path.is_empty() {
             actions.push(UiAction::Files(pane, FilesAction::Goto { side, path }));
@@ -380,8 +399,11 @@ fn show_column(
     // The heads of the columns.
     let head = Rect::from_min_size(pos2(rect.left(), bar.bottom()), vec2(rect.width(), HEAD));
     let font = fonts::regular(TEXT_SM);
-    let (name_x, size_right, date_x) =
-        (head.left() + 34., head.right() - DATE_COLUMN - 14., head.right() - DATE_COLUMN - 4.);
+    let name_x = head.left() + 34.;
+    let room = (head.right() - 18. - name_x - NAME_MIN).max(SIZE_MIN + DATE_MIN);
+    let date_w = panels.files_date.clamp(DATE_MIN, (room - SIZE_MIN).max(DATE_MIN));
+    let size_w = panels.files_size.clamp(SIZE_MIN, (room - date_w).max(SIZE_MIN));
+    let (size_right, date_x) = (head.right() - date_w - 14., head.right() - date_w - 4.);
     let text = |at: egui::Pos2, align: Align2, label: &str| {
         ui.painter().text(at, align, label, font.clone(), p.muted_fg);
     };
@@ -389,6 +411,28 @@ fn show_column(
     text(pos2(size_right, head.center().y), Align2::RIGHT_CENTER, "Size");
     text(pos2(date_x, head.center().y), Align2::LEFT_CENTER, "Modified");
     hline(ui.painter(), head.left(), head.right(), head.bottom() - 1., p.border);
+
+    // The edges between the heads move the columns; they are the same in both columns.
+    let band = |x: f32| Rect::from_min_max(pos2(x - 3., head.top()), pos2(x + 3., head.bottom() - 1.));
+    let date_edge = date_x - 5.;
+    let date = resize_handle(ui, band(date_edge), id.with("edge-date"), true, date_edge);
+    if let Some(x) = date.to {
+        panels.files_date = (head.right() - x - 9.).clamp(DATE_MIN, (room - size_w).max(DATE_MIN));
+    }
+    let size_edge = size_right - size_w - 6.;
+    let size = resize_handle(ui, band(size_edge), id.with("edge-size"), true, size_edge);
+    if let Some(x) = size.to {
+        panels.files_size = (size_right - 6. - x).clamp(SIZE_MIN, (room - date_w).max(SIZE_MIN));
+    }
+    if date.reset {
+        panels.files_date = FILES_DATE;
+    }
+    if size.reset {
+        panels.files_size = FILES_SIZE;
+    }
+    if date.released || date.reset || size.released || size.reset {
+        actions.push(UiAction::PanelsChanged);
+    }
 
     // The rows, of which only those on screen are drawn.
     let rows = rows_rect(rect);
@@ -406,6 +450,11 @@ fn show_column(
     let painter = ui.painter_at(rows);
     let mut clicked = None;
     let mut drag_row = None;
+    let empty = ui.interact(rows, id.with("empty"), Sense::click());
+    if empty.secondary_clicked() {
+        let pos = empty.interact_pointer_pos().unwrap_or(rows.center());
+        actions.push(UiAction::FilesMenu { pane, side, name: None, pos });
+    }
     for index in visible.first..visible.end {
         let row = &view.rows[index];
         let y = rows.top() + visible.top + (index - visible.first) as f32 * ROW;
@@ -435,7 +484,7 @@ fn show_column(
             FileKind::File | FileKind::Other => paint_file(ui, at, p.muted_fg),
         }
         let font = fonts::regular(TEXT_SM);
-        let name_room = (size_right - SIZE_COLUMN - name_x).max(20.);
+        let name_room = (size_right - size_w - name_x).max(20.);
         elided_at(&painter, name_x, center, &row.name, font.clone(), p.foreground, name_room);
         if let Some(size) = row.size.filter(|_| row.kind == FileKind::File) {
             let at = pos2(size_right, center);
@@ -453,6 +502,17 @@ fn show_column(
         }
         if response.drag_started() {
             drag_row = Some(index);
+        }
+        if response.secondary_clicked() {
+            let side_state = &mut state.sides[side.index()];
+            if !side_state.selected.contains(&row.name) {
+                side_state.selected.clear();
+                side_state.selected.insert(row.name.clone());
+                side_state.anchor = Some(index);
+            }
+            side_state.cursor = index;
+            let pos = response.interact_pointer_pos().unwrap_or(row_rect.center());
+            actions.push(UiAction::FilesMenu { pane, side, name: Some(row.name.clone()), pos });
         }
     }
 
@@ -531,9 +591,7 @@ fn show_column(
     if let Some(error) = view.error {
         note(error, p.danger);
     } else if view.busy && len == 0 {
-        note("Listing...", p.muted_fg);
-    } else if len == 0 {
-        note("Empty folder", p.muted_fg);
+        icon(&painter, pos2(rows.left() + 22., rows.top() + 16.), icons::LOADER_CIRCLE, 13., p.muted_fg);
     }
 }
 
@@ -560,13 +618,13 @@ fn show_queue(
     );
     let mut policy = view.policy;
     let options: [&str; 5] = CONFLICT_POLICIES;
-    bar_ui.label(egui::RichText::new("If it exists").size(TEXT_SM).color(p.muted_fg));
-    let width = 300f32.min((row_ui_rect.width() - 340.).max(120.));
+    let width = 300f32.min((row_ui_rect.width() - 110.).max(120.));
     let response = bar_ui
         .allocate_ui(vec2(width, CONTROL_HEIGHT), |ui| {
             segmented(ui, id.with("policy"), &options, &mut policy)
         })
-        .inner;
+        .inner
+        .on_hover_text("When a file already exists");
     if response.changed() {
         actions.push(UiAction::Files(pane, FilesAction::Policy(policy)));
     }
@@ -576,17 +634,22 @@ fn show_queue(
         matches!(t.state, TransferRowState::Done | TransferRowState::Failed | TransferRowState::Cancelled)
     });
     bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let kind = ButtonKind::Secondary;
-        if button_full(ui, None, "Clear finished", ButtonKind::Ghost, any_finished, None).clicked() {
+        ui.set_min_height(CONTROL_HEIGHT);
+        let tool = |ui: &mut Ui, salt: &str, glyph: char, tip: &str, enabled: bool| {
+            let (cell, _) = ui.allocate_exact_size(vec2(26., 26.), Sense::hover());
+            let sense = if enabled { Sense::click() } else { Sense::hover() };
+            let response = ui.interact(cell, id.with(salt), sense).on_hover_text(tip);
+            paint_icon_button(ui, cell, glyph, 13., &response);
+            enabled && response.clicked()
+        };
+        if tool(ui, "clear", icons::TRASH_2, "Clear finished", any_finished) {
             actions.push(UiAction::Files(pane, FilesAction::ClearFinished));
         }
-        let height = CONTROL_HEIGHT;
-        ui.set_min_height(height);
-        if button_full(ui, Some(icons::ARROW_LEFT), "Download", kind, !download.is_empty(), None).clicked() {
+        if tool(ui, "download", icons::ARROW_LEFT, "Download", !download.is_empty()) {
             let names = download.clone();
             actions.push(UiAction::Files(pane, FilesAction::Transfer { from: FileSide::Remote, names }));
         }
-        if button_full(ui, Some(icons::ARROW_RIGHT), "Upload", kind, !upload.is_empty(), None).clicked() {
+        if tool(ui, "upload", icons::ARROW_RIGHT, "Upload", !upload.is_empty()) {
             let names = upload.clone();
             actions.push(UiAction::Files(pane, FilesAction::Transfer { from: FileSide::Local, names }));
         }
@@ -603,10 +666,6 @@ fn show_queue(
     state.queue_scroll = clamp_scroll(state.queue_scroll, len, ROW, viewport);
     let visible = window(state.queue_scroll, len, ROW, viewport);
     let painter = ui.painter_at(list);
-    if len == 0 {
-        let at = pos2(list.left() + 14., list.top() + 14.);
-        painter.text(at, Align2::LEFT_CENTER, "Nothing is being copied", fonts::regular(TEXT_SM), p.muted_fg);
-    }
     for index in visible.first..visible.end {
         let row = &view.transfers[index];
         let y = list.top() + visible.top + (index - visible.first) as f32 * ROW;
@@ -658,6 +717,7 @@ pub fn files_pane(
     view: &FilesView<'_>,
     focused: bool,
     state: &mut FilesState,
+    panels: &mut Panels,
     actions: &mut Vec<UiAction>,
 ) {
     let p = palette(ui);
@@ -674,22 +734,43 @@ pub fn files_pane(
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(area));
     let ui = &mut child;
     for column in &view.columns {
-        let rect = column_rect(area, column.side);
-        show_column(ui, rect, column, view.pane, focused, state, actions);
+        let rect = column_rect(area, column.side, panels);
+        show_column(ui, rect, column, view.pane, focused, state, panels, actions);
     }
-    let middle = area.center().x;
-    let bottom = column_rect(area, FileSide::Local).bottom();
+    let middle = split_x(area, panels);
+    let bottom = column_rect(area, FileSide::Local, panels).bottom();
     vline(ui.painter(), middle, area.top(), bottom, p.border);
 
     let queue = Rect::from_min_max(pos2(area.left(), bottom), area.max);
     show_queue(ui, queue, view, state, actions);
+
+    // Between the columns, and above the queue.
+    let band = Rect::from_min_max(pos2(middle - 3., area.top()), pos2(middle + 3., bottom));
+    let split = resize_handle(ui, band, id.with("edge-split"), true, middle);
+    if let Some(x) = split.to {
+        panels.files_split = ((x - area.left()) / area.width()).clamp(0., 1.);
+    }
+    if split.reset {
+        panels.files_split = FILES_SPLIT;
+    }
+    let band = Rect::from_min_max(pos2(area.left(), bottom - 3.), pos2(area.right(), bottom + 3.));
+    let height = resize_handle(ui, band, id.with("edge-queue"), false, bottom);
+    if let Some(y) = height.to {
+        panels.files_queue = area.bottom() - y;
+    }
+    if height.reset {
+        panels.files_queue = FILES_QUEUE;
+    }
+    if split.released || split.reset || height.released || height.reset {
+        actions.push(UiAction::PanelsChanged);
+    }
 
     // A selection being dragged: it follows the pointer, and lands in the column it is let go on.
     if let Some(drag) = &state.drag {
         let (pointer, released) =
             ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released() || !i.pointer.any_down()));
         if let Some(pointer) = pointer {
-            let target = column_rect(area, drag.from.other());
+            let target = column_rect(area, drag.from.other(), panels);
             let over = target.contains(pointer);
             if released {
                 if over {
@@ -838,12 +919,33 @@ mod tests {
     #[test]
     fn the_columns_sit_side_by_side_above_the_queue() {
         let area = Rect::from_min_size(pos2(100., 50.), vec2(800., 600.));
-        let local = column_rect(area, FileSide::Local);
-        let remote = column_rect(area, FileSide::Remote);
+        let panels = Panels::default();
+        let local = column_rect(area, FileSide::Local, &panels);
+        let remote = column_rect(area, FileSide::Remote, &panels);
         assert!(local.right() <= remote.left());
         assert_eq!(local.top(), remote.top());
         assert!(local.bottom() < area.bottom());
-        let point = file_row_point(area, FileSide::Remote, 2);
+        let point = file_row_point(area, FileSide::Remote, 2, &panels);
         assert!(remote.contains(point));
+    }
+
+    #[test]
+    fn the_columns_follow_their_split_and_keep_their_smallest_size() {
+        let area = Rect::from_min_size(pos2(100., 50.), vec2(800., 600.));
+        let narrow = Panels { files_split: 0.1, ..Panels::default() };
+        assert_eq!(split_x(area, &narrow), 300.);
+        let wide = Panels { files_split: 0.95, ..Panels::default() };
+        assert_eq!(split_x(area, &wide), 700.);
+        let thirds = Panels { files_split: 0.25, ..Panels::default() };
+        assert_eq!(split_x(area, &thirds), 300.);
+    }
+
+    #[test]
+    fn the_queue_keeps_a_row_and_leaves_the_columns_some() {
+        let area = Rect::from_min_size(pos2(0., 0.), vec2(800., 600.));
+        let tiny = Panels { files_queue: 1., ..Panels::default() };
+        assert_eq!(queue_height(area, &tiny), QUEUE_BAR + ROW);
+        let tall = Panels { files_queue: 900., ..Panels::default() };
+        assert_eq!(queue_height(area, &tall), 600. - BAR - HEAD - ROW * 3.);
     }
 }

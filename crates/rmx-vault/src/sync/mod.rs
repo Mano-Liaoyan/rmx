@@ -24,6 +24,7 @@ pub use webdav::{WebDavBackend, WebDavConfig};
 
 use crate::error::{BackendError, Error, Result};
 use crate::key::{self, Credentials, VaultKey};
+use crate::kind::VaultKind;
 use crate::local_state::{LocalState, SyncCursor};
 use crate::vault::{TempDb, Vault};
 
@@ -36,7 +37,7 @@ pub struct RemoteVersion(pub String);
 /// The remote file and the version it was read at.
 #[derive(Clone, Debug)]
 pub struct RemoteObject {
-    /// Encrypted vault bytes.
+    /// Vault bytes: encrypted, unless the vault is a [plain](VaultKind::Plain) one.
     pub data: Vec<u8>,
     /// Version of those bytes.
     pub version: RemoteVersion,
@@ -47,13 +48,14 @@ pub struct RemoteObject {
 pub struct ConflictCopy {
     /// Backend-specific name, passed back to [`SyncBackend::remove_conflict_copy`].
     pub name: String,
-    /// Encrypted vault bytes.
+    /// Vault bytes: encrypted, unless the vault is a [plain](VaultKind::Plain) one.
     pub data: Vec<u8>,
 }
 
 /// Where the shared copy of a vault lives.
 ///
-/// Implementations hold no plaintext: everything they move is already encrypted.
+/// Implementations do not handle plaintext themselves: what they move is the file as it is, which
+/// is encrypted unless the user chose a [plain](VaultKind::Plain) vault.
 pub trait SyncBackend: Send + Sync {
     /// A stable identifier without secrets, used to key the local sync cursor.
     fn id(&self) -> String;
@@ -117,21 +119,42 @@ enum RemoteKey<'a> {
 impl Vault {
     /// Creates a working copy at `path` from the backend's remote file.
     ///
-    /// This is how a second device joins a vault.
+    /// This is how a second device joins a vault. A plain remote copy needs
+    /// [`join_plain`](Self::join_plain): it fails here with [`Error::KindMismatch`].
     pub fn join(
         path: &Path,
         credentials: &Credentials,
         backend: &dyn SyncBackend,
     ) -> Result<Vault> {
+        Self::join_with(path, backend, VaultKind::Encrypted, |path| Vault::open(path, credentials))
+    }
+
+    /// Creates a working copy at `path` from a plain remote copy, as an unencrypted file.
+    pub fn join_plain(path: &Path, backend: &dyn SyncBackend) -> Result<Vault> {
+        Self::join_with(path, backend, VaultKind::Plain, Vault::open_plain)
+    }
+
+    fn join_with(
+        path: &Path,
+        backend: &dyn SyncBackend,
+        kind: VaultKind,
+        open: impl FnOnce(&Path) -> Result<Vault>,
+    ) -> Result<Vault> {
         if path.exists() {
             return Err(Error::AlreadyExists(path.to_owned()));
         }
         let remote = backend.get()?.ok_or(Error::RemoteMissing)?;
-        key::parse_salt(&remote.data)?;
+        let found = VaultKind::of_bytes(&remote.data);
+        if found != kind {
+            return Err(Error::KindMismatch { local: kind, remote: found });
+        }
+        if kind == VaultKind::Encrypted {
+            key::parse_salt(&remote.data)?;
+        }
         let tmp = TempDb::new(path, "join");
         write_private(tmp.path(), &remote.data)?;
         fs::rename(tmp.path(), path)?;
-        Vault::open(path, credentials).inspect_err(|_| {
+        open(path).inspect_err(|_| {
             crate::vault::remove_db_files(path);
             let _ = fs::remove_file(LocalState::path_for(path));
         })
@@ -139,7 +162,9 @@ impl Vault {
 
     /// Fetches, merges and, if the remote lacks anything, pushes a new snapshot.
     ///
-    /// Retries on a lost race; [`Error::RemoteKeyChanged`] means the master password changed.
+    /// Retries on a lost race; [`Error::RemoteKeyChanged`] means the master password changed, and
+    /// [`Error::KindMismatch`] that one copy is encrypted and the other is not, leaving both as
+    /// they were.
     pub fn sync(&mut self, backend: &dyn SyncBackend) -> Result<SyncReport> {
         self.run_sync(backend, RemoteKey::Same)
     }
@@ -151,6 +176,7 @@ impl Vault {
         backend: &dyn SyncBackend,
         old: &Credentials,
     ) -> Result<SyncReport> {
+        self.require_encrypted()?;
         self.run_sync(backend, RemoteKey::Replace(old))
     }
 
@@ -161,12 +187,14 @@ impl Vault {
         backend: &dyn SyncBackend,
         new: &Credentials,
     ) -> Result<SyncReport> {
+        self.require_encrypted()?;
         let remote = backend.get()?.ok_or(Error::RemoteMissing)?;
+        self.expect_same_kind(&remote.data)?;
         let key = remote_key(&remote.data, new)?;
         // Prove `new` opens the file before touching the working copy.
         let tmp = TempDb::new(&self.path, "adopt");
         write_private(tmp.path(), &remote.data)?;
-        self.merge_file(tmp.path(), &key).map_err(|e| match e {
+        self.merge_file(tmp.path(), Some(&key)).map_err(|e| match e {
             Error::RemoteCorrupt => Error::WrongKey,
             other => other,
         })?;
@@ -219,15 +247,18 @@ impl Vault {
         let remote = backend.get()?;
         let mut remote_digest = None;
         if let Some(object) = &remote {
+            self.expect_same_kind(&object.data)?;
             let key = match mode {
                 RemoteKey::Same => session_key.clone(),
                 // A repeated push finds the remote already re-encrypted.
-                RemoteKey::Replace(_) if object.data.starts_with(&session_key.salt()) => {
+                RemoteKey::Replace(_)
+                    if session_key.as_ref().is_some_and(|key| object.data.starts_with(&key.salt())) =>
+                {
                     session_key.clone()
                 },
-                RemoteKey::Replace(old) => remote_key(&object.data, old)?,
+                RemoteKey::Replace(old) => Some(remote_key(&object.data, old)?),
             };
-            let (merged, digest) = self.merge_bytes(&object.data, &key)?;
+            let (merged, digest) = self.merge_bytes(&object.data, key.as_ref())?;
             report.pulled = true;
             report.changed_locally |= merged;
             remote_digest = Some(digest);
@@ -235,7 +266,7 @@ impl Vault {
 
         let mut merged_copies = Vec::new();
         for copy in backend.conflict_copies()? {
-            match self.merge_bytes(&copy.data, &session_key) {
+            match self.merge_bytes(&copy.data, session_key.as_ref()) {
                 Ok((merged, _)) => {
                     report.changed_locally |= merged;
                     merged_copies.push(copy.name);
@@ -243,6 +274,7 @@ impl Vault {
                 // Some other vault or password: leave it for the user.
                 Err(
                     Error::RemoteKeyChanged
+                    | Error::KindMismatch { .. }
                     | Error::RemoteCorrupt
                     | Error::VaultMismatch
                     | Error::NotAVault,
@@ -275,7 +307,17 @@ impl Vault {
         self.local.set_sync_cursor(id, &cursor)
     }
 
-    fn merge_bytes(&mut self, bytes: &[u8], key: &VaultKey) -> Result<(bool, String)> {
+    /// Stops before anything happens to either side if `data` is the other kind of file.
+    fn expect_same_kind(&self, data: &[u8]) -> Result<()> {
+        let remote = VaultKind::of_bytes(data);
+        if remote == self.kind() {
+            Ok(())
+        } else {
+            Err(Error::KindMismatch { local: self.kind(), remote })
+        }
+    }
+
+    fn merge_bytes(&mut self, bytes: &[u8], key: Option<&VaultKey>) -> Result<(bool, String)> {
         let tmp = TempDb::new(&self.path, "remote");
         write_private(tmp.path(), bytes)?;
         let (report, digest) = self.merge_file(tmp.path(), key)?;

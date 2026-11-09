@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Ui, pos2, vec2};
 use rmx_ui::chrome::ChromeCore;
 use rmx_ui::fonts::{self, CjkFallback};
-use rmx_ui::theme::{self, FOOTER_HEIGHT, STRIP_HEIGHT, TREE_ROW_HEIGHT};
+use rmx_ui::theme::{self, PANE_BAR_HEIGHT, STRIP_HEIGHT, TREE_ROW_HEIGHT};
 use rmx_ui::virtual_list::{self, window};
 use rmx_ui::widgets::tabs::{TAB_GAP, drop_index, preview_slot, slot_x, tab_width};
 use rmx_ui::widgets::{
     QuickItem, QuickOpenState, quick_open,
-    NewConnectionState, NodeKind, PaneFooterView, PaneStatus, TabStripState, TabView, TitleBarView,
-    TreeModel, TreeNode, TreeState, connection_tree, new_connection_dialog, pane_footer, tab_strip,
+    NewConnectionState, NodeKind, PaneBarView, PaneStatus, Reveal, TabStripState, TabView, TitleBarView,
+    TreeModel, TreeNode, TreeState, connection_tree, new_connection_dialog, pane_bar, tab_strip,
     title_bar,
 };
 use rmx_ui::{NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction};
@@ -76,12 +76,13 @@ fn tabs_vm(ids: &[u64]) -> Vec<TabView<'static>> {
             label: "tab",
             glyph: rmx_ui::icons::TERMINAL,
             active: id == ids[0],
+            status: PaneStatus::Connected,
         })
         .collect()
 }
 
 fn node(id: u64, depth: u16, kind: NodeKind, label: &str) -> TreeNode {
-    TreeNode { id: NodeId(id), depth, kind, label: label.into(), live: false, expanded: true }
+    TreeNode { id: NodeId(id), depth, kind, label: label.into(), state: Default::default(), expanded: true }
 }
 
 fn big_tree(rows: u64) -> TreeModel {
@@ -328,7 +329,7 @@ fn title_bar_routes_its_controls() {
     let tabs = tabs_vm(&[1]);
     let mut state = TabStripState::default();
     let bar = Rect::from_min_size(pos2(0., 0.), vec2(SCREEN.width(), STRIP_HEIGHT));
-    let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true };
+    let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: 260. };
     let now = Instant::now();
     let mut draw = |ui: &mut Ui| title_bar(ui, bar, &view, &mut state, now);
 
@@ -345,7 +346,7 @@ fn title_bar_empty_space_drags_the_window() {
     let tabs = tabs_vm(&[1]);
     let mut state = TabStripState::default();
     let bar = Rect::from_min_size(pos2(0., 0.), vec2(SCREEN.width(), STRIP_HEIGHT));
-    let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true };
+    let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: 260. };
     let now = Instant::now();
     let mut draw = |ui: &mut Ui| title_bar(ui, bar, &view, &mut state, now);
 
@@ -397,22 +398,30 @@ fn dialog_steps_from_tiles_to_form_and_cancels() {
 }
 
 #[test]
-fn pane_footer_routes_its_buttons() {
+fn pane_bar_routes_its_buttons() {
     let mut harness = Harness::new();
-    let rect = Rect::from_min_size(pos2(0., 400.), vec2(800., FOOTER_HEIGHT));
-    let view =
-        PaneFooterView { pane: PaneId(7), status: PaneStatus::Connected, title: "t", facts: &[] };
-    let mut draw = |ui: &mut Ui| pane_footer(ui, rect, &view);
+    let rect = Rect::from_min_size(pos2(0., 0.), vec2(800., PANE_BAR_HEIGHT));
+    let view = PaneBarView {
+        pane: PaneId(7),
+        status: PaneStatus::Connected,
+        title: "t",
+        target: "",
+        tooltip: "",
+        focused: true,
+        grouped: true,
+        zoomed: false,
+        files: false,
+    };
+    let mut reveal = Reveal::default();
+    let mut draw = |ui: &mut Ui| pane_bar(ui, rect, &view, &mut reveal, std::time::Instant::now());
     let y = rect.center().y;
-    // From the right: menu, split down, split right, each 20 px and 2 px apart.
-    assert_eq!(
-        harness.click(pos2(800. - 56., y), &mut draw),
-        Some(UiAction::PaneSplitRight(PaneId(7)))
-    );
-    assert_eq!(
-        harness.click(pos2(800. - 34., y), &mut draw),
-        Some(UiAction::PaneSplitDown(PaneId(7)))
-    );
+    // Shown once the pointer is there. From the right: close, zoom, split down, split right, each
+    // 20 px and 2 px apart.
+    harness.click(pos2(800. - 12., y), &mut draw);
+    assert_eq!(harness.click(pos2(800. - 12., y), &mut draw), Some(UiAction::PaneClose(PaneId(7))));
+    assert_eq!(harness.click(pos2(800. - 34., y), &mut draw), Some(UiAction::PaneZoom(PaneId(7))));
+    assert_eq!(harness.click(pos2(800. - 56., y), &mut draw), Some(UiAction::PaneSplitDown(PaneId(7))));
+    assert_eq!(harness.click(pos2(800. - 78., y), &mut draw), Some(UiAction::PaneSplitRight(PaneId(7))));
 }
 
 fn core() -> ChromeCore {

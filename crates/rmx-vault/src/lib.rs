@@ -1,8 +1,10 @@
-//! The encrypted connection database and its synchronization.
+//! The connection database and its synchronization.
 //!
 //! A vault is one SQLCipher file (`.rmxdb`), keyed by Argon2id over a master password and an
-//! optional key file. The application only ever opens a local working copy through [`Vault`];
-//! other devices are reached with [`Vault::sync`] and a [`SyncBackend`]:
+//! optional key file; or, when the user chose to have no master password, a plain SQLite file
+//! ([`VaultKind`]), which says so in its header and is never dressed up as encrypted. The
+//! application only ever opens a local working copy through [`Vault`]; other devices are reached
+//! with [`Vault::sync`] and a [`SyncBackend`]:
 //!
 //! - every row carries a UUID and a [hybrid logical clock](Hlc) value;
 //! - [`Vault::put`] and [`Vault::delete`] keep superseded versions in `history` and deletions in
@@ -26,6 +28,7 @@
 mod error;
 mod hlc;
 mod key;
+mod kind;
 mod local_state;
 mod merge;
 mod records;
@@ -40,6 +43,7 @@ pub mod quick_unlock;
 pub use error::{BackendError, Error, Result};
 pub use hlc::{Hlc, HlcClock};
 pub use key::{Credentials, KdfParams, generate_key_file};
+pub use kind::VaultKind;
 pub use local_state::{LocalState, SyncCursor};
 pub use merge::HISTORY_LIMIT;
 pub use records::{

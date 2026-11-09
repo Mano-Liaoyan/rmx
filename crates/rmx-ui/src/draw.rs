@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextWrapping};
-use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, TextFormat, Ui, pos2};
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Shape, Stroke, StrokeKind,
+    TextFormat, Ui, pos2, vec2,
+};
 
 use crate::theme::{DARK, LIGHT, Palette};
 
@@ -35,6 +38,25 @@ pub(crate) fn vline(painter: &Painter, x: f32, y0: f32, y1: f32, color: Color32)
 /// A centered icon glyph.
 pub(crate) fn icon(painter: &Painter, center: Pos2, glyph: char, size: f32, color: Color32) {
     painter.text(center, Align2::CENTER_CENTER, glyph, crate::fonts::icon(size), color);
+}
+
+/// Lucide's `lock-open`, which is not in the font subset, drawn from the same geometry.
+pub(crate) fn lock_open(painter: &Painter, center: Pos2, size: f32, color: Color32) {
+    let unit = size / 24.;
+    let at = |x: f32, y: f32| center + vec2((x - 12.) * unit, (y - 12.) * unit);
+    let stroke = Stroke::new(2. * unit, color);
+    let body = Rect::from_two_pos(at(3., 11.), at(21., 22.));
+    painter.rect_stroke(body, CornerRadius::same(2), stroke, StrokeKind::Middle);
+
+    // Up from the body and over, stopping short of coming back down.
+    const STEPS: u8 = 12;
+    let (start, end) = (std::f32::consts::PI, std::f32::consts::TAU - 0.2);
+    let mut shackle = vec![at(7., 11.)];
+    shackle.extend((0..=STEPS).map(|step| {
+        let angle = start + (end - start) * f32::from(step) / f32::from(STEPS);
+        at(12. + 5. * angle.cos(), 7. + 5. * angle.sin())
+    }));
+    painter.add(Shape::line(shackle, stroke));
 }
 
 /// Lay `text` out on one line, ending in an ellipsis past `max_width`.

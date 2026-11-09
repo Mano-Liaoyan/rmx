@@ -1,4 +1,4 @@
-//! The unlocked vault: a local working copy of the encrypted database.
+//! The open vault: a local working copy of the database.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::hlc::{Hlc, HlcClock};
 use crate::key::{self, Credentials, KdfParams, VaultKey};
+use crate::kind::VaultKind;
 use crate::local_state::LocalState;
 use crate::merge::{self, trim_history};
 use crate::records::{Id, Record, TableDef};
@@ -37,11 +38,12 @@ pub struct Revision<R> {
 
 pub(crate) struct Session {
     pub conn: Connection,
-    pub key: VaultKey,
+    /// `None` for a [plain](VaultKind::Plain) vault.
+    pub key: Option<VaultKey>,
     pub clock: HlcClock,
 }
 
-/// An encrypted connection database, opened through a local working copy.
+/// A connection database, opened through a local working copy.
 ///
 /// Dropping or [locking](Self::lock) it wipes the key. All methods block on disk, and the ones
 /// that derive keys or sync also on Argon2id and the network: call them off the UI thread.
@@ -52,6 +54,7 @@ pub struct Vault {
     pub(crate) path: PathBuf,
     pub(crate) local: LocalState,
     pub(crate) session: Option<Session>,
+    kind: VaultKind,
     idle_timeout: Option<Duration>,
     last_activity: Instant,
 }
@@ -65,16 +68,25 @@ impl std::fmt::Debug for Session {
 impl Vault {
     /// Creates a new vault at `path`, which must not exist or must be empty.
     pub fn create(path: &Path, credentials: &Credentials, params: KdfParams) -> Result<Self> {
-        match fs::metadata(path) {
-            Ok(m) if m.len() > 0 => return Err(Error::AlreadyExists(path.to_owned())),
-            Ok(_) => {},
-            Err(_) => {
-                key::create_private(path)?;
-            },
-        }
+        claim_new_file(path)?;
         let key = credentials.derive(key::generate_salt(params)?, params)?;
+        Self::initialize(path, Some(key))
+    }
+
+    /// Creates a new vault at `path` with no master password: a plain SQLite file.
+    ///
+    /// Everything in it, saved passwords and keys included, can be read by anyone who can read
+    /// the file, here and on every sync target. Only for a user who has been told that and said
+    /// so; empty [`Credentials`] are refused by [`create`](Self::create), so this is never reached
+    /// by accident.
+    pub fn create_plain(path: &Path) -> Result<Self> {
+        claim_new_file(path)?;
+        Self::initialize(path, None)
+    }
+
+    fn initialize(path: &Path, key: Option<VaultKey>) -> Result<Self> {
         let result = (|| {
-            let conn = open_connection(path, &key)?;
+            let conn = open_connection(path, key.as_ref())?;
             schema::create(&conn)?;
             conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
             Ok(conn)
@@ -97,19 +109,37 @@ impl Vault {
         Self::open_with_key(path, key)
     }
 
-    pub(crate) fn open_with_key(path: &Path, key: VaultKey) -> Result<Self> {
-        let conn = open_connection(path, &key)?;
-        schema::check_version(&conn, "main")?;
+    /// Opens the plain working copy at `path`, which needs no credentials.
+    ///
+    /// Fails with [`Error::NotAVault`] if the file is not a plain rmx vault.
+    pub fn open_plain(path: &Path) -> Result<Self> {
+        if VaultKind::of_file(path)? != Some(VaultKind::Plain) {
+            return Err(Error::NotAVault);
+        }
+        let conn = open_connection(path, None)?;
+        schema::check_version(&conn, "main").map_err(|e| match e {
+            // Some other program's SQLite file.
+            Error::Sqlite(_) => Error::NotAVault,
+            other => other,
+        })?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
-        Self::from_parts(path, conn, key)
+        Self::from_parts(path, conn, None)
     }
 
-    fn from_parts(path: &Path, conn: Connection, key: VaultKey) -> Result<Self> {
+    pub(crate) fn open_with_key(path: &Path, key: VaultKey) -> Result<Self> {
+        let conn = open_connection(path, Some(&key))?;
+        schema::check_version(&conn, "main")?;
+        conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+        Self::from_parts(path, conn, Some(key))
+    }
+
+    fn from_parts(path: &Path, conn: Connection, key: Option<VaultKey>) -> Result<Self> {
         let local = LocalState::open(&LocalState::path_for(path))?;
         let mut vault = Self {
             path: path.to_owned(),
             local,
             session: None,
+            kind: if key.is_some() { VaultKind::Encrypted } else { VaultKind::Plain },
             idle_timeout: None,
             last_activity: Instant::now(),
         };
@@ -117,7 +147,7 @@ impl Vault {
         Ok(vault)
     }
 
-    pub(crate) fn install_session(&mut self, conn: Connection, key: VaultKey) -> Result<()> {
+    pub(crate) fn install_session(&mut self, conn: Connection, key: Option<VaultKey>) -> Result<()> {
         let mut clock = HlcClock::new(self.local.node_id()?);
         if let Some(seen) = merge::max_hlc(&conn, "main")? {
             clock.observe(seen);
@@ -132,6 +162,11 @@ impl Vault {
         &self.path
     }
 
+    /// Whether the working copy is encrypted.
+    pub fn kind(&self) -> VaultKind {
+        self.kind
+    }
+
     /// Device-local state stored beside the working copy.
     pub fn local_state(&self) -> &LocalState {
         &self.local
@@ -144,17 +179,24 @@ impl Vault {
     }
 
     /// Closes the database and wipes the key.
+    ///
+    /// A plain vault has no key to wipe and nothing to unlock it with, so it stays open.
     pub fn lock(&mut self) {
-        self.session = None;
+        if self.kind == VaultKind::Encrypted {
+            self.session = None;
+        }
     }
 
     /// Unlocks again after [`lock`](Self::lock) or the idle timeout.
     pub fn unlock(&mut self, credentials: &Credentials) -> Result<()> {
+        if self.kind == VaultKind::Plain {
+            return Ok(());
+        }
         let (salt, params) = key::parse_salt(&key::read_salt(&self.path)?)?;
         let key = credentials.derive(salt, params)?;
-        let conn = open_connection(&self.path, &key)?;
+        let conn = open_connection(&self.path, Some(&key))?;
         schema::check_version(&conn, "main")?;
-        self.install_session(conn, key)
+        self.install_session(conn, Some(key))
     }
 
     /// Locks automatically once no operation has run for `timeout`; `None` disables it.
@@ -327,7 +369,8 @@ impl Vault {
 
     /// Writes a consistent single-file copy to `dest`, which must not exist.
     ///
-    /// The copy has no WAL and opens with the same credentials as the working copy.
+    /// The copy has no WAL, is of the same [kind](VaultKind) as the working copy, and opens with
+    /// the same credentials.
     pub fn snapshot(&mut self, dest: &Path) -> Result<()> {
         let path = utf8(dest)?.to_owned();
         key::create_private(dest)?;
@@ -342,7 +385,7 @@ impl Vault {
     /// Merges the snapshot at `path` into the working copy, in one transaction.
     pub fn merge_snapshot(&mut self, path: &Path) -> Result<MergeReport> {
         let key = self.session()?.key.clone();
-        let (report, _) = self.merge_file(path, &key)?;
+        let (report, _) = self.merge_file(path, key.as_ref())?;
         Ok(report)
     }
 
@@ -351,21 +394,29 @@ impl Vault {
         merge::digest(&self.session()?.conn, "main")
     }
 
-    /// Merges the vault file at `path`, decrypting it with `key`. Returns the file's own digest.
+    /// Merges the vault file at `path`, decrypting it with `key` unless it is a plain one, which
+    /// is what `key` being `None` expects. Returns the file's own digest.
     pub(crate) fn merge_file(
         &mut self,
         path: &Path,
-        key: &VaultKey,
+        key: Option<&VaultKey>,
     ) -> Result<(MergeReport, String)> {
-        let salt = key::read_salt(path).map_err(|e| match e {
-            Error::NotAVault => Error::RemoteCorrupt,
-            other => other,
-        })?;
-        if salt != key.salt() {
-            return Err(Error::RemoteKeyChanged);
+        let remote = VaultKind::of_file(path)?.ok_or(Error::RemoteCorrupt)?;
+        if remote != self.kind {
+            return Err(Error::KindMismatch { local: self.kind, remote });
+        }
+        if let Some(key) = key {
+            let salt = key::read_salt(path).map_err(|e| match e {
+                Error::NotAVault => Error::RemoteCorrupt,
+                other => other,
+            })?;
+            if salt != key.salt() {
+                return Err(Error::RemoteKeyChanged);
+            }
         }
         let path = utf8(path)?.to_owned();
-        let keyspec = key.keyspec();
+        // SQLCipher reads an empty key as "no encryption".
+        let keyspec = key.map_or_else(|| Zeroizing::new(String::new()), VaultKey::keyspec);
         let session = self.session()?;
         session
             .conn
@@ -382,15 +433,24 @@ impl Vault {
     /// Changes the master password or key file, re-encrypting the working copy.
     ///
     /// Remote copies keep the old credentials until
-    /// [`push_new_credentials`](Self::push_new_credentials) replaces them.
+    /// [`push_new_credentials`](Self::push_new_credentials) replaces them. A plain vault has none
+    /// to change: [`Error::Unencrypted`].
     pub fn change_credentials(
         &mut self,
         credentials: &Credentials,
         params: KdfParams,
     ) -> Result<()> {
+        self.require_encrypted()?;
         let key = credentials.derive(key::generate_salt(params)?, params)?;
         self.reencrypt(key)?;
         self.local.clear_sync_cursors()
+    }
+
+    pub(crate) fn require_encrypted(&self) -> Result<()> {
+        match self.kind {
+            VaultKind::Encrypted => Ok(()),
+            VaultKind::Plain => Err(Error::Unencrypted),
+        }
     }
 
     /// Replaces the working copy's encryption with `key`, atomically.
@@ -411,10 +471,10 @@ impl Vault {
         self.session = None;
         remove_wal_files(&self.path);
         fs::rename(tmp.path(), &self.path)?;
-        let conn = open_connection(&self.path, &key)?;
+        let conn = open_connection(&self.path, Some(&key))?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         debug!("working copy re-encrypted");
-        self.install_session(conn, key)?;
+        self.install_session(conn, Some(key))?;
         if let (Some(seen), Some(session)) = (clock_seed, self.session.as_mut()) {
             session.clock.observe(seen);
         }
@@ -475,7 +535,19 @@ fn is_not_a_database(e: &rusqlite::Error) -> bool {
     e.sqlite_error_code() == Some(ErrorCode::NotADatabase)
 }
 
-fn open_connection(path: &Path, key: &VaultKey) -> Result<Connection> {
+/// Makes sure nothing but an empty file is at `path`, creating it private to its owner.
+fn claim_new_file(path: &Path) -> Result<()> {
+    match fs::metadata(path) {
+        Ok(m) if m.len() > 0 => Err(Error::AlreadyExists(path.to_owned())),
+        Ok(_) => Ok(()),
+        Err(_) => {
+            key::create_private(path)?;
+            Ok(())
+        },
+    }
+}
+
+fn open_connection(path: &Path, key: Option<&VaultKey>) -> Result<Connection> {
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -484,12 +556,17 @@ fn open_connection(path: &Path, key: &VaultKey) -> Result<Connection> {
     )?;
     // SQLCipher otherwise prints every failed unlock to stderr.
     conn.execute_batch("PRAGMA cipher_log_level = NONE;")?;
-    let statement = Zeroizing::new(format!("PRAGMA key = \"{}\";", key.keyspec().as_str()));
-    conn.execute_batch(&statement)?;
-    drop(statement);
+    if let Some(key) = key {
+        let statement = Zeroizing::new(format!("PRAGMA key = \"{}\";", key.keyspec().as_str()));
+        conn.execute_batch(&statement)?;
+    }
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
-        .map_err(|e| if is_not_a_database(&e) { Error::WrongKey } else { e.into() })?;
+        .map_err(|e| match (is_not_a_database(&e), key) {
+            (true, Some(_)) => Error::WrongKey,
+            (true, None) => Error::NotAVault,
+            (false, _) => e.into(),
+        })?;
     conn.execute_batch("PRAGMA secure_delete = ON;")?;
     Ok(conn)
 }

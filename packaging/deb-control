@@ -1,0 +1,13 @@
+Package: rmx
+Version: @VERSION@-1
+Architecture: amd64
+Maintainer: Mano Liaoyan <https://github.com/Mano-Liaoyan/rmx/issues>
+Installed-Size: @INSTALLED_SIZE@
+Depends: libc6 (>= @GLIBC@), libgcc-s1, libfreetype6, libfontconfig1, zlib1g, libegl1, libgl1, libwayland-client0, libwayland-egl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libxrender1
+Recommends: fontconfig
+Section: net
+Priority: optional
+Homepage: https://github.com/Mano-Liaoyan/rmx
+Description: Native remote connection manager
+ rmx connects to remote machines over SSH, Telnet, serial, VNC, and RDP from
+ one window, with an encrypted vault for its connections.

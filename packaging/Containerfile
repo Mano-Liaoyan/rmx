@@ -1,0 +1,24 @@
+# The build environment behind `cargo run -p xtask -- package`. This base's glibc sets the oldest
+# glibc the packaged binary runs on, so moving it forward drops distros. Moving it back to anything
+# with FreeType older than 2.12.1 makes freetype-sys compile its own copy into the binary.
+FROM docker.io/library/debian:12
+
+ARG RUST_VERSION=1.99.1
+
+ENV CARGO_HOME=/opt/cargo
+ENV RUSTUP_HOME=/opt/rustup
+ENV PATH=/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The -dev packages match what the binary links dynamically. rpm builds the .rpm; dpkg-deb, which
+# builds the .deb, is already in the base image.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        binutils ca-certificates cmake curl desktop-file-utils g++ gcc libfontconfig-dev \
+        libfreetype-dev librsvg2-bin make perl pkg-config rpm zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+        -o /tmp/rustup-init \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" \
+    && rm /tmp/rustup-init

@@ -47,6 +47,8 @@ pub enum FilesEvent {
     /// A link turned out to lead to a directory, or not.
     Link { side: FileSide, path: String, directory: bool },
     Progress(Box<ProgressUpdate>),
+    /// Making, renaming or removing something in the column is over.
+    Changed { side: FileSide, directory: String, error: Option<String> },
 }
 
 struct Column {
@@ -117,6 +119,49 @@ fn parent(path: &str) -> String {
 /// `directory`, then `name`, with one slash between them.
 fn join(directory: &str, name: &str) -> String {
     if directory.ends_with('/') { format!("{directory}{name}") } else { format!("{directory}/{name}") }
+}
+
+/// What to change in a directory of a column.
+enum Change {
+    NewFolder(String),
+    Rename(String, String),
+    Remove(Vec<(String, FileKind)>),
+}
+
+/// Remove `path`, a folder with all that is in it.
+async fn remove_folder(fs: &dyn RemoteFs, path: String) -> Result<(), String> {
+    let entries = fs.list(&path, ListOptions::default()).await.map_err(|err| err.to_string())?;
+    let entries = entries.collect_all().await.map_err(|err| err.to_string())?;
+    for entry in entries {
+        let inside = join(&path, &entry.name);
+        if entry.kind == EntryKind::Dir {
+            Box::pin(remove_folder(fs, inside)).await?;
+        } else {
+            fs.remove_file(&inside).await.map_err(|err| err.to_string())?;
+        }
+    }
+    fs.remove_dir(&path).await.map_err(|err| err.to_string())
+}
+
+/// Make the `change` in `directory`, off the main thread.
+async fn apply_change(fs: Arc<dyn RemoteFs>, directory: &str, change: Change) -> Result<(), String> {
+    match change {
+        Change::NewFolder(name) => fs.mkdir(&join(directory, &name)).await.map_err(|err| err.to_string()),
+        Change::Rename(from, to) => {
+            fs.rename(&join(directory, &from), &join(directory, &to)).await.map_err(|err| err.to_string())
+        },
+        Change::Remove(names) => {
+            for (name, kind) in names {
+                let path = join(directory, &name);
+                if kind == FileKind::Dir {
+                    remove_folder(fs.as_ref(), path).await?;
+                } else {
+                    fs.remove_file(&path).await.map_err(|err| err.to_string())?;
+                }
+            }
+            Ok(())
+        },
+    }
 }
 
 /// Read the rest of a listing, showing it as it grows. Everything here is off the main thread,
@@ -298,6 +343,18 @@ impl FilesPane {
     /// Do what the interface asked. Returns the side whose directory changed, if one did.
     pub fn action(&mut self, action: FilesAction) -> Option<FileSide> {
         match action {
+            FilesAction::NewFolder { side, name } => self.change(side, Change::NewFolder(name)),
+            FilesAction::Rename { side, from, to } => {
+                self.change(side, Change::Rename(from.to_string(), to));
+            },
+            FilesAction::Delete { side, names } => {
+                let rows = self.rows(side);
+                let kinds = names.iter().filter_map(|name| {
+                    rows.iter().find(|row| row.name == *name).map(|row| (name.to_string(), row.kind))
+                });
+                let names = kinds.collect();
+                self.change(side, Change::Remove(names));
+            },
             FilesAction::Open { side, name } => {
                 let row = self.rows(side).iter().find(|row| row.name == name)?.clone();
                 let path = join(self.path(side), &name);
@@ -403,6 +460,18 @@ impl FilesPane {
         self.rows.extend(self.transfers.iter().map(|transfer| transfer.row.clone()));
     }
 
+    /// Make `change` in what the column shows, off the main thread, and list it again after.
+    fn change(&mut self, side: FileSide, change: Change) {
+        let column = self.column_mut(side);
+        let (fs, directory) = (column.fs.clone(), column.path.clone());
+        let (proxy, pane, generation) = (self.proxy.clone(), self.pane, self.generation);
+        self.runtime.spawn(async move {
+            let error = apply_change(fs, &directory, change).await.err();
+            let event = FilesEvent::Changed { side, directory, error };
+            let _ = proxy.send_event(AppEvent::Files(pane, generation, event));
+        });
+    }
+
     /// News from the tasks behind the pane. Returns the old rows, which are too many to free here,
     /// and which columns to list again now that a transfer has finished landing in them.
     pub fn apply(&mut self, event: FilesEvent) -> Applied {
@@ -423,6 +492,10 @@ impl FilesPane {
                     column.busy = false;
                     column.error = Some(reason);
                 }
+            },
+            FilesEvent::Changed { side, directory, error } => match error {
+                Some(reason) => self.column_mut(side).error = Some(reason),
+                None => outcome.refresh.push((side, directory)),
             },
             FilesEvent::Link { side, path, directory } => {
                 if directory {
@@ -515,9 +588,15 @@ impl FilesPane {
 
     /// Where the pointer goes to reach `name` of a column, if it is on screen near the top.
     #[cfg(feature = "bench")]
-    pub fn row_point(&self, area: egui::Rect, side: FileSide, name: &str) -> Option<egui::Pos2> {
+    pub fn row_point(
+        &self,
+        area: egui::Rect,
+        side: FileSide,
+        name: &str,
+        panels: &rmx_ui::widgets::Panels,
+    ) -> Option<egui::Pos2> {
         let index = self.rows(side).iter().position(|row| row.name.as_ref() == name)?;
-        Some(rmx_ui::widgets::file_row_point(area, side, index))
+        Some(rmx_ui::widgets::file_row_point(area, side, index, panels))
     }
 }
 

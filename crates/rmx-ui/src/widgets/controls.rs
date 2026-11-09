@@ -6,7 +6,7 @@ use egui::{
 };
 
 use crate::draw::{icon, palette, snap};
-use crate::fonts;
+use crate::{fonts, icons};
 use crate::theme::{CONTROL_HEIGHT, RADIUS, RADIUS_SM, TEXT_SM};
 
 /// How much a button draws the eye.
@@ -114,6 +114,49 @@ pub(crate) fn paint_icon_button(ui: &Ui, rect: Rect, glyph: char, size: f32, res
     }
     let color = if response.hovered() { p.foreground } else { p.muted_fg };
     icon(painter, rect.center(), glyph, size, color);
+}
+
+/// A tick box with its label, filling `rect`. Clicking anywhere in it toggles `checked`.
+pub fn checkbox(ui: &mut Ui, rect: Rect, salt: Id, checked: &mut bool, label: &str) -> Response {
+    const SIDE: f32 = 16.;
+    let mut response = ui.interact(rect, salt, Sense::click());
+    if response.clicked() {
+        *checked = !*checked;
+        response.mark_changed();
+    }
+    let p = palette(ui);
+    let painter = ui.painter();
+    let center = pos2(rect.left() + SIDE / 2., rect.center().y);
+    let square = Rect::from_center_size(center, Vec2::splat(SIDE));
+    let edge = if *checked {
+        p.foreground
+    } else if response.hovered() {
+        p.muted_fg
+    } else {
+        p.border
+    };
+    let fill = if *checked { p.foreground } else { Color32::TRANSPARENT };
+    painter.rect(square, CornerRadius::same(RADIUS_SM), fill, Stroke::new(1., edge), StrokeKind::Inside);
+    if *checked {
+        icon(painter, center, icons::CHECK, 12., p.background);
+    }
+    painter.text(
+        pos2(rect.left() + SIDE + 8., rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        fonts::regular(TEXT_SM),
+        p.foreground,
+    );
+    response
+}
+
+/// Whether Enter was pressed in the [`text_input`] of `response`, which gives up the keyboard.
+pub fn submitted(ui: &Ui, response: &Response) -> bool {
+    let entered = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if entered {
+        response.surrender_focus();
+    }
+    entered
 }
 
 /// How a [`text_input`] looks and behaves.

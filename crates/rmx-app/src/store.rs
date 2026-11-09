@@ -16,13 +16,14 @@ use rmx_ui::widgets::{
     AuthKind, ConnectionDraft, NodeKind, RdpSecurity, ScaleChoice, SettingsDraft, SyncDraft, SyncKind,
     TreeModel, TreeNode,
 };
+use rmx_ui::widgets::SessionDot;
 use rmx_ui::{NodeId, Protocol, ThemeMode};
 use rmx_serial::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use rmx_vault::{
     Snippet,
     Connection, Credential, Credentials, Error, Folder, Id, KdfParams, KnownHost, LocalPathBackend,
     S3Backend, S3Config, Secret, SftpBackend, SharedSetting, SshKey, SyncBackend, SyncReport, Tunnel,
-    Vault, WebDavBackend, WebDavConfig,
+    Vault, VaultKind, WebDavBackend, WebDavConfig,
 };
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
@@ -40,6 +41,8 @@ const SYNC_AFTER_SAVE: Duration = Duration::from_millis(1500);
 const DEFAULT_AUTO_LOCK_MINUTES: u64 = 15;
 /// Name of the folder imported hosts go in.
 const IMPORT_FOLDER: &str = "SSH config";
+/// What is said if a database with no password is asked for without the user having agreed.
+const PLAIN_NOT_AGREED: &str = "Confirm that it will not be encrypted, or enter a master password";
 /// The local state's name for the folded folders.
 const KEY_COLLAPSED: &str = "tree.collapsed";
 /// The keys of a connection's options that its form owns.
@@ -56,9 +59,9 @@ const OPTION_FLOW: &str = "flow";
 
 /// Something for the vault's thread to do.
 pub enum Request {
-    Create { password: Secret, key_file: Option<PathBuf> },
+    Create { password: Secret, key_file: Option<PathBuf>, plain_ok: bool },
     Unlock { password: Secret, key_file: Option<PathBuf> },
-    Join { password: Secret, key_file: Option<PathBuf>, sync: Box<SyncDraft> },
+    Join { password: Secret, key_file: Option<PathBuf>, sync: Box<SyncDraft>, plain_ok: bool },
     Lock,
     /// The user did something: the auto-lock starts over.
     Touch,
@@ -100,6 +103,8 @@ impl VaultHandle {
 pub struct NodeInfo {
     pub name: String,
     pub kind: NodeKind,
+    /// Where it connects to; empty for folders.
+    pub host: String,
 }
 
 /// The tree, built off the main thread so that showing it costs nothing there.
@@ -110,13 +115,34 @@ pub struct TreeUpdate {
     pub snippets: Vec<SnippetRow>,
 }
 
+/// What a new database is to be protected with.
+enum Protection {
+    Encrypted(Credentials),
+    Plain,
+}
+
+impl Protection {
+    /// What the form said. Having nothing to protect it with counts only if the user agreed to
+    /// that, whichever way the request got here.
+    fn asked_for(password: Secret, key_file: Option<PathBuf>, plain_ok: bool) -> Result<Self, String> {
+        if password.is_empty() && key_file.is_none() {
+            return if plain_ok { Ok(Self::Plain) } else { Err(PLAIN_NOT_AGREED.to_owned()) };
+        }
+        let credentials = Credentials::new(password);
+        Ok(Self::Encrypted(match key_file {
+            Some(path) => credentials.with_key_file(path),
+            None => credentials,
+        }))
+    }
+}
+
 /// Which screen the vault calls for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// No vault yet, at this path.
     Setup(PathBuf),
     Locked(PathBuf),
-    Unlocked(PathBuf),
+    Unlocked { unencrypted: bool },
 }
 
 /// What sync is doing.
@@ -267,7 +293,7 @@ impl Actor {
         let runtime = self.runtime.clone();
         let _context = runtime.enter();
 
-        self.send(VaultEvent::Phase(self.resting_phase()));
+        self.first_open();
         loop {
             let request = match self.next_deadline() {
                 Some(at) => requests.recv_timeout(at.saturating_duration_since(Instant::now())),
@@ -309,11 +335,27 @@ impl Actor {
         }
     }
 
-    /// What to show with nothing open.
+    /// What to show with nothing open. A database that cannot be told apart from nothing there
+    /// must not be offered up to be overwritten, so anything unreadable counts as locked.
     fn resting_phase(&self) -> Phase {
-        match std::fs::metadata(&self.path) {
-            Ok(meta) if meta.len() > 0 => Phase::Locked(self.path.clone()),
-            _ => Phase::Setup(self.path.clone()),
+        match VaultKind::of_file(&self.path) {
+            Ok(None) => Phase::Setup(self.path.clone()),
+            _ => Phase::Locked(self.path.clone()),
+        }
+    }
+
+    /// Open what needs nothing from the user, or say what the user has to do first.
+    fn first_open(&mut self) {
+        if !matches!(VaultKind::of_file(&self.path), Ok(Some(VaultKind::Plain))) {
+            self.send(VaultEvent::Phase(self.resting_phase()));
+            return;
+        }
+        match Vault::open_plain(&self.path) {
+            Ok(vault) => self.opened(vault),
+            Err(err) => {
+                self.send(VaultEvent::Phase(self.resting_phase()));
+                self.send(VaultEvent::OpenFailed(err.to_string()));
+            },
         }
     }
 
@@ -351,6 +393,9 @@ impl Actor {
     }
 
     fn lock(&mut self) {
+        if self.vault.as_ref().is_some_and(|vault| vault.kind() == VaultKind::Plain) {
+            return;
+        }
         if let Some(vault) = &mut self.vault {
             vault.lock();
         }
@@ -361,9 +406,11 @@ impl Actor {
 
     fn handle(&mut self, request: Request) {
         match request {
-            Request::Create { password, key_file } => self.create(password, key_file),
+            Request::Create { password, key_file, plain_ok } => self.create(password, key_file, plain_ok),
             Request::Unlock { password, key_file } => self.unlock(password, key_file),
-            Request::Join { password, key_file, sync } => self.join(password, key_file, *sync),
+            Request::Join { password, key_file, sync, plain_ok } => {
+                self.join(password, key_file, *sync, plain_ok);
+            },
             Request::Lock => self.lock(),
             Request::Touch => self.active = Instant::now(),
             Request::SaveLayout(layout) => self.save_layout(&layout),
@@ -468,16 +515,28 @@ impl Actor {
         }
     }
 
-    fn create(&mut self, password: Secret, key_file: Option<PathBuf>) {
-        off_main("argon2");
+    fn create(&mut self, password: Secret, key_file: Option<PathBuf>, plain_ok: bool) {
+        let protection = match Protection::asked_for(password, key_file, plain_ok) {
+            Ok(protection) => protection,
+            Err(reason) => {
+                self.send(VaultEvent::OpenFailed(reason));
+                return;
+            },
+        };
         if let Some(dir) = self.path.parent()
             && let Err(err) = std::fs::create_dir_all(dir)
         {
             self.send(VaultEvent::OpenFailed(err.to_string()));
             return;
         }
-        let credentials = Self::credentials(password, key_file);
-        match Vault::create(&self.path, &credentials, KdfParams::RECOMMENDED) {
+        let created = match &protection {
+            Protection::Encrypted(credentials) => {
+                off_main("argon2");
+                Vault::create(&self.path, credentials, KdfParams::RECOMMENDED)
+            },
+            Protection::Plain => Vault::create_plain(&self.path),
+        };
+        match created {
             Ok(vault) => self.opened(vault),
             Err(err) => self.send(VaultEvent::OpenFailed(err.to_string())),
         }
@@ -502,15 +561,20 @@ impl Actor {
         }
     }
 
-    fn join(&mut self, password: Secret, key_file: Option<PathBuf>, sync: SyncDraft) {
-        off_main("argon2");
+    fn join(&mut self, password: Secret, key_file: Option<PathBuf>, sync: SyncDraft, plain_ok: bool) {
+        let protection = match Protection::asked_for(password, key_file, plain_ok) {
+            Ok(protection) => protection,
+            Err(reason) => {
+                self.send(VaultEvent::OpenFailed(reason));
+                return;
+            },
+        };
         if let Some(dir) = self.path.parent()
             && let Err(err) = std::fs::create_dir_all(dir)
         {
             self.send(VaultEvent::OpenFailed(err.to_string()));
             return;
         }
-        let credentials = Self::credentials(password, key_file);
         let (backend, trusted) = match self.backend(&sync, Vec::new(), true) {
             Ok(built) => built,
             Err(err) => {
@@ -518,7 +582,14 @@ impl Actor {
                 return;
             },
         };
-        match Vault::join(&self.path, &credentials, backend.as_ref()) {
+        let joined = match &protection {
+            Protection::Encrypted(credentials) => {
+                off_main("argon2");
+                Vault::join(&self.path, credentials, backend.as_ref())
+            },
+            Protection::Plain => Vault::join_plain(&self.path, backend.as_ref()),
+        };
+        match joined {
             Ok(mut vault) => {
                 drop(backend);
                 for row in trusted.lock().map(|mut rows| std::mem::take(&mut *rows)).unwrap_or_default() {
@@ -529,6 +600,12 @@ impl Actor {
                     self.notice(format!("Could not save the sync settings: {err}"), true);
                 }
                 self.opened(vault);
+            },
+            Err(Error::KindMismatch { remote: VaultKind::Encrypted, .. }) => {
+                self.send(VaultEvent::OpenFailed("The synced copy is encrypted: enter its master password".to_owned()));
+            },
+            Err(Error::KindMismatch { remote: VaultKind::Plain, .. }) => {
+                self.send(VaultEvent::OpenFailed("The synced copy has no master password: leave it empty".to_owned()));
             },
             Err(err) => self.send(VaultEvent::OpenFailed(err.to_string())),
         }
@@ -551,11 +628,15 @@ impl Actor {
         if let Some(limit) = crate::bench::auto_lock() {
             self.auto_lock = Some(limit);
         }
+        let unencrypted = vault.kind() == VaultKind::Plain;
+        if unencrypted {
+            self.auto_lock = None;
+        }
         self.sync = parse_sync(&vault, &settings);
         self.active = Instant::now();
         self.vault = Some(vault);
         self.schedule_interval();
-        self.send(VaultEvent::Phase(Phase::Unlocked(self.path.clone())));
+        self.send(VaultEvent::Phase(Phase::Unlocked { unencrypted }));
         self.send_tree();
         self.announce_sync();
     }
@@ -1012,7 +1093,7 @@ impl Actor {
             interval: minutes(&draft.sync_interval_minutes),
         };
         store_sync_settings(vault, &settings, &draft.auto_lock_minutes)?;
-        self.auto_lock = minutes(&draft.auto_lock_minutes);
+        self.auto_lock = minutes(&draft.auto_lock_minutes).filter(|_| vault.kind() != VaultKind::Plain);
         self.sync = (settings.draft.kind != SyncKind::None).then_some(settings);
         self.active = Instant::now();
         self.schedule_interval();
@@ -1468,13 +1549,13 @@ fn tree_nodes(folders: Vec<Folder>, connections: Vec<Connection>, collapsed: &Ha
             }
             let id = node_number(folder.id);
             self.ids.insert(id, folder.id);
-            self.info.insert(id, NodeInfo { name: folder.name.clone(), kind: NodeKind::Folder });
+            self.info.insert(id, NodeInfo { name: folder.name.clone(), kind: NodeKind::Folder, host: String::new() });
             self.nodes.push(TreeNode {
                 id: NodeId(id),
                 depth,
                 kind: NodeKind::Folder,
                 label: folder.name.clone(),
-                live: false,
+                state: SessionDot::None,
                 expanded: !self.collapsed.contains(&folder.id),
             });
             self.level(Some(folder.id), depth + 1);
@@ -1488,13 +1569,13 @@ fn tree_nodes(folders: Vec<Folder>, connections: Vec<Connection>, collapsed: &Ha
                 let id = node_number(connection.id);
                 let kind = NodeKind::Connection(parse_protocol(&connection.protocol));
                 self.ids.insert(id, connection.id);
-                self.info.insert(id, NodeInfo { name: connection.name.clone(), kind });
+                self.info.insert(id, NodeInfo { name: connection.name.clone(), kind, host: connection.host.clone() });
                 self.nodes.push(TreeNode {
                     id: NodeId(id),
                     depth,
                     kind,
                     label: connection.name.clone(),
-                    live: false,
+                    state: SessionDot::None,
                     expanded: false,
                 });
             }
@@ -1594,6 +1675,25 @@ mod tests {
         let bastion = rows.iter().find(|row| row.name == "bastion").unwrap();
         assert_eq!(web.jump_connection_id, Some(bastion.id));
         assert_eq!(bastion.port, Some(2200));
+    }
+
+    fn plain(password: &str, key_file: Option<&str>, agreed: bool) -> Result<bool, String> {
+        let protection = Protection::asked_for(Secret::new(password), key_file.map(PathBuf::from), agreed)?;
+        Ok(matches!(protection, Protection::Plain))
+    }
+
+    #[test]
+    fn a_database_with_no_password_takes_the_users_word() {
+        assert_eq!(plain("", None, true), Ok(true));
+        assert_eq!(plain("", None, false), Err(PLAIN_NOT_AGREED.to_owned()));
+    }
+
+    #[test]
+    fn anything_to_protect_it_with_is_encryption_whatever_was_agreed() {
+        assert_eq!(plain("secret", None, false), Ok(false));
+        assert_eq!(plain("secret", None, true), Ok(false));
+        assert_eq!(plain("secret", Some("/k"), false), Ok(false));
+        assert_eq!(plain("", Some("/k"), true), Ok(false));
     }
 
     #[test]

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod e2e;
+mod package;
 
 /// Strip-ped release binary with every protocol in it, in bytes.
 const MAX_BINARY: u64 = 20 * 1024 * 1024;
@@ -54,8 +55,15 @@ fn main() -> ExitCode {
         Some("bench") if args.iter().any(|arg| arg == "--real-display") => real_display(&args, vendored),
         Some("bench") => bench(vendored),
         Some("e2e") => end_to_end(vendored, args.get(1).filter(|arg| !arg.starts_with("--"))),
+        Some("package") => match package::package() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("FAIL {err}");
+                ExitCode::FAILURE
+            },
+        },
         _ => {
-            eprintln!("usage: cargo run -p xtask -- <bench | e2e [shots dir]> [--vendored-openssl]");
+            eprintln!("usage: cargo run -p xtask -- <bench | e2e [shots dir] | package> [--vendored-openssl]");
             eprintln!(
                 "       cargo run -p xtask -- bench --real-display --output <name> [--expect-hz <hz>] \\\n         \
                  [--wayland-display <socket>] [--kwin-pid <pid>] [--keep <dir>] [--max-seconds <s>] [--no-build]"
@@ -93,6 +101,9 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("rdp", Box::new(|| e2e::rdp(&bench_target, &shots))),
         ("windows", Box::new(|| e2e::windows(&bench_target, &shots))),
         ("terminals", Box::new(|| e2e::terminals(&bench_target, &shots))),
+        ("no-passphrase", Box::new(|| e2e::no_passphrase(&bench_target, &shots))),
+        ("last-tab", Box::new(|| e2e::last_tab(&bench_target, &shots))),
+        ("panes", Box::new(|| e2e::panes(&bench_target, &shots))),
     ];
     let results: Vec<(&str, Result<(), String>)> =
         tests.into_iter().filter(|(name, _)| wanted(name)).map(|(name, test)| (name, test())).collect();
@@ -131,6 +142,7 @@ impl Report {
 }
 
 /// One run of the bench build, in an invisible compositor of its own: never on the desktop.
+/// With `shell` empty the panes get the user's shell, as they do outside the bench.
 pub fn measure(
     bench_target: &Path,
     size: Option<(u32, u32)>,
@@ -150,7 +162,10 @@ pub fn measure(
             .env("HEADLESS_WIDTH", width.to_string())
             .env("HEADLESS_HEIGHT", height.to_string());
     }
-    app.envs(env.iter().copied()).args(["-e", "sh", "-c", shell]);
+    app.envs(env.iter().copied());
+    if !shell.is_empty() {
+        app.args(["-e", "sh", "-c", shell]);
+    }
     if !run(&mut app) {
         eprintln!("rmx did not exit cleanly");
         return None;

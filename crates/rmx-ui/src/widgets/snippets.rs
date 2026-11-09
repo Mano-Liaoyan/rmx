@@ -3,21 +3,23 @@
 use std::sync::Arc;
 
 use egui::{
-    Context, CornerRadius, Frame, Id, Margin, Rect, RichText, Sense, Stroke, TextEdit, Ui, pos2,
-    vec2,
+    Context, CornerRadius, Frame, Id, Margin, Rect, Sense, Stroke, TextEdit, Ui, pos2, vec2,
 };
 
 use crate::action::UiAction;
 use crate::draw::{elided_at, hline, palette, vline};
-use crate::theme::{CONTROL_HEIGHT, RADIUS, RADIUS_SM, TEXT_LG, TEXT_SM, TREE_ROW_HEIGHT};
+use crate::theme::{CONTROL_HEIGHT, RADIUS, RADIUS_SM, TEXT_SM, TREE_ROW_HEIGHT};
 use crate::virtual_list::{clamp_scroll, window};
+use crate::float::Resizable;
 use crate::{float, fonts, icons};
 
 use super::controls::{ButtonKind, InputOptions, button_full, text_input};
+use super::panels::{Panels, SNIPPETS_LIST, resize_handle};
 
 const WIDTH: f32 = 720.;
 const HEIGHT: f32 = 460.;
-const LIST: f32 = 248.;
+const MIN_SIZE: [f32; 2] = [520., 300.];
+const LIST_MIN: f32 = 160.;
 const PAD: f32 = 12.;
 const ROW: f32 = TREE_ROW_HEIGHT;
 
@@ -103,12 +105,27 @@ pub fn snippets_dialog(
     ctx: &Context,
     state: &mut SnippetsState,
     rows: &Arc<Vec<SnippetRow>>,
+    panels: &mut Panels,
 ) -> Option<UiAction> {
     if !state.open {
         return None;
     }
     let id = Id::unique("snippets-dialog");
-    let modal = float::modal(ctx, id, WIDTH, |ui| snippets_body(ui, id, state, rows));
+    let mut changed = false;
+    let mut list = (panels.snippets_list, false);
+    let resize = Resizable {
+        size: &mut panels.snippets,
+        default: [WIDTH, HEIGHT],
+        min: MIN_SIZE,
+        changed: &mut changed,
+    };
+    let modal = float::resizable_modal(ctx, id, resize, |ui, size| {
+        snippets_body(ui, id, state, rows, size, &mut list)
+    });
+    panels.snippets_list = list.0;
+    if changed || list.1 {
+        return Some(UiAction::PanelsChanged);
+    }
     if modal.dismissed {
         state.close();
         ctx.request_repaint();
@@ -122,22 +139,35 @@ fn snippets_body(
     id: Id,
     state: &mut SnippetsState,
     rows: &Arc<Vec<SnippetRow>>,
+    size: [f32; 2],
+    list_width: &mut (f32, bool),
 ) -> Option<UiAction> {
     let p = palette(ui);
     ui.spacing_mut().item_spacing.y = 0.;
-    let (rect, _) = ui.allocate_exact_size(vec2(WIDTH - 2., HEIGHT), Sense::hover());
-    let split = rect.left() + LIST;
+    let (rect, _) = ui.allocate_exact_size(vec2(size[0] - 2., size[1]), Sense::hover());
+    let most = (size[0] - 280.).max(LIST_MIN);
+    let width = list_width.0.clamp(LIST_MIN, most);
+    let split = rect.left() + width;
     vline(ui.painter(), split, rect.top(), rect.bottom(), p.border);
+    let band = Rect::from_min_max(pos2(split - 3., rect.top()), pos2(split + 3., rect.bottom()));
+    let edge = resize_handle(ui, band, id.with("edge-list"), true, split);
+    if let Some(x) = edge.to {
+        list_width.0 = (x - rect.left()).clamp(LIST_MIN, most);
+    }
+    if edge.reset {
+        list_width.0 = SNIPPETS_LIST;
+    }
+    list_width.1 = edge.released || edge.reset;
 
     let mut action = None;
 
     // The list, of which only what is on screen exists.
     let list = Rect::from_min_max(rect.min, pos2(split, rect.bottom()));
     let search =
-        Rect::from_min_size(list.min + vec2(PAD, PAD), vec2(LIST - 2. * PAD, CONTROL_HEIGHT));
+        Rect::from_min_size(list.min + vec2(PAD, PAD), vec2(width - 2. * PAD, CONTROL_HEIGHT));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(search));
     let input = text_input(&mut child, id.with("query"), &mut state.query, InputOptions {
-        hint: "Search snippets",
+        hint: "Search",
         glyph: Some(icons::SEARCH),
         width: Some(search.width()),
         ..Default::default()
@@ -183,19 +213,9 @@ fn snippets_body(
             state.edit(row);
         }
     }
-    if len == 0 {
-        let text = if rows.is_empty() { "No snippets yet" } else { "No results" };
-        painter.text(
-            rows_area.center_top() + vec2(0., 32.),
-            egui::Align2::CENTER_CENTER,
-            text,
-            fonts::regular(TEXT_SM),
-            p.muted_fg,
-        );
-    }
     let foot = Rect::from_min_size(
         pos2(list.left() + PAD, list.bottom() - CONTROL_HEIGHT - PAD),
-        vec2(LIST - 2. * PAD, CONTROL_HEIGHT),
+        vec2(width - 2. * PAD, CONTROL_HEIGHT),
     );
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(foot));
     if button_full(
@@ -219,18 +239,13 @@ fn snippets_body(
         Rect::from_min_max(form.min + vec2(16., 16.), pos2(form.right() - 16., footer_y - 12.));
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with("form")).max_rect(body));
     child.spacing_mut().item_spacing.y = 6.;
-    let title = if state.editing.is_some() { "Edit snippet" } else { "New snippet" };
-    child.label(RichText::new(title).font(fonts::medium(TEXT_LG)).color(p.foreground));
-    child.add_space(4.);
-    child.label(RichText::new("Name").color(p.foreground).size(TEXT_SM));
     text_input(&mut child, id.with("name"), &mut state.name, InputOptions {
+        hint: "Name",
         width: Some(body.width()),
         ..Default::default()
     });
     child.add_space(4.);
-    child.label(RichText::new("Text to send").color(p.foreground).size(TEXT_SM));
-    let hint = "{{name}} or {{name:default}} is asked for when sending.";
-    let height = (body.bottom() - child.cursor().top() - 28.).max(CONTROL_HEIGHT);
+    let height = (body.bottom() - child.cursor().top()).max(CONTROL_HEIGHT);
     let frame = Frame::new()
         .stroke(Stroke::new(1., p.border))
         .corner_radius(CornerRadius::same(RADIUS))
@@ -244,11 +259,10 @@ fn snippets_body(
                 .id_salt(id.with("body"))
                 .frame(Frame::NONE)
                 .font(fonts::mono(TEXT_SM))
-                .text_color(p.foreground),
+                .text_color(p.foreground)
+                .hint_text("{{name}} or {{name:default}} is asked for when sending"),
         );
     });
-    child.add_space(2.);
-    child.label(RichText::new(hint).color(p.muted_fg).size(TEXT_SM));
 
     let foot = Rect::from_min_size(
         pos2(form.left() + 16., footer_y + PAD),

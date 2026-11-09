@@ -200,6 +200,17 @@ fn app_run_with(
     script: &str,
     more: &[(&str, &str)],
 ) -> Result<Report, String> {
+    app_run_shell(bench_target, scratch, device, script, more, LOCAL_SHELL)
+}
+
+fn app_run_shell(
+    bench_target: &Path,
+    scratch: &Scratch,
+    device: &str,
+    script: &str,
+    more: &[(&str, &str)],
+    shell: &str,
+) -> Result<Report, String> {
     let home = scratch.path("home");
     let data = scratch.path(device);
     let script = format!("{script},quit");
@@ -211,7 +222,7 @@ fn app_run_with(
         ("RMX_BENCH_WARMUP", "0"),
     ];
     env.extend_from_slice(more);
-    let report = measure(bench_target, Some((1280, 800)), &env, LOCAL_SHELL)
+    let report = measure(bench_target, Some((1280, 800)), &env, shell)
         .ok_or_else(|| "the application did not exit cleanly".to_owned())?;
     if report.value("script_ok") != 1 {
         let failed = report.text.lines().find_map(|line| line.strip_prefix("script_failed="));
@@ -317,7 +328,7 @@ pub fn ssh(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "wait,wait".to_owned(),
         shot("05-disconnected.ppm"),
         // Through the interface: the button on the pane, as the shot shows it.
-        "move:932:581,wait,press,release".to_owned(),
+        "move:932:605,wait,press,release".to_owned(),
         "await:live".to_owned(),
         "await:text:$ ".to_owned(),
         "vault-lock".to_owned(),
@@ -507,6 +518,134 @@ fn merge_tab(index: usize) -> String {
     format!("{},wait,win:0,move:700:20", tear_tab(index))
 }
 
+/// Working the bar of the pane at index 0 of a tab: a local shell beside it, the buttons, a drag
+/// onto its neighbour, and its menu, which `menu_row` must be in. Leaves the tab as it found it.
+fn pane_chrome(panes: usize, menu_row: &str, name: &str, shots: &Path) -> String {
+    let more = panes + 1;
+    [
+        format!("split-right-local,await:panes:{more},wait,wait,wait"),
+        "bar:0,wait,wait,wait".to_owned(),
+        shot_step(shots, &format!("ux-{name}-bar.ppm")),
+        "bar-button:0:1,wait,press,wait,release,await:zoomed,wait,wait,wait".to_owned(),
+        "bar-button:0:1,wait,press,wait,release,await:not-zoomed,wait,wait,wait".to_owned(),
+        "bar:0,wait,press-right,wait,release-right,await:menu".to_owned(),
+        format!("await:menu-offers:{menu_row},wait,wait,wait"),
+        shot_step(shots, &format!("ux-{name}-menu.ppm")),
+        "escape,await:no-menu,wait".to_owned(),
+        // The shell beside it leaves the mouse alone, so a right click there is the menu.
+        "pane-at:1:0.5:0.5,wait,press-right,wait,release-right,await:menu,await:menu-offers:Paste,escape,await:no-menu,wait".to_owned(),
+        // Held by its bar, the pane docks under its neighbour, and back.
+        "bar:0,wait,press,wait,pointer-by:40:30,wait,pane-at:1:0.5:0.9,wait,wait,wait,wait".to_owned(),
+        shot_step(shots, &format!("ux-{name}-drag.ppm")),
+        "release,await:split-column,wait,wait,wait".to_owned(),
+        "bar:0,wait,press,wait,pointer-by:40:30,wait,pane-at:1:0.9:0.5,wait,wait,release,await:split-row,wait,wait,wait".to_owned(),
+        // The neighbour goes by its own close button.
+        format!("bar:1,wait,bar-button:1:0,wait,press,wait,release,await:panes:{panes},wait,wait,wait"),
+    ]
+    .join(",")
+}
+
+/// Resizing every panel by dragging, with the sizes coming back after a restart; the bar on panes;
+/// the menus; and how a right click and a program that takes the mouse agree.
+pub fn panes(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let scratch = Scratch::new();
+    let shot = |name: &str| shot_step(shots, name);
+    let reports = scratch.path("mouse-reports");
+    // The first tab's shell asks for the mouse, and writes down what it gets.
+    let shell = format!(
+        "printf '\\033[?1000h'; stty raw -echo; exec cat >> {}",
+        reports.display(),
+    );
+    let script = [
+        "await:setup,vault-create-plain,await:unlocked,await:panes:1,wait,wait,wait,wait".to_owned(),
+        "pane-at:0:0.5:0.5,wait,press-right,wait,release-right,wait,wait".to_owned(),
+        "await:no-menu".to_owned(),
+        "shift-down,wait,press-right,wait,release-right,await:menu,shift-up,wait,wait".to_owned(),
+        "await:menu-offers:Paste,await:menu-offers:Split right,await:menu-offers:Close".to_owned(),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-terminal-menu-light.ppm"),
+        "theme:dark,wait,wait,wait,wait".to_owned(),
+        shot("ux-terminal-menu-dark.ppm"),
+        "shift-down,wait,pane-at:0:0.2:0.3,wait,press-right,wait,release-right,await:menu,shift-up,wait,wait".to_owned(),
+        "escape,await:no-menu,wait".to_owned(),
+        "tab-point:0,wait,press-right,wait,release-right,await:menu,await:menu-offers:Rename,wait,wait,wait".to_owned(),
+        shot("ux-tab-menu-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-tab-menu-light.ppm"),
+        "theme:dark,wait,wait,wait".to_owned(),
+        "menu-row:Rename,wait,press,wait,release,await:no-menu,wait,wait,text:prod,wait,enter,await:tab-name:prod,wait".to_owned(),
+        "new-tab,await:tabs:2,await:panes:2,wait,wait,wait,split-right-local,await:panes:3,wait,wait,wait,wait".to_owned(),
+        "bar:0,wait,wait,wait".to_owned(),
+        shot("ux-pane-bar-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-pane-bar-light.ppm"),
+        "theme:dark,wait,wait,wait".to_owned(),
+        "bar-button:0:1,wait,press,wait,release,await:zoomed,wait,wait,wait".to_owned(),
+        "bar-button:0:1,wait,press,wait,release,await:not-zoomed,wait,wait,wait".to_owned(),
+        // The divider: hovered it shows its pill, dragged it moves, and a double click evens it.
+        "divider:0,wait,wait,wait".to_owned(),
+        shot("ux-resize-divider-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-resize-divider-light.ppm"),
+        "theme:dark,wait,wait,wait".to_owned(),
+        "press,wait,pointer-by:-150:0,wait,pointer-by:-50:0,wait,release,await:ratio:0.2:0.42,wait".to_owned(),
+        "divider:0,wait,press,release,wait,press,release,await:ratio:0.49:0.51,wait,wait,wait,wait".to_owned(),
+        // The sidebar: by its edge, then double clicked back, then to where it is to stay.
+        "sidebar-edge,wait,wait,wait".to_owned(),
+        shot("ux-resize-sidebar-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-resize-sidebar-light.ppm"),
+        "theme:dark,wait,wait,wait".to_owned(),
+        "press,wait,pointer-by:40:0,wait,pointer-by:60:0,wait,release,await:sidebar:340:380,wait".to_owned(),
+        "sidebar-edge,wait,press,release,press,release,await:sidebar:259:261,wait,wait,wait,wait".to_owned(),
+        "sidebar-edge,wait,press,wait,pointer-by:-60:0,wait,release,await:sidebar:190:210,wait".to_owned(),
+        // The smallest it goes.
+        "sidebar-edge,wait,press,wait,pointer-by:-200:0,wait,release,await:sidebar:180:181,wait".to_owned(),
+        "settings,wait,wait,wait".to_owned(),
+        shot("ux-settings-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-settings-light.ppm"),
+        "theme:dark,wait,wait,wait,escape,wait,wait".to_owned(),
+        "dialog,wait,wait,wait".to_owned(),
+        shot("ux-new-connection-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-new-connection-light.ppm"),
+        "theme:dark,wait,wait,wait,escape,wait,wait,form:SSH,wait,wait,wait".to_owned(),
+        shot("ux-new-connection-form-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-new-connection-form-light.ppm"),
+        "theme:dark,wait,wait,wait,escape,wait,wait".to_owned(),
+        // Hover and drag chrome leave nothing running: not a frame nor a wakeup once at rest.
+        "pane-at:1:0.5:0.5,wait,wait,wait,wait,wait,wait,wait,wait,idle:1500".to_owned(),
+        // Saved by the time the next steps run.
+        "wait,wait,wait".to_owned(),
+    ]
+    .join(",");
+    let more: [(&str, &str); 0] = [];
+    let report = app_run_shell(bench_target, &scratch, "device", &script, &more, &shell)?;
+    report_paths("panes", &report);
+    if report.value("idle_measured") != 1 || report.value("idle_frames") != 0 || report.value("idle_wakeups") != 0 {
+        return Err(format!(
+            "after hovering and dragging: {} frames and {} wakeups idle",
+            report.value("idle_frames"),
+            report.value("idle_wakeups"),
+        ));
+    }
+    // X10 reporting: ESC [ M, then the button, 2 being the right one: it reached the program once
+    // pressed without Shift, and never with it.
+    let seen = fs::read(&reports).map_err(|err| format!("{}: {err}", reports.display()))?;
+    let rights = seen.windows(4).filter(|window| window.starts_with(b"\x1b[M") && window[3] == 32 + 2).count();
+    if rights != 1 {
+        return Err(format!("the program saw {rights} right presses, not one: {seen:?}"));
+    }
+
+    // Sizes come back, and the tab keeps its name.
+    let script = "await:panes:3,await:sidebar:180:181,wait,wait";
+    app_run_shell(bench_target, &scratch, "device", script, &more, &shell)?;
+    println!("ok   panes: resizing, the bar, zoom, menus and mouse reporting, with sizes kept");
+    Ok(())
+}
+
 /// Tearing tabs off with a live SSH session, merging them back, the session reopened after a
 /// restart behind the lock, and snippets sent from the palette.
 pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {
@@ -561,7 +700,7 @@ pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "await:prompt".to_owned(),
         format!("answer:{password}"),
         "await:live,await:text:$ ".to_owned(),
-        "split-right,wait,wait,wait,wait".to_owned(),
+        "split-right-local,wait,wait,wait,wait".to_owned(),
         tear_tab(0),
         "await:windows:2,wait,wait,wait,wait".to_owned(),
     ]
@@ -616,6 +755,261 @@ pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {
     let report = app_run_with(bench_target, &scratch, "device", &script, &more)?;
     report_paths("restored session", &report);
     println!("ok   restore: layout back, a pane awaiting without a dialog, the others reconnected");
+    Ok(())
+}
+
+/// Where things are in the first-run form, at the 1280x800 every scripted run has.
+const SETUP_AGREE: &str = "move:600:506";
+const SETUP_CREATE: &str = "move:640:552";
+/// Where "New local shell" is on the empty page, with the sidebar open.
+const EMPTY_SHELL: &str = "move:770:400";
+
+/// The first bytes of a database with no password.
+const SQLITE_HEADER: &[u8] = b"SQLite format 3\0";
+
+fn is_plain(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|bytes| bytes.starts_with(SQLITE_HEADER))
+}
+
+fn must_be(path: &Path, plain: bool) -> Result<(), String> {
+    if is_plain(path) == plain {
+        return Ok(());
+    }
+    let wanted = if plain { "plain SQLite" } else { "encrypted" };
+    Err(format!("{} should be {wanted}", path.display()))
+}
+
+/// A database with no password: asked for in the form, used for a real session, opened again with
+/// no prompt, kept in step with another copy, and kept from mixing with an encrypted one.
+pub fn no_passphrase(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let shot = |name: &str| shot_step(shots, name);
+
+    // Neither Enter nor a request without the box ticked gets a database made.
+    let scratch = Scratch::new();
+    let script = "await:setup,wait,wait,enter,wait,wait,wait,await:setup,vault-create:,await:vault-error,wait";
+    let report = app_run(bench_target, &scratch, "refused", script)?;
+    report_paths("no passphrase refused", &report);
+    if fs::metadata(scratch.path("refused/vault.rmxdb")).is_ok_and(|meta| meta.len() > 0) {
+        return Err("a database was created without the warning being agreed to".to_owned());
+    }
+    println!("ok   no passphrase: nothing is created before the box is ticked");
+
+    let server = Sshd::start()?;
+    let scratch = Scratch::new();
+    let (port, password) = (server.port, server.password.clone());
+    let script = [
+        "await:setup,wait,wait".to_owned(),
+        shot("fix-create-warning-dark.ppm"),
+        "theme:light,wait,wait".to_owned(),
+        shot("fix-create-warning-light.ppm"),
+        "theme:dark,wait".to_owned(),
+        // Pressing Create with the box unticked does nothing either.
+        format!("{SETUP_CREATE},wait,press,release,wait,wait,await:setup"),
+        format!("{SETUP_AGREE},wait,press,release,wait,wait"),
+        format!("{SETUP_CREATE},wait,press,release"),
+        "await:unlocked,await:unencrypted".to_owned(),
+        format!("conn:box|127.0.0.1|{port}|alice|{password}"),
+        "await:host-key,hostkey:always,await:live,await:text:$ ".to_owned(),
+        "run:echo plain-$((6*7)),await:text:plain-42,wait,wait".to_owned(),
+        shot("fix-unencrypted-indicator-dark.ppm"),
+        "theme:light,wait,wait".to_owned(),
+        shot("fix-unencrypted-indicator-light.ppm"),
+        "theme:dark,wait".to_owned(),
+        // There is nothing to lock it with.
+        "vault-lock,wait,wait,wait,wait,await:unlocked".to_owned(),
+    ]
+    .join(",");
+    let report = app_run(bench_target, &scratch, "device", &script)?;
+    report_paths("no passphrase", &report);
+    let vault = scratch.path("device/vault.rmxdb");
+    must_be(&vault, true)?;
+    if report.value("argon2_runs") != 0 {
+        return Err("a key was derived for a database with no password".to_owned());
+    }
+    // No prompt: only `await:unlocked`, which an unlock screen would never let through.
+    let script = "await:unlocked,await:unencrypted,await:tree:box,await:live,await:text:$ ,wait";
+    let report = app_run(bench_target, &scratch, "device", script)?;
+    report_paths("no passphrase, second start", &report);
+    if report.value("argon2_runs") != 0 {
+        return Err("the second start derived a key".to_owned());
+    }
+    println!("ok   no passphrase: created through the form, a real session, restarted with no prompt");
+
+    let script = "await:unlocked,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,await:unlocked";
+    app_run_with(bench_target, &scratch, "device", script, &[("RMX_BENCH_AUTO_LOCK_MS", "400")])?;
+    println!("ok   no passphrase: auto-lock does not apply");
+
+    plain_sync(bench_target)?;
+    drop(server);
+    Ok(())
+}
+
+/// Two copies with no password in step; and refusal, both ways round, against the other kind.
+fn plain_sync(bench_target: &Path) -> Result<(), String> {
+    let scratch = Scratch::new();
+    let password = random_hex();
+    let folder = |name: &str| -> Result<String, String> {
+        let path = scratch.path(name);
+        fs::create_dir_all(&path).map_err(|err| err.to_string())?;
+        Ok(format!("local|||||{}", path.join("vault.rmxdb").display()))
+    };
+
+    let plain_target = folder("synced-plain")?;
+    let plain_file = scratch.path("synced-plain/vault.rmxdb");
+    let a = format!(
+        "await:setup,vault-create-plain,await:unlocked,sync-set:{plain_target},wait,wait,\
+         conn:from-a|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
+    );
+    report_paths("plain sync: first device", &app_run(bench_target, &scratch, "a", &a)?);
+    must_be(&plain_file, true)?;
+    let b = format!(
+        "await:setup,join-plain:{plain_target},await:unlocked,await:unencrypted,await:tree:from-a,\
+         conn:from-b|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
+    );
+    report_paths("plain sync: second device", &app_run(bench_target, &scratch, "b", &b)?);
+    must_be(&scratch.path("b/vault.rmxdb"), true)?;
+    let again = "await:unlocked,sync-now,await:synced,await:tree:from-b,await:tree:from-a,wait";
+    report_paths("plain sync: first device again", &app_run(bench_target, &scratch, "a", again)?);
+    must_be(&plain_file, true)?;
+    println!("ok   no passphrase: two plain copies converged");
+
+    // Against a plain remote, an encrypted copy stops with neither side touched.
+    let before = fs::read(&plain_file).map_err(|err| err.to_string())?;
+    let c = format!(
+        "await:setup,vault-create:{password},await:unlocked,sync-set:{plain_target},wait,wait,\
+         conn:from-c|127.0.0.1|1|u|p,await:failed,sync-now,await:sync-failed:unencrypted,wait"
+    );
+    report_paths("mismatch: encrypted against plain", &app_run(bench_target, &scratch, "c", &c)?);
+    if fs::read(&plain_file).map_err(|err| err.to_string())? != before {
+        return Err("the plain remote was changed by an encrypted copy".to_owned());
+    }
+    must_be(&scratch.path("c/vault.rmxdb"), false)?;
+    let reopened = format!("await:locked,vault-unlock:{password},await:unlocked,await:tree:from-c,wait");
+    app_run(bench_target, &scratch, "c", &reopened)?;
+
+    // Against an encrypted remote, a plain copy stops too.
+    let encrypted_target = folder("synced-encrypted")?;
+    let encrypted_file = scratch.path("synced-encrypted/vault.rmxdb");
+    let e = format!(
+        "await:setup,vault-create:{password},await:unlocked,sync-set:{encrypted_target},wait,wait,\
+         conn:from-e|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
+    );
+    app_run(bench_target, &scratch, "e", &e)?;
+    must_be(&encrypted_file, false)?;
+    let before = fs::read(&encrypted_file).map_err(|err| err.to_string())?;
+    let d = format!(
+        "await:setup,vault-create-plain,await:unlocked,sync-set:{encrypted_target},wait,wait,\
+         conn:from-d|127.0.0.1|1|u|p,await:failed,sync-now,await:sync-failed:encrypted,wait"
+    );
+    report_paths("mismatch: plain against encrypted", &app_run(bench_target, &scratch, "d", &d)?);
+    if fs::read(&encrypted_file).map_err(|err| err.to_string())? != before {
+        return Err("the encrypted remote was changed by a plain copy".to_owned());
+    }
+    must_be(&scratch.path("d/vault.rmxdb"), true)?;
+    let reopened = "await:unlocked,await:tree:from-d,wait";
+    app_run(bench_target, &scratch, "d", reopened)?;
+
+    // Nor does joining mix them, whichever way it is asked for.
+    let wrong = format!("await:setup,join:{password}|{plain_target},await:vault-error,wait");
+    app_run(bench_target, &scratch, "f", &wrong)?;
+    let wrong = format!("await:setup,join-plain:{encrypted_target},await:vault-error,wait");
+    app_run(bench_target, &scratch, "g", &wrong)?;
+    for device in ["f", "g"] {
+        if fs::metadata(scratch.path(&format!("{device}/vault.rmxdb"))).is_ok_and(|meta| meta.len() > 0) {
+            return Err("joining the other kind of copy left a database behind".to_owned());
+        }
+    }
+    println!("ok   no passphrase: a mismatch stops the sync and leaves both sides as they were");
+    Ok(())
+}
+
+/// Closing the last tab, however it happens: the application stays, offering a new one.
+pub fn last_tab(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let shot = |name: &str| shot_step(shots, name);
+    let scratch = Scratch::new();
+    let more = [("RMX_BENCH_CLAIM_MS", CLAIM_MS)];
+    let settle = "wait,".repeat(12);
+    let script = [
+        "await:setup,vault-create-plain,await:unlocked,await:tabs:1,await:live-shown:1,wait,wait".to_owned(),
+        // By the shortcut's action.
+        "close,await:tabs:0,await:panes:0".to_owned(),
+        format!("{settle}wait"),
+        shot("fix-empty-dark.ppm"),
+        "theme:light,wait,wait".to_owned(),
+        shot("fix-empty-light.ppm"),
+        format!("theme:dark,{settle}wait"),
+        // Nothing moves on the empty page: no frames, no wakeups.
+        "idle:1500,wait".to_owned(),
+        // Its own button, pressed with the pointer.
+        format!("{EMPTY_SHELL},wait,press,release,await:tabs:1,await:live-shown:1,wait"),
+        // By the tab's button.
+        "tab-close:0,await:tabs:0,await:panes:0,wait,wait".to_owned(),
+        // The keyboard shortcuts work with nothing open.
+        "shortcut:t,await:tabs:1,await:live-shown:1,wait".to_owned(),
+        "close,await:tabs:0,wait,wait".to_owned(),
+        "shortcut:n,await:dialog,escape,wait,wait,await:tabs:0".to_owned(),
+        // A torn-off window with nothing left in it goes by itself.
+        "new-tab,await:tabs:1,new-tab,await:tabs:2,wait,wait".to_owned(),
+        tear_tab(1),
+        "await:windows:2,win:1,await:tabs:1,wait,wait,wait".to_owned(),
+        "close,await:windows:1,win:0,await:tabs:1,await:panes:1,wait,wait".to_owned(),
+        // Back to the only window, whose last tab goes the same way as the first.
+        "close,await:tabs:0,wait,wait,wait,await:windows:1".to_owned(),
+        "wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait".to_owned(),
+    ]
+    .join(",");
+    let report = app_run_with(bench_target, &scratch, "device", &script, &more)?;
+    report_paths("last tab", &report);
+    if report.value("idle_measured") != 1 || report.value("idle_frames") != 0 || report.value("idle_wakeups") != 0 {
+        return Err(format!(
+            "the empty page: {} frames and {} wakeups",
+            report.value("idle_frames"),
+            report.value("idle_wakeups"),
+        ));
+    }
+    println!("ok   last tab: closed three ways and stayed alive, idle at 0 frames and 0 wakeups, torn-off window closed alone");
+
+    // Left with nothing open, it comes back with nothing open, and carries on.
+    let script = format!("await:unlocked,{settle}await:tabs:0,await:panes:0,new-tab,await:tabs:1,await:live-shown:1,wait");
+    let report = app_run(bench_target, &scratch, "device", &script)?;
+    report_paths("last tab, restart", &report);
+    println!("ok   last tab: restarted to the empty state");
+
+    // The window's own close button still ends it, here as anywhere. The hold never releases, so
+    // only the application ending lets the run finish clean.
+    let script = "await:unlocked,await:live-shown:1,wait,close,await:tabs:0,wait,wait,wait,\
+                  move:1260:20,wait,press,release,await:tabs:99";
+    app_run(bench_target, &scratch, "device", script)?;
+    println!("ok   last tab: the window's close button quits from the empty state");
+
+    // Giving up at the first-run form is not leaving the window empty: the first tab still comes.
+    let scratch = Scratch::new();
+    let script = format!("await:setup,{settle}wait");
+    app_run(bench_target, &scratch, "device", &script)?;
+    let script = "await:setup,vault-create-plain,await:unlocked,await:tabs:1,await:live-shown:1,wait";
+    let report = app_run(bench_target, &scratch, "device", script)?;
+    report_paths("last tab, first run after giving up", &report);
+    println!("ok   last tab: no tabs yet is not the same as all tabs closed");
+
+    // The shell ending by itself is the same as closing the tab. Without `-e`, as a person runs it.
+    let scratch = Scratch::new();
+    let script = "await:setup,vault-create-plain,await:unlocked,await:tabs:1,await:live-shown:1,\
+                  await:text:$ ,wait,run:exit,await:tabs:0,await:panes:0,wait,wait,wait,await:windows:1,\
+                  new-tab,await:tabs:1,await:live-shown:1";
+    let report = app_run_shell(bench_target, &scratch, "device", script, &[("SHELL", "/bin/sh")], "")?;
+    report_paths("last tab, shell exit", &report);
+    println!("ok   last tab: a shell exiting by itself leaves the empty state");
+
+    // `-e` is a terminal for one program: when that ends with nothing else open, so does the app.
+    // The hold never releases, so reaching it would take the script's full 30 s and fail.
+    let scratch = Scratch::new();
+    let script = "await:setup,vault-create-plain,await:unlocked,await:tabs:99";
+    let started = Instant::now();
+    app_run_shell(bench_target, &scratch, "device", script, &[], "exit 0")?;
+    if started.elapsed() > Duration::from_secs(20) {
+        return Err("rmx -e did not end with its program".to_owned());
+    }
+    println!("ok   last tab: rmx -e ends with its program");
     Ok(())
 }
 
@@ -960,6 +1354,23 @@ fn browse_and_copy(
         "await:listed:R|down.txt".to_owned(),
         "wait,wait".to_owned(),
         shot("listing.ppm"),
+        pane_chrome(2, "Disconnect", "files", shots),
+        // Its two columns and its queue, resized by their edges, and a double click evens them.
+        "files-split,wait,wait,wait".to_owned(),
+        shot("ux-resize-files-split-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-resize-files-split-light.ppm"),
+        "theme:dark,wait,wait,wait".to_owned(),
+        "press,wait,pointer-by:-120:0,wait,release,await:files-split:0.3:0.45,wait,wait".to_owned(),
+        "files-split,wait,press,release,press,release,await:files-split:0.49:0.51,wait,wait,wait,wait".to_owned(),
+        "files-queue,wait,press,wait,pointer-by:0:-60,wait,release,await:files-queue:200:215,wait,wait".to_owned(),
+        "files-queue,wait,press,release,press,release,await:files-queue:147:149,wait,wait,wait,wait".to_owned(),
+        // The menu of a row, and of the empty space under the rows.
+        "files-point:R|down.txt,wait,press-right,wait,release-right,await:menu,await:menu-offers:Download,wait,wait,wait".to_owned(),
+        shot("ux-files-row-menu-dark.ppm"),
+        "theme:light,wait,wait,wait,wait,wait".to_owned(),
+        shot("ux-files-row-menu-light.ppm"),
+        "theme:dark,wait,wait,wait,escape,await:no-menu,wait".to_owned(),
         // Dragged across with the pointer, as a person would.
         "files-point:R|down.txt,wait,press,wait".to_owned(),
         "files-column:L,wait,wait,release".to_owned(),
@@ -1212,6 +1623,10 @@ pub fn vnc(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "await:clipboard:from-vnc-server".to_owned(),
         "wait,wait".to_owned(),
         shot("vnc-desktop.ppm"),
+        pane_chrome(4, "Send Ctrl+Alt+Del", "vnc", shots),
+        // Inside a desktop, the right button is the desktop's; with Shift it is ours.
+        "pane-at:0:0.5:0.5,wait,press-right,wait,release-right,wait,await:no-menu".to_owned(),
+        "shift-down,wait,press-right,wait,release-right,await:menu,shift-up,await:menu-offers:Toggle scale,escape,await:no-menu,wait".to_owned(),
         format!("clip-set:from-rmx-client,clip-offer,{}", "wait,".repeat(30).trim_end_matches(',')),
         // Past ASCII, nothing crosses and the user is told.
         "clip-set:中文内容,clip-offer".to_owned(),
@@ -1329,6 +1744,7 @@ exec xterm -geometry 160x48+0+0 -bg '#102030' -fg '#e0e0e0' -e sh -c 'stty echo;
         "keys:hello-456~".to_owned(),
         "wait,wait,wait,wait".to_owned(),
         shot("rdp-desktop.ppm"),
+        pane_chrome(2, "Toggle scale", "rdp", shots),
         "await:clipboard:from-rdp-server".to_owned(),
         format!("clip-set:from-rmx-中文,clip-offer,{}", "wait,".repeat(30).trim_end_matches(',')),
         "resize:1000x640,wait,wait,wait,wait,wait,wait,wait,wait".to_owned(),
@@ -1391,7 +1807,7 @@ pub fn standard_scene(bench_target: &Path, cycles: usize) -> Result<Report, Stri
     let (port, password) = (ssh.port, ssh.password.clone());
 
     let busy = format!("run:{BUSY_OUTPUT}");
-    let cycle = "zoom,zoom,split-right,close,move:120:150,move:600:20,palette,wait,palette,wait";
+    let cycle = "zoom,zoom,split-right-local,close,move:120:150,move:600:20,palette,wait,palette,wait";
     let mut script = vec![
         "await:setup".to_owned(),
         format!("vault-create:{vault_password}"),

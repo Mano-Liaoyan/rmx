@@ -8,7 +8,7 @@ use crate::theme::{CONTROL_HEIGHT, RADIUS_SM, TEXT_SM, TREE_ICON, TREE_ROW_HEIGH
 use crate::virtual_list::{clamp_scroll, scroll_for_thumb, scroll_to_row, thumb, window};
 use crate::{fonts, icons};
 
-use super::controls::{InputOptions, paint_icon_button, text_input};
+use super::controls::{InputOptions, paint_icon_button, submitted, text_input};
 
 const INDENT: f32 = 14.;
 const THUMB_WIDTH: f32 = 6.;
@@ -21,6 +21,19 @@ pub enum NodeKind {
     Connection(Protocol),
 }
 
+/// How the sessions to a node are doing, the best of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionDot {
+    #[default]
+    None,
+    Live,
+    Connecting,
+    /// All that is left of them is a closed connection.
+    Closed,
+    /// One of them could not connect.
+    Failed,
+}
+
 /// One node, as the app describes it.
 #[derive(Clone, Debug)]
 pub struct TreeNode {
@@ -29,8 +42,8 @@ pub struct TreeNode {
     pub depth: u16,
     pub kind: NodeKind,
     pub label: String,
-    /// Whether a session to it is open: the green dot.
-    pub live: bool,
+    /// How its sessions are doing: the dot.
+    pub state: SessionDot,
     /// Folders only: showing its children.
     pub expanded: bool,
 }
@@ -122,10 +135,10 @@ impl TreeModel {
         }
     }
 
-    /// Mark whether a session to `id` is open.
-    pub fn set_live(&mut self, id: NodeId, live: bool) {
+    /// Say how the sessions to `id` are doing.
+    pub fn set_state(&mut self, id: NodeId, state: SessionDot) {
         if let Some(node) = self.nodes.iter_mut().find(|node| node.id == id) {
-            node.live = live;
+            node.state = state;
         }
     }
 
@@ -272,12 +285,50 @@ pub fn connection_tree(
         }
         icon(&painter, pos2(indent + 21., center), glyph, TREE_ICON, p.muted_fg);
 
+        // Under the pointer a connection offers what is done with it most.
+        let hot = !is_folder && ui.rect_contains_pointer(row_rect.intersect(rect));
+        let protocol = match node.kind {
+            NodeKind::Connection(protocol) => Some(protocol),
+            NodeKind::Folder => None,
+        };
+        let buttons = if hot {
+            let files = protocol == Some(Protocol::Ssh);
+            let mut right = row_rect.right() - 3.;
+            let mut button = |ui: &mut Ui, salt: &str, glyph: char, tip: &str| {
+                right -= 22.;
+                let cell = Rect::from_center_size(pos2(right + 11., center), Vec2::splat(22.));
+                let response =
+                    ui.interact(cell, id.with((node.id.0, salt)), Sense::click()).on_hover_text(tip);
+                paint_icon_button(ui, cell, glyph, 13., &response);
+                response.clicked()
+            };
+            if button(ui, "connect", icons::PLUG, "Connect") {
+                action = Some(UiAction::TreeOpen(node.id));
+            }
+            if button(ui, "split", icons::COLUMNS_2, "Connect in split") {
+                action = Some(UiAction::TreeOpenSplit { id: node.id, down: false });
+            }
+            if files && button(ui, "files", icons::FOLDER_SYNC, "Files") {
+                action = Some(UiAction::TreeOpenFiles(node.id));
+            }
+            if files { 66. } else { 44. }
+        } else {
+            0.
+        };
+
         let x = indent + 34.;
-        let right = row_rect.right() - if node.live { 22. } else { 8. };
+        let dot = match node.state {
+            SessionDot::None => None,
+            SessionDot::Live => Some(p.success),
+            SessionDot::Connecting => Some(p.warning),
+            SessionDot::Closed => Some(p.muted_fg),
+            SessionDot::Failed => Some(p.danger),
+        };
+        let right = row_rect.right() - 8. - buttons - if dot.is_some() { 14. } else { 0. };
         let font = if selected { fonts::medium(TEXT_SM) } else { fonts::regular(TEXT_SM) };
         elided_at(&painter, x, center, &node.label, font, p.foreground, right - x);
-        if node.live {
-            painter.circle_filled(pos2(row_rect.right() - 12., center), 3., p.success);
+        if let Some(dot) = dot {
+            painter.circle_filled(pos2(row_rect.right() - 12. - buttons, center), 3., dot);
         }
 
         if response.clicked() {
@@ -390,6 +441,8 @@ fn handle_keys(ui: &mut Ui, tree: &mut TreeModel, state: &mut TreeState) -> Opti
 /// What the strip at the foot of the sidebar shows.
 #[derive(Clone, Copy, Debug)]
 pub struct SidebarStatus<'a> {
+    /// The database has no master password, so nothing can be locked.
+    pub unencrypted: bool,
     /// The state of sync, or the outcome of the last thing done.
     pub text: &'a str,
     /// Whether that is a failure.
@@ -403,7 +456,17 @@ pub struct SidebarStatus<'a> {
 /// Height of [`sidebar_status`].
 pub const SIDEBAR_STATUS_HEIGHT: f32 = 32.;
 
-/// The strip at the foot of the sidebar: sync status, then sync, settings and lock buttons.
+/// What is said about a database that is not encrypted.
+const UNENCRYPTED_NOTE: &str = "This database has no master password: it is not encrypted";
+
+/// Whether `text` looks like `user@host:port`: one word with a dot, an `@` or a port.
+fn looks_like_a_host(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty() && !text.contains(char::is_whitespace) && text.contains(['.', '@', ':'])
+}
+
+/// The strip at the foot of the sidebar: sync status, then sync, settings and lock buttons. Where
+/// nothing can be locked, a quiet sign of that takes the place of the lock.
 pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Option<UiAction> {
     let id = Id::unique("sidebar-status");
     let p = palette(ui);
@@ -413,30 +476,43 @@ pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Op
 
     let mut action = None;
     let mut right = rect.right() - 6.;
-    let mut button = |ui: &mut Ui, salt: &str, glyph: char, enabled: bool| {
+    let mut cell = || {
         let side = SIDEBAR_STATUS_HEIGHT - 8.;
         right -= side;
         let cell = Rect::from_min_size(pos2(right, rect.top() + 4.), Vec2::splat(side));
         right -= 2.;
+        cell
+    };
+    let button = |ui: &mut Ui, at: Rect, salt: &str, glyph: char, enabled: bool| {
         let sense = if enabled { Sense::click() } else { Sense::hover() };
-        let response = ui.interact(cell, id.with(salt), sense);
-        paint_icon_button(ui, cell, glyph, 13., &response);
+        let response = ui.interact(at, id.with(salt), sense);
+        paint_icon_button(ui, at, glyph, 13., &response);
         response.clicked()
     };
-    if button(ui, "lock", icons::LOCK, true) {
+    let at = cell();
+    if status.unencrypted {
+        ui.interact(at, id.with("unencrypted"), Sense::hover()).on_hover_text(UNENCRYPTED_NOTE);
+        crate::draw::lock_open(ui.painter(), at.center(), 13., p.warning);
+    } else if button(ui, at, "lock", icons::LOCK, true) {
         action = Some(UiAction::VaultLock);
     }
-    if button(ui, "settings", icons::SETTINGS, true) {
+    if button(ui, cell(), "settings", icons::SETTINGS, true) {
         action = Some(UiAction::OpenSettings);
     }
-    if button(ui, "sync", icons::FOLDER_SYNC, status.can_sync && !status.busy) {
+    if button(ui, cell(), "sync", icons::FOLDER_SYNC, status.can_sync && !status.busy) {
         action = Some(UiAction::SyncNow);
     }
 
     let color = if status.failed { p.danger } else { p.muted_fg };
     let x = rect.left() + 12.;
     let y = rect.center().y;
-    elided_at(ui.painter(), x, y, status.text, fonts::regular(TEXT_SM), color, right - x - 4.);
+    let width = right - x - 4.;
+    elided_at(ui.painter(), x, y, status.text, fonts::regular(TEXT_SM), color, width);
+    if status.failed {
+        // The strip is too short for most reasons.
+        let line = Rect::from_min_size(pos2(x, rect.top()), Vec2::new(width, rect.height()));
+        ui.interact(line, id.with("reason"), Sense::hover()).on_hover_text(status.text);
+    }
     if status.busy {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(400));
     }
@@ -460,7 +536,7 @@ pub fn sidebar(
     let input = header.with_max_x(header.right() - CONTROL_HEIGHT - 6.);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(input));
     let response = text_input(&mut child, id.with("search"), &mut state.search, InputOptions {
-        hint: "Search connections",
+        hint: "Search or user@host",
         glyph: Some(icons::SEARCH),
         ..Default::default()
     });
@@ -470,6 +546,24 @@ pub fn sidebar(
     }
 
     let mut action = None;
+    // Enter connects to what the search found, or else to what was typed.
+    if submitted(ui, &response) {
+        let first = (0..tree.visible_len())
+            .map(|row| tree.visible_node(row))
+            .find(|node| node.kind != NodeKind::Folder)
+            .map(|node| node.id);
+        action = match first {
+            Some(id) => Some(UiAction::TreeOpen(id)),
+            None if looks_like_a_host(&state.search) => {
+                Some(UiAction::QuickConnect(state.search.trim().to_owned()))
+            },
+            None => None,
+        };
+        if action.is_some() {
+            state.search.clear();
+            tree.set_query("");
+        }
+    }
     let new_rect = Rect::from_min_size(
         pos2(header.right() - CONTROL_HEIGHT, header.top()),
         Vec2::splat(CONTROL_HEIGHT),

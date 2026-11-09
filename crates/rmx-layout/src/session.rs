@@ -15,6 +15,8 @@ pub struct SavedTab<P> {
     /// Which pane had the keyboard, as an index of [`Split::panes`].
     pub focus: usize,
     pub zoomed: bool,
+    /// What the user called it.
+    pub name: Option<String>,
 }
 
 /// A window as it was left.
@@ -60,7 +62,12 @@ pub fn encode<P>(windows: &[SavedWindow<P>], pane: impl Fn(&P) -> String) -> Str
             flag(*sidebar_open),
         ));
         for tab in tabs {
-            text.push_str(&format!("tab {} {}\n", flag(tab.zoomed), tab.focus));
+            text.push_str(&format!("tab {} {}", flag(tab.zoomed), tab.focus));
+            if let Some(name) = &tab.name {
+                text.push(' ');
+                text.push_str(&name.replace(['\r', '\n'], " "));
+            }
+            text.push('\n');
             tree(&tab.layout, &pane, &mut text);
         }
     }
@@ -117,16 +124,18 @@ pub fn decode<P: Copy + PartialEq>(
         }
         let mut tabs = Vec::new();
         while lines.peek().is_some_and(|line| line.starts_with("tab ")) {
-            let mut parts = lines.next()?.strip_prefix("tab ")?.split(' ');
+            let mut parts = lines.next()?.strip_prefix("tab ")?.splitn(3, ' ');
             let zoomed = parts.next()? == "1";
             let focus: usize = parts.next()?.parse().ok()?;
+            let name = parts.next().filter(|name| !name.is_empty()).map(str::to_owned);
             let layout = tree(&mut lines, &pane, 0)?;
             if focus >= layout.panes().len() {
                 return None;
             }
-            tabs.push(SavedTab { layout, focus, zoomed });
+            tabs.push(SavedTab { layout, focus, zoomed, name });
         }
-        if tabs.is_empty() || active >= tabs.len() {
+        // A window can be left with no tabs; with some, one of them was showing.
+        if active >= tabs.len().max(1) {
             return None;
         }
         windows.push(SavedWindow { width, height, maximized, sidebar_open, active, tabs });
@@ -152,10 +161,11 @@ mod tests {
                 maximized: false,
                 sidebar_open: true,
                 active: 1,
-                tabs: vec![SavedTab { layout, focus: 2, zoomed: true }, SavedTab {
+                tabs: vec![SavedTab { layout, focus: 2, zoomed: true, name: None }, SavedTab {
                     layout: Split::Pane(4),
                     focus: 0,
                     zoomed: false,
+                    name: Some("two words".to_owned()),
                 }],
             },
             SavedWindow {
@@ -164,7 +174,7 @@ mod tests {
                 maximized: true,
                 sidebar_open: false,
                 active: 0,
-                tabs: vec![SavedTab { layout: Split::Pane(5), focus: 0, zoomed: false }],
+                tabs: vec![SavedTab { layout: Split::Pane(5), focus: 0, zoomed: false, name: None }],
             },
         ]
     }
@@ -193,6 +203,20 @@ mod tests {
     #[test]
     fn nothing_saved_reads_as_no_windows() {
         assert_eq!(read(&write(&[])), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_window_with_no_tabs_reads_back_as_one() {
+        let window = SavedWindow {
+            width: 900.,
+            height: 600.,
+            maximized: false,
+            sidebar_open: true,
+            active: 0,
+            tabs: Vec::new(),
+        };
+        assert_eq!(read(&write(std::slice::from_ref(&window))), Some(vec![window]));
+        assert_eq!(read(&format!("{HEADER}\nwindow 800 600 0 1 3\n")), None);
     }
 
     #[test]

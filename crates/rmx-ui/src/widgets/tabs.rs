@@ -11,7 +11,8 @@ use crate::draw::{elided_at, icon, palette};
 use crate::theme::{RADIUS_SM, STRIP_HEIGHT, TAB_HEIGHT, TAB_SLIDE_MS, TEXT_SM};
 use crate::{fonts, icons};
 
-use super::controls::paint_icon_button;
+use super::controls::{InputOptions, paint_icon_button, submitted, text_input};
+use super::pane_bar::PaneStatus;
 
 /// The widest a tab grows.
 pub const TAB_MAX_WIDTH: f32 = 200.;
@@ -30,6 +31,7 @@ pub struct TabView<'a> {
     pub label: &'a str,
     pub glyph: char,
     pub active: bool,
+    pub status: PaneStatus,
 }
 
 struct Drag {
@@ -51,9 +53,19 @@ pub struct TabStripState {
     last_active: Option<TabId>,
     /// Where each tab was last drawn, in points.
     rects: Vec<(TabId, Rect)>,
+    /// The tab being named where it shows, and what was typed.
+    renaming: Option<(TabId, String)>,
+    /// The field has been given the keyboard.
+    rename_focused: bool,
 }
 
 impl TabStripState {
+    /// Edit the name of tab `id`, starting from `name`.
+    pub fn start_rename(&mut self, id: TabId, name: &str) {
+        self.renaming = Some((id, name.to_owned()));
+        self.rename_focused = false;
+    }
+
     /// Whether a tab is being dragged.
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
@@ -214,11 +226,23 @@ pub fn tab_strip(
         let color = if tab.active { p.foreground } else { p.muted_fg };
         let y = tab_rect.center().y;
         icon(&painter, pos2(tab_rect.left() + 15., y), tab.glyph, 14., color);
+        let dot = match tab.status {
+            PaneStatus::Connected => None,
+            PaneStatus::Connecting => Some(p.warning),
+            PaneStatus::Disconnected => Some(p.muted_fg),
+            PaneStatus::Failed => Some(p.danger),
+        };
+        if let Some(dot) = dot {
+            painter.circle(pos2(tab_rect.left() + 21., y + 5.), 3., dot, Stroke::new(1., p.chrome));
+        }
         let show_close = tab.active || hovered;
         let right = tab_rect.right() - if show_close { 26. } else { 8. };
         let x = tab_rect.left() + 28.;
         let font = if tab.active { fonts::medium(TEXT_SM) } else { fonts::regular(TEXT_SM) };
-        elided_at(&painter, x, y, tab.label, font, color, right - x);
+        let renaming = state.renaming.as_ref().is_some_and(|(id, _)| *id == tab.id);
+        if !renaming {
+            elided_at(&painter, x, y, tab.label, font, color, right - x);
+        }
 
         if show_close && !held {
             let close = ui.interact(close_rect, id.with(("close", tab.id.0)), Sense::click());
@@ -228,7 +252,9 @@ pub fn tab_strip(
             }
         }
 
-        if response.clicked() {
+        if response.double_clicked() {
+            action = Some(UiAction::TabStartRename(tab.id));
+        } else if response.clicked() {
             action = Some(UiAction::TabActivate(tab.id));
         }
         if response.middle_clicked() {
@@ -239,7 +265,7 @@ pub fn tab_strip(
             action = Some(UiAction::TabContextMenu { id: tab.id, pos });
         }
 
-        if response.drag_started_by(egui::PointerButton::Primary) {
+        if response.drag_started_by(egui::PointerButton::Primary) && !renaming {
             let pointer = response.interact_pointer_pos().map_or(tab_rect.left(), |pos| pos.x);
             state.drag = Some(Drag {
                 id: tab.id,
@@ -280,6 +306,8 @@ pub fn tab_strip(
         }
     }
 
+    action = action.or_else(|| rename_field(ui, id, state));
+
     let new_rect = Rect::from_min_size(
         pos2(rect.left() + slot_x(tabs.len(), width) - state.scroll, top),
         Vec2::splat(TAB_HEIGHT),
@@ -294,4 +322,43 @@ pub fn tab_strip(
         ui.ctx().request_repaint();
     }
     action
+}
+
+/// The field naming a tab, over its title. Enter or leaving it commits, Escape keeps the old name.
+fn rename_field(ui: &mut Ui, id: Id, state: &mut TabStripState) -> Option<UiAction> {
+    let tab = state.renaming.as_ref()?.0;
+    let Some(&(_, rect)) = state.rects.iter().find(|(id, _)| *id == tab) else {
+        state.renaming = None;
+        return None;
+    };
+    let field = Rect::from_min_max(
+        pos2(rect.left() + 24., rect.top() + 2.),
+        pos2(rect.right() - 4., rect.bottom() - 2.),
+    );
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with("rename")).max_rect(field));
+    let (_, text) = state.renaming.as_mut()?;
+    let input = text_input(&mut child, id.with("rename-field"), text, InputOptions {
+        width: Some(field.width()),
+        height: Some(field.height()),
+        ..Default::default()
+    });
+    if !std::mem::replace(&mut state.rename_focused, true) {
+        input.request_focus();
+        // Typing replaces the old name.
+        if let Some(mut edit) = egui::TextEdit::load_state(ui.ctx(), input.id) {
+            let (start, end) = (egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+            edit.cursor.set_char_range(Some(egui::text::CCursorRange::two(start, end)));
+            edit.store(ui.ctx(), input.id);
+        }
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.renaming = None;
+        return None;
+    }
+    if submitted(ui, &input) || input.lost_focus() {
+        let (id, text) = state.renaming.take()?;
+        let name = text.trim();
+        return Some(UiAction::TabRename { id, name: (!name.is_empty()).then(|| name.to_owned()) });
+    }
+    None
 }

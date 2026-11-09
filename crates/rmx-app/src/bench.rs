@@ -1,7 +1,7 @@
 //! Measurements for `xtask bench`, and scripted actions to measure.
 //!
 //! `RMX_BENCH_OUT` names the report file. `RMX_BENCH_SCRIPT` is a comma separated list of steps,
-//! one performed every `RMX_BENCH_STEP_MS`: `split-right`, `split-down`, `new-tab`, `next-tab`,
+//! one performed every `RMX_BENCH_STEP_MS`: `split-right`, `split-right-local`, `split-down`, `new-tab`, `next-tab`,
 //! `close`, `zoom`, `left`, `right`, `up`, `down`, `palette`, `dialog`, `sidebar`, `wait`, `quit`,
 //! `shot:<path>` to write a fully redrawn frame, and `peek:<path>` to write a frame as partial
 //! redraws leave it. `move:<x>:<y>`, `press` and `release` drive the pointer, `text:<text>` types
@@ -10,13 +10,15 @@
 //!
 //! Steps driving the real interface, where fields are separated by `|` since `,` ends a step:
 //! `vault-create:<password>[|<key file>]`, `vault-unlock:<password>[|<key file>]`, `vault-lock`,
+//! `vault-create-plain`, for a database with no password that the user has agreed to,
 //! `conn:<name>|<host>|<port>|<user>|<password>[|<jump>[|<forwards>]]`, `open:<label>`,
 //! `dup:<label>`, `del:<label>`, `confirm`, `hostkey:always|once|reject`, `run:<shell line>`,
 //! `resize:<width>x<height>`, `disconnect`, `reconnect`, `cancel`, `theme:<light|dark>`,
 //! `conn-key:<name>|<host>|<port>|<user>|<key file>`, `answer:<text>`, `edit:<label>`,
 //! `rename:<name>`, `menu:<label>`, `discard`,
 //! `sync-set:<kind>|<host>|<port>|<user>|<secret>|<path>`, `sync-now`,
-//! `join:<password>|<kind>|<host>|<port>|<user>|<secret>|<path>`, `import-ssh`, `settings`.
+//! `join:<password>|<kind>|<host>|<port>|<user>|<secret>|<path>`,
+//! `join-plain:<kind>|<host>|<port>|<user>|<secret>|<path>`, `import-ssh`, `settings`.
 //!
 //! `conn-as:<protocol>|<name>|<host>|<port>|<user>|<secret>|<jump>|<options>` saves any kind of
 //! connection, where options are `;` separated from `native`, `keep`, `tls`, `nla` and `ftps`.
@@ -31,7 +33,8 @@
 //! `setup`, `locked`, `unlocked`, `host-key`, `prompt`, `live`, `closed`, `failed`, `synced`,
 //! `no-question`, `vault-error`, `remote-size`, `tree:<label>`, `no-tree:<label>`, `text:<substring>`, `panes:<count>`,
 //! `display`, `display-fits`, `listed:<side>|<name>`, `at-path:<side>|<path>`,
-//! `transfer:<name>|<state>`, `clipboard:<text>`, `notice:<text>`. And
+//! `transfer:<name>|<state>`, `clipboard:<text>`, `notice:<text>`, `unencrypted`,
+//! `sync-failed:<text>`. And
 //! `idle:<ms>` measures how quiet the app stays for that long.
 //!
 //! `snippet-new:<name>|<body>` saves a snippet (`~` is a line break) and `snippets` opens its
@@ -43,7 +46,9 @@
 //! For more than one window: `win:<index>` makes the steps after it act on that window,
 //! `tab-point:<index>` puts the pointer on a tab, and `await:windows:<count>` and
 //! `await:tabs:<count>` hold for that many of them. A pointer at negative coordinates, as in
-//! `move:-40:-40`, is outside the window it was pressed in.
+//! `move:-40:-40`, is outside the window it was pressed in. `tab-close:<index>` closes a tab as
+//! its button does, and `shortcut:<letter>` is that letter with Ctrl+Shift, unless a field or
+//! something floating has the keyboard.
 //!
 //! `RMX_BENCH_VAULT=off` puts the panes straight up, to measure them without the vault.
 //!
@@ -282,10 +287,29 @@ pub fn control() -> Option<Control> {
     }
 }
 
+/// A place on screen that scripts move the pointer to, wherever the layout has put it.
+#[derive(Clone, Debug)]
+pub enum Point {
+    /// This far from where the pointer is, in pixels.
+    By(f32, f32),
+    /// A place in the pane at this index, as fractions of its size.
+    Pane(usize, f32, f32),
+    /// The empty part of the bar of the pane at this index.
+    Bar(usize),
+    /// A button on the bar of the pane at this index, counted from the right.
+    BarButton(usize, usize),
+    Divider(usize),
+    SidebarEdge,
+    FilesSplit,
+    FilesQueue,
+    MenuRow(String),
+}
+
 #[derive(Clone, Debug)]
 pub enum Step {
     Wait,
     Quit,
+    Point(Point),
     Action(Action),
     Shot(String),
     Peek(String),
@@ -338,6 +362,10 @@ pub enum Step {
     Form(Protocol),
     /// The steps after this act on the window at this index.
     Window(usize),
+    /// Press this letter with Ctrl+Shift.
+    Shortcut(String),
+    /// Close the tab at this index of the strip, as its button does.
+    CloseTab(usize),
     /// Put the pointer on the tab at this index of the strip.
     TabPoint(usize),
 }
@@ -368,6 +396,10 @@ pub enum LinkStep {
 /// What `await:` waits for.
 #[derive(Clone, Debug)]
 pub enum Condition {
+    /// The open database has no master password.
+    Unencrypted,
+    /// Sync failed saying this.
+    SyncFailed(String),
     Setup,
     Locked,
     Unlocked,
@@ -409,6 +441,21 @@ pub enum Condition {
     /// A transfer with this in its label has reached this state.
     Transfer(String, String),
     Clipboard(String),
+    /// The active tab is zoomed, or not.
+    Zoomed(bool),
+    /// The context menu is open, or not.
+    Menu(bool),
+    /// The context menu has a row with this label.
+    MenuOffers(String),
+    /// The sidebar's width is between these, in points.
+    Sidebar(f32, f32),
+    FilesSplit(f32, f32),
+    FilesQueue(f32, f32),
+    /// The first divider of the active tab has a ratio between these.
+    Ratio(f32, f32),
+    /// The first split of the active tab is along this axis.
+    FirstSplit(Axis),
+    TabName(String),
     /// The focused pane's notice says this.
     Notice(String),
 }
@@ -430,7 +477,50 @@ fn button_event(state: ElementState) -> WindowEvent {
     WindowEvent::MouseInput { device_id: device(), state, button: MouseButton::Left }
 }
 
+fn right_event(state: ElementState) -> WindowEvent {
+    WindowEvent::MouseInput { device_id: device(), state, button: MouseButton::Right }
+}
+
+fn modifiers_event(state: winit::keyboard::ModifiersState) -> WindowEvent {
+    WindowEvent::ModifiersChanged(state.into())
+}
+
+/// `pointer-by:12:0`, `pane-at:0:0.5:0.5`, `bar:0`, `bar-button:0:1`, `divider:0`, `sidebar-edge`,
+/// `files-split`, `files-queue` and `menu-row:Close`.
+fn parse_point(step: &str) -> Option<Point> {
+    if let Some(rest) = step.strip_prefix("pointer-by:") {
+        let (dx, dy) = rest.split_once(':')?;
+        return Some(Point::By(dx.parse().ok()?, dy.parse().ok()?));
+    }
+    if let Some(rest) = step.strip_prefix("pane-at:") {
+        let mut parts = rest.split(':');
+        return Some(Point::Pane(parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?));
+    }
+    if let Some(index) = step.strip_prefix("bar:") {
+        return Some(Point::Bar(index.parse().ok()?));
+    }
+    if let Some(rest) = step.strip_prefix("bar-button:") {
+        let (index, button) = rest.split_once(':')?;
+        return Some(Point::BarButton(index.parse().ok()?, button.parse().ok()?));
+    }
+    if let Some(index) = step.strip_prefix("divider:") {
+        return Some(Point::Divider(index.parse().ok()?));
+    }
+    if let Some(label) = step.strip_prefix("menu-row:") {
+        return Some(Point::MenuRow(label.to_owned()));
+    }
+    match step {
+        "sidebar-edge" => Some(Point::SidebarEdge),
+        "files-split" => Some(Point::FilesSplit),
+        "files-queue" => Some(Point::FilesQueue),
+        _ => None,
+    }
+}
+
 fn parse(step: &str) -> Option<Step> {
+    if let Some(point) = parse_point(step) {
+        return Some(Step::Point(point));
+    }
     if let Some(path) = step.strip_prefix("shot:") {
         return Some(Step::Shot(path.into()));
     }
@@ -476,6 +566,12 @@ fn parse(step: &str) -> Option<Step> {
     if let Some(index) = step.strip_prefix("win:") {
         return Some(Step::Window(index.parse().ok()?));
     }
+    if let Some(letter) = step.strip_prefix("shortcut:") {
+        return Some(Step::Shortcut(letter.into()));
+    }
+    if let Some(index) = step.strip_prefix("tab-close:") {
+        return Some(Step::CloseTab(index.parse().ok()?));
+    }
     if let Some(index) = step.strip_prefix("tab-point:") {
         return Some(Step::TabPoint(index.parse().ok()?));
     }
@@ -495,6 +591,11 @@ fn parse(step: &str) -> Option<Step> {
     let action = match step {
         "wait" => return Some(Step::Wait),
         "quit" => return Some(Step::Quit),
+        "press-right" => return Some(Step::Input(right_event(ElementState::Pressed))),
+        "release-right" => return Some(Step::Input(right_event(ElementState::Released))),
+        "shift-down" => return Some(Step::Input(modifiers_event(winit::keyboard::ModifiersState::SHIFT))),
+        "shift-up" => return Some(Step::Input(modifiers_event(winit::keyboard::ModifiersState::empty()))),
+        "split-right-local" => Action::SplitLocal(Axis::Row),
         "split-right" => Action::Split(Axis::Row),
         "split-down" => Action::Split(Axis::Column),
         "new-tab" => Action::NewTab,
@@ -519,6 +620,41 @@ fn parse(step: &str) -> Option<Step> {
 }
 
 fn parse_condition(text: &str) -> Option<Condition> {
+    let range = |rest: &str| -> Option<(f32, f32)> {
+        let (low, high) = rest.split_once(':')?;
+        Some((low.parse().ok()?, high.parse().ok()?))
+    };
+    if let Some(label) = text.strip_prefix("menu-offers:") {
+        return Some(Condition::MenuOffers(label.to_owned()));
+    }
+    if let Some(rest) = text.strip_prefix("sidebar:") {
+        let (low, high) = range(rest)?;
+        return Some(Condition::Sidebar(low, high));
+    }
+    if let Some(rest) = text.strip_prefix("files-split:") {
+        let (low, high) = range(rest)?;
+        return Some(Condition::FilesSplit(low, high));
+    }
+    if let Some(rest) = text.strip_prefix("files-queue:") {
+        let (low, high) = range(rest)?;
+        return Some(Condition::FilesQueue(low, high));
+    }
+    if let Some(rest) = text.strip_prefix("ratio:") {
+        let (low, high) = range(rest)?;
+        return Some(Condition::Ratio(low, high));
+    }
+    if let Some(name) = text.strip_prefix("tab-name:") {
+        return Some(Condition::TabName(name.to_owned()));
+    }
+    match text {
+        "zoomed" => return Some(Condition::Zoomed(true)),
+        "not-zoomed" => return Some(Condition::Zoomed(false)),
+        "menu" => return Some(Condition::Menu(true)),
+        "no-menu" => return Some(Condition::Menu(false)),
+        "split-row" => return Some(Condition::FirstSplit(Axis::Row)),
+        "split-column" => return Some(Condition::FirstSplit(Axis::Column)),
+        _ => (),
+    }
     if let Some(label) = text.strip_prefix("tree:") {
         return Some(Condition::Tree(label.into()));
     }
@@ -558,6 +694,9 @@ fn parse_condition(text: &str) -> Option<Condition> {
         let (name, state) = rest.split_once('|')?;
         return Some(Condition::Transfer(name.into(), state.into()));
     }
+    if let Some(found) = text.strip_prefix("sync-failed:") {
+        return Some(Condition::SyncFailed(found.into()));
+    }
     if let Some(found) = text.strip_prefix("clipboard:") {
         return Some(Condition::Clipboard(found.into()));
     }
@@ -565,6 +704,7 @@ fn parse_condition(text: &str) -> Option<Condition> {
         return Some(Condition::Notice(found.into()));
     }
     Some(match text {
+        "unencrypted" => Condition::Unencrypted,
         "setup" => Condition::Setup,
         "locked" => Condition::Locked,
         "unlocked" => Condition::Unlocked,
@@ -609,10 +749,20 @@ fn sync_draft(fields: &[&str]) -> Option<SyncDraft> {
 
 fn parse_interface_step(step: &str) -> Option<Step> {
     let password = |text: &str| Sensitive::new(text);
+    if step == "vault-create-plain" {
+        let action = UiAction::VaultCreate { password: password(""), key_file: String::new(), plain_ok: true };
+        return Some(Step::Ui("vault-create", action));
+    }
     if let Some(text) = step.strip_prefix("vault-create:") {
         let (text, key_file) = text.split_once('|').unwrap_or((text, ""));
-        let action = UiAction::VaultCreate { password: password(text), key_file: key_file.into() };
+        let action = UiAction::VaultCreate { password: password(text), key_file: key_file.into(), plain_ok: false };
         return Some(Step::Ui("vault-create", action));
+    }
+    if let Some(text) = step.strip_prefix("join-plain:") {
+        let fields: Vec<&str> = text.split('|').collect();
+        let sync = Box::new(sync_draft(&fields)?);
+        let action = UiAction::VaultJoin { password: password(""), key_file: String::new(), sync, plain_ok: true };
+        return Some(Step::Ui("vault-join", action));
     }
     if let Some(text) = step.strip_prefix("vault-unlock:") {
         let (text, key_file) = text.split_once('|').unwrap_or((text, ""));
@@ -623,7 +773,7 @@ fn parse_interface_step(step: &str) -> Option<Step> {
         let fields: Vec<&str> = text.split('|').collect();
         let (&secret, rest) = fields.split_first()?;
         let sync = Box::new(sync_draft(rest)?);
-        let action = UiAction::VaultJoin { password: password(secret), key_file: String::new(), sync };
+        let action = UiAction::VaultJoin { password: password(secret), key_file: String::new(), sync, plain_ok: false };
         return Some(Step::Ui("vault-join", action));
     }
     if let Some(text) = step.strip_prefix("conn:") {

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=rmx
+GenericName=Remote Connection Manager
+Comment=Connect to remote machines over SSH, Telnet, serial, VNC, and RDP
+Exec=rmx
+Icon=rmx
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=ssh;telnet;serial;vnc;rdp;sftp;terminal;remote;
+StartupWMClass=rmx

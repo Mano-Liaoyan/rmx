@@ -13,7 +13,7 @@ use crate::files::FilesPane;
 use crate::remote::Display;
 
 /// What fills a pane. Every kind of pane is one of these, and the layout, the workspace, focus and
-/// the footer treat them all the same. Whatever the kind, setting up its connection is [`Link`]'s
+/// the bar treat them all the same. Whatever the kind, setting up its connection is [`Link`]'s
 /// business, so a new kind only adds a variant here and arms to the methods below.
 pub enum PaneContent {
     /// Nothing to show yet, while the connection or process behind it is set up.
@@ -102,7 +102,7 @@ impl PaneContent {
         }
     }
 
-    /// The facts the footer shows about the content.
+    /// What the bar's tooltip says about the content.
     pub fn size_fact(&self) -> Option<String> {
         match self {
             Self::Terminal(terminal) => {
@@ -118,11 +118,6 @@ impl PaneContent {
             },
             Self::Starting | Self::Files(_) => None,
         }
-    }
-
-    /// Whether the content is text, whose encoding the footer can mention.
-    pub fn is_text(&self) -> bool {
-        matches!(self, Self::Terminal(_) | Self::Starting)
     }
 
     /// Whether the content shows anything to read.
@@ -215,7 +210,7 @@ impl Pane {
         }
     }
 
-    /// What the footer's dot shows.
+    /// What the bar's dot shows.
     pub fn status(&self) -> PaneStatus {
         match (&self.link, self.content.has_screen()) {
             (Link::Local, true) | (Link::Live, _) => PaneStatus::Connected,
@@ -225,7 +220,7 @@ impl Pane {
         }
     }
 
-    /// What the footer calls the pane.
+    /// What the bar calls the pane.
     pub fn label(&self) -> &str {
         self.title
             .as_deref()

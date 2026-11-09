@@ -17,8 +17,8 @@ use rmx_ssh::SecretString;
 use rmx_terminal::{
     ClipboardType, Output, SessionEvent, Sink, TermEvent, Terminal, Wheel, encode_key,
 };
-use rmx_ui::theme::{FOOTER_HEIGHT, SIDEBAR_WIDTH, STRIP_HEIGHT};
-use rmx_ui::widgets::{FilesKey, MenuItem, NodeKind, PromptField, PromptState};
+use rmx_ui::theme::{PANE_BAR_HEIGHT, STRIP_HEIGHT};
+use rmx_ui::widgets::{ConnectionDraft, FilesKey, MenuItem, NodeKind, PromptField, PromptState};
 use rmx_ui::{Chrome, FilesAction, NodeId, Protocol, Sensitive, TabId, ThemeMode, UiAction, egui, icons, snippet};
 use rmx_vault::Secret;
 use tokio::runtime::Runtime;
@@ -59,15 +59,16 @@ const PREPARE_POLL: Duration = Duration::from_millis(4);
 const SPACING: f32 = 4.;
 /// Thinnest band around a divider that takes the pointer, in logical pixels.
 const DIVIDER_BAND: f32 = 8.;
+/// Distance from the middle within which a dragged divider snaps to it, in logical pixels.
+const DIVIDER_SNAP: f32 = 6.;
+/// Longest time between the presses of a double click on a divider.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 /// Smallest pane, in cells.
 const MIN_CELLS: (f32, f32) = (rmx_layout::split::MIN_COLUMNS, rmx_layout::split::MIN_LINES);
 /// How wide the band at the window's edges that resizes it is, in logical pixels.
 const RESIZE_BAND: f32 = 5.;
 /// Smallest window, in logical pixels.
 const MIN_WINDOW: (f64, f64) = (480., 320.);
-/// Commands of the pane menu.
-const COMMAND_ZOOM: u32 = 1;
-const COMMAND_CLOSE: u32 = 2;
 /// Bytes in a mebibyte, for saying how much output was lost.
 const MIB: u64 = 1024 * 1024;
 /// What is said when a clipboard cannot be carried by VNC.
@@ -120,7 +121,10 @@ impl Sink for ProxySink {
 pub enum Action {
     NewTab,
     ClosePane,
+    /// The focused session again beside it, or a local shell where that makes no sense.
     Split(Axis),
+    /// A local shell beside the focused pane.
+    SplitLocal(Axis),
     Focus(Direction),
     Zoom,
     CycleTab(isize),
@@ -140,17 +144,17 @@ pub enum Action {
 }
 
 /// The action bound to a key, if any.
-fn action_for(key: &KeyEvent, mods: ModifiersState) -> Option<Action> {
+fn action_for(key: Key<&str>, mods: ModifiersState) -> Option<Action> {
     let ctrl_shift = mods.control_key() && mods.shift_key() && !mods.alt_key();
 
-    if mods.control_key() && key.logical_key == Key::Named(NamedKey::Tab) {
+    if mods.control_key() && key == Key::Named(NamedKey::Tab) {
         return Some(Action::CycleTab(if mods.shift_key() { -1 } else { 1 }));
     }
     if !ctrl_shift {
         return None;
     }
 
-    match key.logical_key.as_ref() {
+    match key {
         Key::Named(NamedKey::ArrowLeft) => Some(Action::Focus(Direction::Left)),
         Key::Named(NamedKey::ArrowRight) => Some(Action::Focus(Direction::Right)),
         Key::Named(NamedKey::ArrowUp) => Some(Action::Focus(Direction::Up)),
@@ -186,6 +190,9 @@ enum Reply {
     DeleteFolder(u64),
     /// The values of a snippet's placeholders: send it with them.
     Snippet(String),
+    FilesNewFolder(PaneId, rmx_ui::FileSide),
+    FilesRename(PaneId, rmx_ui::FileSide, Arc<str>),
+    FilesDelete(PaneId, rmx_ui::FileSide, Vec<Arc<str>>),
 }
 
 /// What `key` does in a file pane, and whether Shift is adding to the selection.
@@ -252,10 +259,23 @@ struct DividerDrag {
     index: usize,
     /// Pointer offset from the divider's middle at the press.
     grab: f32,
+    /// The ratio at the press, which Escape goes back to.
+    ratio: f32,
 }
 
 /// Numbers the windows, for as long as the application runs. Zero is no window.
 type WinKey = u64;
+
+/// What becomes of a window whose last tab has just gone, if it turns out to be the last window.
+/// With another window left it goes either way. Decided once the current event is over, when
+/// everything that event batch closed is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WhenLast {
+    /// It stays, offering something new to open.
+    ShowEmpty,
+    /// The application ends with it.
+    Quit,
+}
 
 /// Something that needs more than one window, done once the current event is over.
 enum Op {
@@ -310,7 +330,8 @@ struct Core {
     theme: ThemeMode,
     /// When the vault's thread last heard the user is there.
     touched: Instant,
-    /// Whether a shell was opened for the vault, as happens the first time it unlocks.
+    /// Whether the first tab has been seen to: a shell opened for the vault, as happens the first
+    /// time it unlocks, or the last session reopened, even if that had no tabs left in it.
     opened_first_tab: bool,
     /// What the interfaces of all windows show alike.
     ui: Common,
@@ -359,6 +380,10 @@ struct Win {
     scene: Vec<PaneDraw>,
     pointer: PhysicalPosition<f64>,
     drag: Option<DividerDrag>,
+    /// The divider last pressed, and when, to tell double clicks.
+    last_divider: Option<(usize, Instant)>,
+    /// The button whose press opened a menu or only focused a pane: its release is nobody's.
+    swallow_release: Option<MouseButton>,
     /// The pane a button was pressed in, which keeps getting the pointer.
     captured: Option<PaneId>,
     /// Everything around the panes, and the input method's unfinished text.
@@ -371,6 +396,8 @@ struct Win {
     maximized: bool,
     /// The window is to go, once the current event is over.
     exit: bool,
+    /// Its last tab has gone, in this event: see [`WhenLast`].
+    vacated: Option<WhenLast>,
     /// Whether the window has the keyboard.
     has_focus: bool,
     /// The remote desktop that last had the keyboard, to offer it the clipboard when that changes.
@@ -427,6 +454,8 @@ impl Win {
             scene: Vec::new(),
             pointer: PhysicalPosition::default(),
             drag: None,
+            last_divider: None,
+            swallow_release: None,
             captured: None,
             shell,
             preedit: None,
@@ -434,6 +463,7 @@ impl Win {
             ime_area: None,
             maximized: false,
             exit: false,
+            vacated: None,
             has_focus: true,
             display_focus: None,
             ime_allowed: true,
@@ -563,12 +593,16 @@ impl App {
         const FIRST: WinKey = 1;
         let (gfx, chrome, mut shell) = Gfx::new(window, early, layout.theme, FIRST, None)?;
         shell.sidebar_open = layout.sidebar_open;
+        shell.sidebar_width = layout.panels.sidebar;
+        let panels = layout.panels;
         let vault = store::spawn(runtime.handle().clone(), self.proxy.clone(), paths, state)?;
         #[cfg(feature = "bench")]
         {
             self.bench.renderer = Gfx::renderer_name();
         }
 
+        let mut common = Common::for_window(FIRST);
+        common.panels = panels;
         let core = Core {
             clipboard,
             panes: Vec::new(),
@@ -583,7 +617,7 @@ impl App {
             theme: layout.theme,
             touched: Instant::now(),
             opened_first_tab: false,
-            ui: Common::for_window(FIRST),
+            ui: common,
             ops: Vec::new(),
             active: FIRST,
             broadcast: false,
@@ -621,6 +655,11 @@ fn claim_wait() -> Duration {
     CLAIM_WAIT
 }
 
+/// What the pane `id` is called.
+fn pane_label(panes: &[Pane], id: PaneId) -> &str {
+    panes.iter().find(|pane| pane.id == id).map_or("", Pane::label)
+}
+
 /// A serial port as the connection form offers it.
 fn port_choice(port: &rmx_serial::serial::PortInfo) -> rmx_ui::widgets::SerialPortChoice {
     let path = port.path.display().to_string();
@@ -630,7 +669,10 @@ fn port_choice(port: &rmx_serial::serial::PortInfo) -> rmx_ui::widgets::SerialPo
 
 /// What every window is made with: the app draws its own frame.
 fn window_attributes(size: (f64, f64), maximized: bool) -> WindowAttributes {
-    Window::default_attributes()
+    // Wayland's app id and X11's class, by which the desktop finds `rmx.desktop`.
+    use winit::platform::{wayland::WindowAttributesExtWayland as Wayland, x11::WindowAttributesExtX11 as X11};
+    let attributes = Wayland::with_name(Window::default_attributes(), "rmx", "rmx");
+    X11::with_name(attributes, "rmx", "rmx")
         .with_title("rmx")
         .with_decorations(false)
         .with_min_inner_size(LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
@@ -640,6 +682,38 @@ fn window_attributes(size: (f64, f64), maximized: bool) -> WindowAttributes {
 
 fn menu_item(glyph: char, label: &str, action: UiAction, danger: bool) -> MenuItem {
     MenuItem::Action { glyph: Some(glyph), label: label.to_owned(), shortcut: None, action, danger }
+}
+
+/// A row that the keyboard reaches too, with the keys shown.
+fn menu_keyed(glyph: char, label: &str, keys: &str, action: UiAction) -> MenuItem {
+    let shortcut = Some(keys.to_owned());
+    MenuItem::Action { glyph: Some(glyph), label: label.to_owned(), shortcut, action, danger: false }
+}
+
+/// The saved connection `user@host:port` stands for.
+fn quick_draft(text: &str) -> Option<ConnectionDraft> {
+    let text = text.trim();
+    let (user, place) = text.rsplit_once('@').map_or(("", text), |(user, place)| (user, place));
+    let (host, port) = match place.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port.parse::<u16>().ok()?)),
+        None => (place, None),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let mut draft = ConnectionDraft::new(Protocol::Ssh);
+    text.clone_into(&mut draft.name);
+    host.clone_into(&mut draft.host);
+    user.clone_into(&mut draft.username);
+    if let Some(port) = port {
+        draft.port = port.to_string();
+    }
+    Some(draft)
+}
+
+/// Whether two presses make a double click on the divider `index`.
+fn divider_double_click(last: Option<(usize, Instant)>, index: usize, now: Instant) -> bool {
+    last.is_some_and(|(last, at)| last == index && now.saturating_duration_since(at) < DOUBLE_CLICK)
 }
 
 /// A key file as typed: none when left empty.
@@ -673,7 +747,7 @@ impl At<'_> {
 
     /// The width of the sidebar, in pixels, none while it is closed.
     fn sidebar_width(&self) -> f32 {
-        if self.win.shell.sidebar_open { (SIDEBAR_WIDTH * self.scale()).round() } else { 0. }
+        if self.win.shell.sidebar_open { (self.win.shell.sidebar_width * self.scale()).round() } else { 0. }
     }
 
     /// The height of the strip of tabs, in pixels.
@@ -681,9 +755,9 @@ impl At<'_> {
         (STRIP_HEIGHT * self.scale()).round()
     }
 
-    /// The height of a pane's footer, in pixels.
-    fn footer(&self) -> f32 {
-        (FOOTER_HEIGHT * self.scale()).round()
+    /// The height of a pane's bar, in pixels.
+    fn bar(&self) -> f32 {
+        (PANE_BAR_HEIGHT * self.scale()).round()
     }
 
     /// The space the panes tile, in the window, right of the sidebar and below the strip.
@@ -700,12 +774,12 @@ impl At<'_> {
 
     fn min_pane(&self) -> (f32, f32) {
         let (cell_w, cell_h) = self.win.gfx.cell();
-        (MIN_CELLS.0 * cell_w, MIN_CELLS.1 * cell_h + self.footer())
+        (MIN_CELLS.0 * cell_w, MIN_CELLS.1 * cell_h + self.bar())
     }
 
     /// The part of a pane the terminal draws in.
     fn terminal_rect(&self, panel: Rect) -> Rect {
-        shell::terminal_rect(panel, self.footer())
+        shell::terminal_rect(panel, self.bar())
     }
 
     fn pane(&self, id: PaneId) -> Option<&Pane> {
@@ -751,6 +825,7 @@ impl At<'_> {
             maximized: self.win.maximized,
             sidebar_open: self.win.shell.sidebar_open,
             theme: self.core.theme,
+            panels: self.core.ui.panels,
         }
     }
 
@@ -769,10 +844,8 @@ impl At<'_> {
         pane.dirty = true;
         let node = pane.remote.as_ref().map(|remote| remote.node);
         if let Some(node) = node {
-            let live = self.core.panes.iter().any(|pane| {
-                pane.link == Link::Live && pane.remote.as_ref().is_some_and(|r| r.node == node)
-            });
-            self.core.ui.tree.set_live(NodeId(node), live);
+            let dot = shell::session_dot(&self.core.panes, node);
+            self.core.ui.tree.set_state(NodeId(node), dot);
             self.core.broadcast = true;
         }
         self.sync_chrome_area();
@@ -792,8 +865,8 @@ impl At<'_> {
     /// Tell the chrome where the panes are, and which parts of them are its own.
     fn sync_chrome_area(&mut self) {
         let scale = self.scale();
-        if self.core.ui.locked() {
-            // Everything is the interface's: the panes are out of sight.
+        if self.core.ui.locked() || self.win.rects.is_empty() {
+            // Everything is the interface's: the panes are out of sight, or there are none.
             self.win.chrome.set_pane_area(None);
             self.win.chrome.set_pane_holes([]);
             return;
@@ -804,12 +877,12 @@ impl At<'_> {
             egui::vec2(area.w / scale, area.h / scale),
         )));
 
-        let footer = self.footer();
+        let bar = self.bar();
         let panes = &self.core.panes;
         let holes = self.win.rects.iter().flat_map(|&(id, rect)| {
-            let content = shell::content_points(rect, footer, scale);
+            let content = shell::content_points(rect, bar, scale);
             let pane = panes.iter().find(|pane| pane.id == id);
-            std::iter::once(shell::footer_rect(rect, scale))
+            std::iter::once(shell::bar_rect(rect, scale))
                 .chain(pane.into_iter().flat_map(move |pane| pane.interface_rects(content)))
         });
         self.win.chrome.set_pane_holes(holes);
@@ -1143,24 +1216,26 @@ impl At<'_> {
         }
     }
 
-    /// A terminal has arrived from the thread that started it. Returns false to end the application.
-    fn spawned(&mut self, id: PaneId, terminal: io::Result<Terminal>) -> bool {
+    /// A terminal has arrived from the thread that started it.
+    fn spawned(&mut self, id: PaneId, terminal: io::Result<Terminal>) {
         let mut terminal = match terminal {
             Ok(terminal) => terminal,
             Err(err) => {
                 log::error!("Could not start a terminal: {err}");
-                return self.close(id);
+                self.program_ended(id);
+                return;
             },
         };
 
         // Closed while it started.
         if !self.win.workspace.contains(id) {
             self.retire(PaneContent::Terminal(Box::new(terminal)));
-            return true;
+            return;
         }
         if let Some(index) = self.core.ended_early.iter().position(|&pane| pane == id) {
             self.core.ended_early.remove(index);
-            return self.close(id);
+            self.program_ended(id);
+            return;
         }
 
         // The layout may have changed while it started.
@@ -1176,7 +1251,18 @@ impl At<'_> {
         }
         self.sync_focus(Instant::now());
         self.request_frame();
-        true
+    }
+
+    /// The program of pane `id` ended by itself, or could not start.
+    ///
+    /// `rmx -e` is a terminal for that one program, as `scripts/headless.sh` and the throughput
+    /// bench rely on: once it is over and nothing else is showing, so is the application.
+    fn program_ended(&mut self, id: PaneId) {
+        let local = self.pane(id).is_some_and(|pane| pane.remote.is_none());
+        self.close(id);
+        if local && self.win.workspace.tabs().is_empty() && startup_shell().is_some() {
+            self.win.vacated = Some(WhenLast::Quit);
+        }
     }
 
     fn retire(&self, content: PaneContent) {
@@ -1515,6 +1601,21 @@ impl At<'_> {
                     self.send_text(&text);
                 }
             },
+            Reply::FilesNewFolder(pane, side) => {
+                if let Some(name) = first.filter(|name| !name.is_empty()) {
+                    self.files_action(pane, FilesAction::NewFolder { side, name });
+                }
+            },
+            Reply::FilesRename(pane, side, from) => {
+                if let Some(to) = first.filter(|name| !name.is_empty() && *name != *from) {
+                    self.files_action(pane, FilesAction::Rename { side, from, to });
+                }
+            },
+            Reply::FilesDelete(pane, side, names) => {
+                if fields.is_some() {
+                    self.files_action(pane, FilesAction::Delete { side, names });
+                }
+            },
             Reply::DeleteConnection(node) => {
                 if fields.is_some() {
                     self.core.vault.send(Request::DeleteConnection(node));
@@ -1546,7 +1647,7 @@ impl At<'_> {
         let mut start = Vec::new();
         let active_id = active;
         for (index, tab) in tabs.into_iter().enumerate() {
-            let SavedTab { layout, focus, zoomed } = tab;
+            let SavedTab { layout, focus, zoomed, name } = tab;
             let mut gone = Vec::new();
             let order = layout.panes();
             let focused = order.get(focus).copied();
@@ -1584,7 +1685,7 @@ impl At<'_> {
             if let Some(layout) = remaining {
                 let panes = layout.panes();
                 let focus = focus_id.filter(|id| panes.contains(id)).unwrap_or(panes[0]);
-                self.win.workspace.restore_tab(layout, focus, zoomed, index == active_id);
+                self.win.workspace.restore_tab(layout, focus, zoomed, name, index == active_id);
             }
         }
         for id in start {
@@ -1614,8 +1715,7 @@ impl At<'_> {
         self.core.next_id
     }
 
-    /// Returns false once no panes are left and the application should end.
-    fn perform(&mut self, action: Action) -> bool {
+    fn perform(&mut self, action: Action) {
         match action {
             Action::NewTab => {
                 let id = self.new_id();
@@ -1624,23 +1724,14 @@ impl At<'_> {
                 if self.spawn(id) {
                     self.relayout(false);
                 } else {
-                    return self.close(id);
+                    self.close(id);
                 }
             },
-            Action::Split(axis) => {
-                let id = self.new_id();
-                if self.win.workspace.split(id, axis) {
-                    self.add_pane(Pane::local(id));
-                    if self.spawn(id) {
-                        self.relayout(true);
-                    } else {
-                        return self.close(id);
-                    }
-                }
-            },
+            Action::Split(axis) => self.split_focused(axis),
+            Action::SplitLocal(axis) => self.split_local(axis),
             Action::ClosePane => {
                 if let Some(id) = self.win.workspace.focused() {
-                    return self.close(id);
+                    self.close(id);
                 }
             },
             Action::Focus(direction) => {
@@ -1728,7 +1819,6 @@ impl At<'_> {
                 self.core.vault.send(Request::SyncNow);
             },
         }
-        true
     }
 
     fn focused_terminal(&self) -> Option<&Terminal> {
@@ -1740,6 +1830,92 @@ impl At<'_> {
         let node = self.pane(pane).and_then(|found| found.remote.as_ref()).map(|remote| remote.node);
         node.and_then(|node| self.core.ui.nodes.get(&node))
             .is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
+    }
+
+    /// Open the session of `pane` again, as a saved connection and for the same thing.
+    fn clone_of(&mut self, pane: PaneId) -> Option<(u64, String, Goal)> {
+        let remote = self.pane(pane)?.remote.as_ref()?;
+        let (node, goal) = (remote.node, remote.goal.clone());
+        let info = self.core.ui.nodes.get(&node)?;
+        Some((node, info.name.clone(), goal))
+    }
+
+    /// Put a new pane next to the focused one: the same session where another one makes sense,
+    /// else a local shell.
+    fn split_focused(&mut self, axis: Axis) {
+        let same = self.win.workspace.focused().and_then(|pane| self.clone_of(pane)).filter(|(node, _, goal)| {
+            let protocol = self.core.ui.nodes.get(node).map(|info| info.kind);
+            *goal != Goal::Session
+                || matches!(
+                    protocol,
+                    Some(NodeKind::Connection(Protocol::Ssh | Protocol::Telnet | Protocol::Sftp | Protocol::Ftp))
+                )
+        });
+        let Some((node, name, goal)) = same else {
+            self.split_local(axis);
+            return;
+        };
+        let id = self.new_id();
+        if self.win.workspace.split(id, axis) {
+            self.add_pane(Pane::remote(id, node, name, goal));
+            self.start_session(id);
+            self.relayout(true);
+        }
+    }
+
+    fn split_local(&mut self, axis: Axis) {
+        let id = self.new_id();
+        if self.win.workspace.split(id, axis) {
+            self.add_pane(Pane::local(id));
+            if self.spawn(id) {
+                self.relayout(true);
+            } else {
+                self.close(id);
+            }
+        }
+    }
+
+    /// Open the same session as `pane` again, in a tab of its own.
+    fn duplicate_session(&mut self, pane: PaneId) {
+        match self.clone_of(pane) {
+            Some((node, _, goal)) => self.open_node(node, goal),
+            None => self.perform(Action::NewTab),
+        }
+    }
+
+    /// Open the saved connection `node` beside the focused pane, or in a tab with none to go beside.
+    fn open_node_split(&mut self, node: u64, axis: Axis) {
+        let Some(info) = self.core.ui.nodes.get(&node) else { return };
+        if info.kind == NodeKind::Folder {
+            return;
+        }
+        let name = info.name.clone();
+        let id = self.new_id();
+        if self.win.workspace.split(id, axis) {
+            self.add_pane(Pane::remote(id, node, name, Goal::Session));
+            self.start_session(id);
+            self.relayout(true);
+        } else {
+            self.open_node(node, Goal::Session);
+        }
+    }
+
+    /// The panes of this window connected to `node`, most recent last.
+    fn sessions_of(&self, node: u64) -> impl Iterator<Item = &Pane> {
+        let key = self.win.key;
+        self.core.panes.iter().filter(move |pane| {
+            pane.window == key && pane.remote.as_ref().is_some_and(|remote| remote.node == node)
+        })
+    }
+
+    /// Bring `pane` into view, with the keyboard.
+    fn show_pane(&mut self, pane: PaneId) {
+        let tab = self.win.workspace.tabs().iter().position(|tab| tab.layout.panes().contains(&pane));
+        if let Some(tab) = tab {
+            self.win.workspace.select(tab);
+            self.win.workspace.focus(pane);
+            self.relayout(false);
+        }
     }
 
     /// What can be done from the menu of a node of the tree.
@@ -1754,13 +1930,172 @@ impl At<'_> {
                 menu_item(icons::TRASH_2, "Delete folder", UiAction::TreeDelete(node), true),
             ];
         }
-        vec![
+        let mut items = vec![
             menu_item(icons::PLUG, "Connect", UiAction::TreeOpen(node), false),
-            menu_item(icons::PENCIL, "Edit", UiAction::TreeEdit(node), false),
-            menu_item(icons::COPY, "Duplicate", UiAction::TreeDuplicate(node), false),
-            MenuItem::Separator,
-            menu_item(icons::TRASH_2, "Delete", UiAction::TreeDelete(node), true),
-        ]
+            menu_item(icons::COLUMNS_2, "Connect in split right", UiAction::TreeOpenSplit { id: node, down: false }, false),
+            menu_item(icons::ROWS_2, "Connect in split down", UiAction::TreeOpenSplit { id: node, down: true }, false),
+        ];
+        if info.kind == NodeKind::Connection(Protocol::Ssh) {
+            items.push(menu_item(icons::FOLDER_SYNC, "Files", UiAction::TreeOpenFiles(node), false));
+        }
+        let has_session = self.sessions_of(node.0).next().is_some();
+        let live = self.sessions_of(node.0).any(|pane| pane.link == Link::Live);
+        let down = self.sessions_of(node.0).any(|pane| matches!(pane.link, Link::Failed { .. } | Link::Closed { .. } | Link::Awaiting { .. }));
+        if has_session {
+            items.push(MenuItem::Separator);
+            items.push(menu_item(icons::SEARCH, "Show session", UiAction::TreeShow(node), false));
+            if down {
+                items.push(menu_item(icons::PLUG, "Reconnect", UiAction::TreeReconnect(node), false));
+            }
+            if live {
+                items.push(menu_item(icons::X, "Disconnect", UiAction::TreeDisconnect(node), false));
+            }
+        }
+        items.push(MenuItem::Separator);
+        items.push(menu_item(icons::PENCIL, "Edit", UiAction::TreeEdit(node), false));
+        items.push(menu_item(icons::COPY, "Duplicate", UiAction::TreeDuplicate(node), false));
+        if !info.host.is_empty() {
+            items.push(menu_item(icons::COPY, "Copy host", UiAction::CopyText(info.host.clone()), false));
+        }
+        items.push(MenuItem::Separator);
+        items.push(menu_item(icons::TRASH_2, "Delete", UiAction::TreeDelete(node), true));
+        items
+    }
+
+    /// What can be done about the session of `pane`.
+    fn session_items(&self, pane: PaneId, items: &mut Vec<MenuItem>) {
+        let id = rmx_ui::PaneId(pane);
+        let Some(found) = self.pane(pane) else { return };
+        match &found.link {
+            Link::Live => {
+                if found.content.display().is_some() {
+                    items.push(menu_item(icons::MONITOR, "Send Ctrl+Alt+Del", UiAction::PaneCtrlAltDel(id), false));
+                    items.push(menu_item(icons::MONITOR_COG, "Toggle scale", UiAction::PaneToggleScale(id), false));
+                }
+                if found.content.terminal().is_some() && self.pane_is_ssh(pane) {
+                    items.push(menu_item(icons::FOLDER_SYNC, "Files here", UiAction::PaneOpenFiles(id), false));
+                }
+                items.push(menu_item(icons::PLUG, "Disconnect", UiAction::PaneDisconnect(id), false));
+            },
+            Link::Closed { .. } | Link::Failed { .. } | Link::Awaiting { .. } => {
+                items.push(menu_item(icons::PLUG, "Reconnect", UiAction::PaneReconnect(id), false));
+            },
+            Link::Connecting { .. } => {
+                items.push(menu_item(icons::X, "Cancel", UiAction::PaneCancel(id), false));
+            },
+            Link::Local => (),
+        }
+        items.push(menu_item(icons::COPY, "Duplicate session", UiAction::PaneDuplicate(id), false));
+    }
+
+    /// Splitting and zooming `pane`.
+    fn layout_items(&self, pane: PaneId, items: &mut Vec<MenuItem>) {
+        let id = rmx_ui::PaneId(pane);
+        items.push(menu_keyed(icons::COLUMNS_2, "Split right", "Ctrl+Shift+E", UiAction::PaneSplitRight(id)));
+        items.push(menu_keyed(icons::ROWS_2, "Split down", "Ctrl+Shift+O", UiAction::PaneSplitDown(id)));
+        let tab = self.win.workspace.tabs().iter().find(|tab| tab.layout.panes().contains(&pane));
+        if tab.is_some_and(|tab| tab.layout.panes().len() > 1) {
+            let zoomed = tab.is_some_and(|tab| tab.zoomed);
+            let (glyph, label) = if zoomed { (icons::COPY, "Unzoom") } else { (icons::SQUARE, "Zoom") };
+            items.push(menu_keyed(glyph, label, "Ctrl+Shift+Z", UiAction::PaneZoom(id)));
+        }
+    }
+
+    /// What can be done from the menu of a pane.
+    fn pane_menu(&self, pane: PaneId) -> Vec<MenuItem> {
+        let id = rmx_ui::PaneId(pane);
+        let mut items = Vec::new();
+        if let Some(terminal) = self.pane(pane).and_then(|found| found.content.terminal()) {
+            if terminal.selection().is_some() {
+                items.push(menu_keyed(icons::COPY, "Copy", "Ctrl+Shift+C", UiAction::PaneCopy(id)));
+            }
+            items.push(menu_keyed(icons::CORNER_DOWN_LEFT, "Paste", "Ctrl+Shift+V", UiAction::PanePaste(id)));
+            items.push(MenuItem::Separator);
+        }
+        let before = items.len();
+        self.session_items(pane, &mut items);
+        if items.len() > before {
+            items.push(MenuItem::Separator);
+        }
+        self.layout_items(pane, &mut items);
+
+        let tabs = self.win.workspace.tabs();
+        let grouped = tabs.iter().any(|tab| tab.layout.panes().len() > 1 && tab.layout.panes().contains(&pane));
+        if grouped || tabs.len() > 1 {
+            items.push(MenuItem::Separator);
+        }
+        if grouped {
+            items.push(menu_item(icons::ARROW_RIGHT, "Move to new tab", UiAction::PaneToTab(id), false));
+        }
+        if grouped || tabs.len() > 1 {
+            items.push(menu_item(icons::SQUARE, "Move to new window", UiAction::PaneToWindow(id), false));
+        }
+        items.push(MenuItem::Separator);
+        items.push(menu_keyed(icons::X, "Close", "Ctrl+Shift+W", UiAction::PaneClose(id)));
+        items
+    }
+
+    /// What can be done from the menu of the tab `id`.
+    fn tab_menu(&self, id: TabId) -> Vec<MenuItem> {
+        let Some(index) = self.win.workspace.tab_index(id.0) else { return Vec::new() };
+        let tab = &self.win.workspace.tabs()[index];
+        let mut items = vec![menu_item(icons::PENCIL, "Rename", UiAction::TabStartRename(id), false)];
+        if tab.name.is_some() {
+            items.push(menu_item(icons::CORNER_DOWN_LEFT, "Reset name", UiAction::TabRename { id, name: None }, false));
+        }
+        items.push(MenuItem::Separator);
+        self.session_items(tab.focus, &mut items);
+        items.push(MenuItem::Separator);
+        self.layout_items(tab.focus, &mut items);
+        items.push(MenuItem::Separator);
+        if tab.layout.panes().len() > 1 {
+            items.push(menu_item(icons::COLUMNS_2, "Ungroup", UiAction::TabUngroup(id), false));
+        }
+        if self.win.workspace.tabs().len() > 1 {
+            items.push(menu_item(icons::SQUARE, "Move to new window", UiAction::TabDetach(id), false));
+        }
+        for (number, &window) in self.core.window_keys.iter().enumerate() {
+            if window != self.win.key {
+                let label = format!("Move to window {}", number + 1);
+                items.push(menu_item(icons::CORNER_DOWN_LEFT, &label, UiAction::TabToWindow(id, window), false));
+            }
+        }
+        items.push(menu_item(icons::X, "Close tab", UiAction::TabClose(id), true));
+        items
+    }
+
+    /// What can be done from the menu of a column of a file pane.
+    fn files_menu(&self, pane: PaneId, side: rmx_ui::FileSide, name: Option<Arc<str>>) -> Vec<MenuItem> {
+        let id = rmx_ui::PaneId(pane);
+        let act = |action| UiAction::Files(id, action);
+        let Some(files) = self.pane(pane).and_then(|found| found.content.files()) else { return Vec::new() };
+        let Some(name) = name else {
+            return vec![
+                menu_item(icons::FOLDER, "New folder", UiAction::FilesAskNewFolder(id, side), false),
+                menu_item(icons::FOLDER_SYNC, "Refresh", act(FilesAction::Refresh { side }), false),
+            ];
+        };
+        let names = self.core.ui.files_selected_or(pane, side, &name);
+        let row = files.rows(side).iter().find(|row| row.name == name);
+        let mut items = Vec::new();
+        if row.is_some_and(rmx_ui::widgets::FileRow::openable) {
+            items.push(menu_item(icons::FOLDER_OPEN, "Open", act(FilesAction::Open { side, name: name.clone() }), false));
+        }
+        let (glyph, label) = match side {
+            rmx_ui::FileSide::Local => (icons::ARROW_RIGHT, "Upload"),
+            rmx_ui::FileSide::Remote => (icons::ARROW_LEFT, "Download"),
+        };
+        items.push(menu_item(glyph, label, act(FilesAction::Transfer { from: side, names: names.clone() }), false));
+        let path = format!("{}/{name}", files.path(side).trim_end_matches('/'));
+        items.push(menu_item(icons::COPY, "Copy path", UiAction::CopyText(path), false));
+        items.push(MenuItem::Separator);
+        if names.len() == 1 {
+            items.push(menu_item(icons::PENCIL, "Rename", UiAction::FilesAskRename(id, side, name.clone()), false));
+        }
+        items.push(menu_item(icons::FOLDER, "New folder", UiAction::FilesAskNewFolder(id, side), false));
+        items.push(MenuItem::Separator);
+        items.push(menu_item(icons::TRASH_2, "Delete", UiAction::FilesAskDelete(id, side, names), true));
+        items
     }
 
     fn ask_delete(&mut self, node: u64) {
@@ -1833,18 +2168,18 @@ impl At<'_> {
                 }
                 self.win.chrome.cancel_pointer();
             },
-            UiAction::ToggleSidebar => return self.perform(Action::ToggleSidebar),
+            UiAction::ToggleSidebar => self.perform(Action::ToggleSidebar),
             UiAction::TabActivate(TabId(id)) => {
                 if let Some(index) = self.win.workspace.tab_index(id) {
-                    return self.perform(Action::SelectTab(index));
+                    self.perform(Action::SelectTab(index));
                 }
             },
             UiAction::TabClose(TabId(id)) => {
                 if let Some(index) = self.win.workspace.tab_index(id) {
-                    return self.close_tab(index);
+                    self.close_tab(index);
                 }
             },
-            UiAction::TabNew => return self.perform(Action::NewTab),
+            UiAction::TabNew => self.perform(Action::NewTab),
             UiAction::TabReorder { id: TabId(id), to } => {
                 if let Some(from) = self.win.workspace.tab_index(id) {
                     self.win.workspace.reorder_tab(from, to);
@@ -1852,19 +2187,27 @@ impl At<'_> {
                 }
             },
             UiAction::TabContextMenu { id, pos } => {
-                let mut items = vec![menu_item(icons::PLUS, "New tab", UiAction::TabNew, false)];
-                items.push(MenuItem::Separator);
-                if self.win.workspace.tabs().len() > 1 {
-                    items.push(menu_item(icons::SQUARE, "Move to new window", UiAction::TabDetach(id), false));
-                }
-                for (number, &window) in self.core.window_keys.iter().enumerate() {
-                    if window != self.win.key {
-                        let label = format!("Move to window {}", number + 1);
-                        items.push(menu_item(icons::CORNER_DOWN_LEFT, &label, UiAction::TabToWindow(id, window), false));
-                    }
-                }
-                items.push(menu_item(icons::X, "Close tab", UiAction::TabClose(id), true));
+                let items = self.tab_menu(id);
                 self.win.shell.open_menu(pos, items);
+            },
+            UiAction::TabStartRename(id) => {
+                if let Some(tab) = self.win.workspace.tab_index(id.0).map(|index| &self.win.workspace.tabs()[index]) {
+                    let name = tab.name.as_deref().unwrap_or(pane_label(&self.core.panes, tab.focus)).to_owned();
+                    self.win.shell.start_tab_rename(id, &name);
+                }
+            },
+            UiAction::TabRename { id: TabId(id), name } => {
+                if let Some(index) = self.win.workspace.tab_index(id) {
+                    self.win.workspace.set_tab_name(index, name);
+                    self.core.session_changed();
+                }
+            },
+            UiAction::TabUngroup(TabId(id)) => {
+                if let Some(index) = self.win.workspace.tab_index(id)
+                    && self.win.workspace.ungroup(index)
+                {
+                    self.relayout(false);
+                }
             },
             UiAction::TabDetach(TabId(id)) => {
                 self.core.ops.push(Op::Tear { from: self.win.key, what: Moved::Tab(id) });
@@ -1880,61 +2223,112 @@ impl At<'_> {
             },
             UiAction::PaneSplitRight(rmx_ui::PaneId(pane)) => {
                 self.focus_pane(pane);
-                return self.perform(Action::Split(Axis::Row));
+                self.perform(Action::Split(Axis::Row));
             },
             UiAction::PaneSplitDown(rmx_ui::PaneId(pane)) => {
                 self.focus_pane(pane);
-                return self.perform(Action::Split(Axis::Column));
+                self.perform(Action::Split(Axis::Column));
             },
             UiAction::PaneMenu { id: rmx_ui::PaneId(pane), pos } => {
                 self.focus_pane(pane);
-                let id = rmx_ui::PaneId(pane);
-                let mut items = vec![
-                    menu_item(icons::COLUMNS_2, "Split right", UiAction::PaneSplitRight(id), false),
-                    menu_item(icons::ROWS_2, "Split down", UiAction::PaneSplitDown(id), false),
-                    menu_item(icons::SQUARE, "Zoom", UiAction::Command(COMMAND_ZOOM), false),
-                ];
-                match self.pane(pane).map(|found| &found.link) {
-                    Some(Link::Live) => {
-                        let found = self.pane(pane);
-                        if found.is_some_and(|found| found.content.display().is_some()) {
-                            items.push(menu_item(icons::MONITOR, "Send Ctrl+Alt+Del", UiAction::PaneCtrlAltDel(id), false));
-                            items.push(menu_item(icons::MONITOR_COG, "Toggle scale", UiAction::PaneToggleScale(id), false));
-                        }
-                        if found.is_some_and(|found| found.content.terminal().is_some())
-                            && self.pane_is_ssh(pane)
-                        {
-                            items.push(menu_item(icons::FOLDER_SYNC, "Open files here", UiAction::PaneOpenFiles(id), false));
-                        }
-                        items.push(menu_item(icons::PLUG, "Disconnect", UiAction::PaneDisconnect(id), false));
-                    },
-                    Some(Link::Closed { .. } | Link::Failed { .. }) => {
-                        items.push(menu_item(icons::PLUG, "Reconnect", UiAction::PaneReconnect(id), false));
-                    },
-                    _ => (),
-                }
-                items.push(MenuItem::Separator);
-                items.push(menu_item(icons::X, "Close pane", UiAction::Command(COMMAND_CLOSE), true));
+                let items = self.pane_menu(pane);
                 self.win.shell.open_menu(pos, items);
+            },
+            UiAction::PaneZoom(rmx_ui::PaneId(pane)) => {
+                self.focus_pane(pane);
+                self.perform(Action::Zoom);
+            },
+            UiAction::PaneDuplicate(rmx_ui::PaneId(pane)) => self.duplicate_session(pane),
+            UiAction::PaneToTab(rmx_ui::PaneId(pane)) => {
+                let at = self.win.workspace.active_index() + 1;
+                if self.win.workspace.detach(pane, at) {
+                    self.relayout(false);
+                }
+            },
+            UiAction::PaneToWindow(rmx_ui::PaneId(pane)) => {
+                self.core.ops.push(Op::Tear { from: self.win.key, what: Moved::Pane(pane) });
+            },
+            UiAction::PaneCopy(rmx_ui::PaneId(pane)) => {
+                self.focus_pane(pane);
+                self.perform(Action::Copy);
+            },
+            UiAction::PanePaste(rmx_ui::PaneId(pane)) => {
+                self.focus_pane(pane);
+                self.perform(Action::Paste);
             },
             UiAction::PaneDragStart(rmx_ui::PaneId(pane)) => {
                 self.win.shell.start_pane_drag(&self.win.workspace, pane);
             },
-            UiAction::Command(COMMAND_ZOOM) => return self.perform(Action::Zoom),
-            UiAction::Command(COMMAND_CLOSE) => return self.perform(Action::ClosePane),
             UiAction::QuickOpenPick(id) => match self.win.shell.picked(id) {
-                Some(Picked::Run(action)) => return self.perform(action),
+                Some(Picked::Run(action)) => self.perform(action),
                 Some(Picked::Connection(id)) => self.open_connection(id),
                 Some(Picked::Snippet(id)) => self.run_snippet(id),
                 None => (),
             },
-            UiAction::NewConnection => return self.perform(Action::NewConnection),
+            UiAction::NewConnection => self.perform(Action::NewConnection),
             UiAction::ConnectionSubmit(draft) => self.core.vault.send(Request::SaveConnection(draft)),
             UiAction::ConnectionCancel
             | UiAction::QuickOpenDismiss
-            | UiAction::TreeSelect(_)
-            | UiAction::Command(_) => (),
+            | UiAction::TreeSelect(_) => (),
             UiAction::TreeOpen(NodeId(node)) => self.open_connection(node),
+            UiAction::TreeOpenSplit { id: NodeId(node), down } => {
+                self.open_node_split(node, if down { Axis::Column } else { Axis::Row });
+            },
+            UiAction::TreeOpenFiles(NodeId(node)) => self.open_node(node, Goal::Files { directory: None }),
+            UiAction::TreeShow(NodeId(node)) => {
+                if let Some(pane) = self.sessions_of(node).last().map(|pane| pane.id) {
+                    self.show_pane(pane);
+                }
+            },
+            UiAction::TreeReconnect(NodeId(node)) => {
+                let down: Vec<PaneId> = self
+                    .sessions_of(node)
+                    .filter(|pane| matches!(pane.link, Link::Failed { .. } | Link::Closed { .. } | Link::Awaiting { .. }))
+                    .map(|pane| pane.id)
+                    .collect();
+                for pane in down {
+                    self.ui_action(UiAction::PaneReconnect(rmx_ui::PaneId(pane)));
+                }
+            },
+            UiAction::TreeDisconnect(NodeId(node)) => {
+                let live: Vec<PaneId> =
+                    self.sessions_of(node).filter(|pane| pane.link == Link::Live).map(|pane| pane.id).collect();
+                for pane in live {
+                    self.hang_up(pane, "Disconnected");
+                }
+            },
+            UiAction::CopyText(text) => self.core.clipboard.store(ClipboardType::Clipboard, text),
+            UiAction::QuickConnect(text) => {
+                if let Some(draft) = quick_draft(&text) {
+                    self.core.vault.send(Request::SaveConnection(Box::new(draft)));
+                }
+            },
+            UiAction::SidebarResize(width) => {
+                self.win.shell.sidebar_width = width;
+                self.core.ui.panels.sidebar = width;
+                self.relayout(false);
+            },
+            UiAction::PanelsChanged => self.core.vault.send(Request::SaveLayout(self.layout())),
+            UiAction::FilesMenu { pane: rmx_ui::PaneId(pane), side, name, pos } => {
+                self.focus_pane(pane);
+                let items = self.files_menu(pane, side, name);
+                self.win.shell.open_menu(pos, items);
+            },
+            UiAction::FilesAskNewFolder(rmx_ui::PaneId(pane), side) => {
+                self.ask_folder_name("New folder", String::new(), Reply::FilesNewFolder(pane, side));
+            },
+            UiAction::FilesAskRename(rmx_ui::PaneId(pane), side, name) => {
+                self.ask_folder_name("Rename", name.to_string(), Reply::FilesRename(pane, side, name));
+            },
+            UiAction::FilesAskDelete(rmx_ui::PaneId(pane), side, names) => {
+                let title = match names.as_slice() {
+                    [one] => format!("Delete {one}?"),
+                    many => format!("Delete {} items?", many.len()),
+                };
+                let mut state = PromptState::new(title, "Folders go with what is in them. This cannot be undone.", Vec::new());
+                state.submit = "Delete".to_owned();
+                self.ask_here(state, Reply::FilesDelete(pane, side, names));
+            },
             UiAction::TreeFolderToggled { id, expanded } => {
                 self.core.vault.send(Request::FolderToggled { node: id.0, expanded });
             },
@@ -1959,14 +2353,14 @@ impl At<'_> {
                 self.core.vault.send(Request::Unlock { password, key_file: key_path(&key_file) });
                 self.start_vault_work();
             },
-            UiAction::VaultCreate { mut password, key_file } => {
+            UiAction::VaultCreate { mut password, key_file, plain_ok } => {
                 let password = Secret::new(password.take());
-                self.core.vault.send(Request::Create { password, key_file: key_path(&key_file) });
+                self.core.vault.send(Request::Create { password, key_file: key_path(&key_file), plain_ok });
                 self.start_vault_work();
             },
-            UiAction::VaultJoin { mut password, key_file, sync } => {
+            UiAction::VaultJoin { mut password, key_file, sync, plain_ok } => {
                 let password = Secret::new(password.take());
-                self.core.vault.send(Request::Join { password, key_file: key_path(&key_file), sync });
+                self.core.vault.send(Request::Join { password, key_file: key_path(&key_file), sync, plain_ok });
                 self.start_vault_work();
             },
             UiAction::HostKeyReject => self.answered(Some(HostKeyAnswer::Reject), None),
@@ -1982,7 +2376,7 @@ impl At<'_> {
                 }
                 self.start_session(pane);
             },
-            UiAction::PaneClose(rmx_ui::PaneId(pane)) => return self.close(pane),
+            UiAction::PaneClose(rmx_ui::PaneId(pane)) => self.close(pane),
             UiAction::PaneFocus(rmx_ui::PaneId(pane)) => self.focus_pane(pane),
             UiAction::PaneCtrlAltDel(rmx_ui::PaneId(pane)) => self.salute(pane),
             UiAction::PaneToggleScale(rmx_ui::PaneId(pane)) => self.toggle_scale(pane),
@@ -1994,13 +2388,13 @@ impl At<'_> {
                 }
                 self.link_changed(pane);
             },
-            UiAction::OpenSettings => return self.perform(Action::OpenSettings),
+            UiAction::OpenSettings => self.perform(Action::OpenSettings),
             UiAction::SettingsSave(draft) => {
                 self.core.ops.push(Op::SetTheme(draft.theme));
                 self.core.vault.send(Request::SaveSettings(draft));
             },
             UiAction::SettingsCancel => (),
-            UiAction::SyncNow => return self.perform(Action::SyncNow),
+            UiAction::SyncNow => self.perform(Action::SyncNow),
             UiAction::ImportSshConfig => self.core.vault.send(Request::ImportSshConfig),
             UiAction::SnippetSave { id, name, body } => {
                 self.core.vault.send(Request::SaveSnippet { id, name, body });
@@ -2157,8 +2551,8 @@ impl At<'_> {
         }
     }
 
-    /// Land a dragged pane. Returns false once the application should end.
-    fn drop_pane(&mut self, drop: PaneDrop) -> bool {
+    /// Land a dragged pane.
+    fn drop_pane(&mut self, drop: PaneDrop) {
         let PaneDrop { pane, source, target } = drop;
         let (area, spacing, min) = (self.area(), self.spacing(), self.min_pane());
         let animate = match target {
@@ -2186,20 +2580,18 @@ impl At<'_> {
             },
         };
         self.relayout(animate);
-        true
     }
 
-    /// Close every pane of the tab at `index`. Returns false once no panes are left.
-    fn close_tab(&mut self, index: usize) -> bool {
+    /// Close every pane of the tab at `index`.
+    fn close_tab(&mut self, index: usize) {
         let closed = self.win.workspace.close_tab(index);
         for &id in &closed {
             self.remove_pane(id);
         }
         if self.win.workspace.tabs().is_empty() {
-            return false;
+            self.win.vacated = Some(WhenLast::ShowEmpty);
         }
         self.relayout(false);
-        true
     }
 
     /// Run egui if it needs to, and do what comes of it. Returns whether what it draws changed.
@@ -2221,7 +2613,7 @@ impl At<'_> {
                 now,
                 area: self.area(),
                 spacing: self.spacing(),
-                footer: self.footer(),
+                bar: self.bar(),
                 min_pane: self.min_pane(),
                 maximized: self.win.maximized,
             };
@@ -2239,7 +2631,7 @@ impl At<'_> {
                 self.win.exit |= !self.ui_action(action);
             }
             if let Some(drop) = self.win.shell.dropped.take() {
-                self.win.exit |= !self.drop_pane(drop);
+                self.drop_pane(drop);
             }
             if !acted {
                 break;
@@ -2335,16 +2727,16 @@ impl At<'_> {
         self.win.captured.is_some() || self.win.drag.is_some()
     }
 
-    /// Remove a pane. Returns false once none are left.
-    fn close(&mut self, id: PaneId) -> bool {
+    /// Remove a pane, leaving the window empty if it was the last.
+    fn close(&mut self, id: PaneId) {
         self.remove_pane(id);
         match self.win.workspace.close(id) {
-            Closed::Empty => false,
-            Closed::NotFound => true,
-            Closed::Remaining => {
+            Closed::NotFound => (),
+            Closed::Empty => {
+                self.win.vacated = Some(WhenLast::ShowEmpty);
                 self.relayout(true);
-                true
             },
+            Closed::Remaining => self.relayout(true),
         }
     }
 
@@ -2357,10 +2749,8 @@ impl At<'_> {
         pane.hang_up();
         self.retire(pane.content);
         if let Some(node) = node {
-            let live = self.core.panes.iter().any(|pane| {
-                pane.link == Link::Live && pane.remote.as_ref().is_some_and(|r| r.node == node)
-            });
-            self.core.ui.tree.set_live(NodeId(node), live);
+            let dot = shell::session_dot(&self.core.panes, node);
+            self.core.ui.tree.set_state(NodeId(node), dot);
         }
     }
 
@@ -2387,6 +2777,7 @@ impl At<'_> {
 
     fn drag_divider(&mut self, drag: DividerDrag, point: (f32, f32)) {
         let (area, spacing, min) = (self.area(), self.spacing(), self.min_pane());
+        let snap = DIVIDER_SNAP * self.scale();
         let Some(tab) = self.win.workspace.active_mut() else { return };
         let dividers = tab.layout.dividers(area, spacing);
         let Some(divider) = dividers.get(drag.index).copied() else { return };
@@ -2399,24 +2790,112 @@ impl At<'_> {
             Axis::Row => (point.0, divider.area.x, divider.area.w),
             Axis::Column => (point.1, divider.area.y, divider.area.h),
         };
-        let ratio = (at - drag.grab - spacing / 2. - start) / (length - spacing);
+        let wanted = at - drag.grab;
+        let ratio = if (wanted - (start + length / 2.)).abs() <= snap {
+            0.5
+        } else {
+            (wanted - spacing / 2. - start) / (length - spacing)
+        };
         tab.layout.set_ratio(drag.index, ratio.clamp(low, high));
         self.relayout(false);
+        self.show_divider_pill(Some(divider), point, true);
     }
 
-    /// The pane under `point`, and the point relative to it.
+    /// The ratio of the divider `divider` of the active tab, as it is now.
+    fn divider_ratio(&self, divider: &Divider) -> f32 {
+        let spacing = self.spacing();
+        let (start, length) = match divider.axis {
+            Axis::Row => (divider.area.x, divider.area.w),
+            Axis::Column => (divider.area.y, divider.area.h),
+        };
+        (divider.at - spacing / 2. - start) / (length - spacing).max(1.)
+    }
+
+    /// Set the divider `index` of the active tab to `ratio` as far as its panes allow, sliding.
+    fn set_divider(&mut self, index: usize, ratio: f32) {
+        let (area, spacing, min) = (self.area(), self.spacing(), self.min_pane());
+        let Some(tab) = self.win.workspace.active_mut() else { return };
+        let dividers = tab.layout.dividers(area, spacing);
+        let Some(divider) = dividers.get(index).copied() else { return };
+        let (low, high) = tab.layout.ratio_range(index, divider.area, min, spacing).unwrap_or((0.5, 0.5));
+        tab.layout.set_ratio(index, ratio.clamp(low, high));
+        self.relayout(true);
+    }
+
+    /// Show the pill on `divider`, or hide it, in the interface's next pass if that changed it.
+    fn show_divider_pill(&mut self, divider: Option<Divider>, point: (f32, f32), dragged: bool) {
+        let scale = self.scale();
+        let band = divider.map(|divider| {
+            let area = divider.area;
+            let (rect, upright, along) = match divider.axis {
+                Axis::Row => (Rect::new(divider.at - scale * 2., area.y, scale * 4., area.h), true, point.1),
+                Axis::Column => (Rect::new(area.x, divider.at - scale * 2., area.w, scale * 4.), false, point.0),
+            };
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(rect.x / scale, rect.y / scale),
+                egui::vec2(rect.w / scale, rect.h / scale),
+            );
+            (rect, upright, along / scale)
+        });
+        if self.win.shell.hover_divider(band, dragged, Instant::now()) {
+            self.win.chrome.invalidate();
+            self.request_frame();
+        }
+    }
+
+    /// Let go of the divider being dragged, as a press of Escape or a lost focus can do.
+    fn cancel_divider_drag(&mut self) {
+        if let Some(drag) = self.win.drag.take() {
+            self.win.last_divider = None;
+            self.set_divider(drag.index, drag.ratio);
+            self.show_divider_pill(None, (0., 0.), false);
+        }
+    }
+
+    /// The pane under `point`, and the point relative to what it shows.
     fn pane_at(&self, point: (f32, f32)) -> Option<(PaneId, f32, f32)> {
         let position = (f64::from(point.0), f64::from(point.1));
-        let footer = self.footer();
-        self.win.rects
-            .iter()
-            .find(|(_, rect)| shell::terminal_rect(*rect, footer).contains(position))
-            .map(|&(id, rect)| (id, point.0 - rect.x, point.1 - rect.y))
+        let bar = self.bar();
+        self.win.rects.iter().find_map(|&(id, rect)| {
+            let content = shell::terminal_rect(rect, bar);
+            content.contains(position).then_some((id, point.0 - content.x, point.1 - content.y))
+        })
     }
 
     fn pointer_in(&self, id: PaneId, point: (f32, f32)) -> Option<(f32, f32)> {
         let &(_, rect) = self.win.rects.iter().find(|&&(pane, _)| pane == id)?;
-        Some((point.0 - rect.x, point.1 - rect.y))
+        let content = shell::terminal_rect(rect, self.bar());
+        Some((point.0 - content.x, point.1 - content.y))
+    }
+
+    /// A right press in the pane `id`. Returns whether that was all it did: it gives an unfocused
+    /// pane the keyboard, and opens the pane's menu unless what is inside takes the mouse and Shift
+    /// is not held. Control is left to the terminal, for extending a selection.
+    fn right_press(&mut self, id: PaneId, mods: ModifiersState) -> bool {
+        if mods.control_key() {
+            return false;
+        }
+        let focused = self.win.workspace.focused() == Some(id);
+        if !focused {
+            self.focus_pane(id);
+        }
+        let takes_mouse = self.pane(id).is_some_and(|pane| {
+            pane.content.display().is_some()
+                || pane.content.terminal().is_some_and(|terminal| {
+                    let mode = terminal.mode();
+                    mode.intersects(rmx_terminal::TermMode::MOUSE_MODE) && !mode.contains(rmx_terminal::TermMode::VI)
+                })
+        });
+        if takes_mouse && !mods.shift_key() {
+            return !focused;
+        }
+        let scale = self.scale();
+        let pos = egui::pos2(self.win.pointer.x as f32 / scale, self.win.pointer.y as f32 / scale);
+        let items = self.pane_menu(id);
+        self.win.shell.open_menu(pos, items);
+        self.win.chrome.invalidate();
+        self.request_frame();
+        true
     }
 
     fn pointer_moved(&mut self, position: PhysicalPosition<f64>, mods: ModifiersState) {
@@ -2445,7 +2924,9 @@ impl At<'_> {
             return;
         }
 
-        let icon = match self.divider_at(point).map(|divider| divider.axis) {
+        let hovered = self.divider_at(point);
+        self.show_divider_pill(hovered, point, false);
+        let icon = match hovered.map(|divider| divider.axis) {
             Some(Axis::Row) => CursorIcon::EwResize,
             Some(Axis::Column) => CursorIcon::NsResize,
             None if self.pane_at(point).is_some_and(|(id, ..)| {
@@ -2478,18 +2959,35 @@ impl At<'_> {
         let point = (self.win.pointer.x as f32, self.win.pointer.y as f32);
         let pressed = state == ElementState::Pressed;
 
+        if !pressed && self.win.swallow_release == Some(button) {
+            self.win.swallow_release = None;
+            return;
+        }
+
         if button == MouseButton::Left && !pressed && self.win.drag.take().is_some() {
+            let hovered = self.divider_at(point);
+            self.show_divider_pill(hovered, point, false);
             return;
         }
 
         if button == MouseButton::Left && pressed {
             if let Some(divider) = self.divider_at(point) {
+                let now = Instant::now();
+                let index = divider.index;
+                let last = self.win.last_divider.replace((index, now));
+                if divider_double_click(last, index, now) {
+                    self.win.last_divider = None;
+                    self.win.swallow_release = Some(button);
+                    self.set_divider(index, 0.5);
+                    return;
+                }
                 let at = match divider.axis {
                     Axis::Row => point.0,
                     Axis::Column => point.1,
                 };
-                let index = divider.index;
-                self.win.drag = Some(DividerDrag { index, grab: at - divider.at });
+                let ratio = self.divider_ratio(&divider);
+                self.win.drag = Some(DividerDrag { index, grab: at - divider.at, ratio });
+                self.show_divider_pill(Some(divider), point, true);
                 return;
             }
 
@@ -2502,6 +3000,17 @@ impl At<'_> {
                 self.redraw_all();
                 return;
             }
+        }
+
+        // A right click is the pane's, not its program's, unless the program asks for the mouse.
+        if button == MouseButton::Right
+            && pressed
+            && self.win.captured.is_none()
+            && let Some((id, ..)) = self.pane_at(point)
+            && self.right_press(id, mods)
+        {
+            self.win.swallow_release = Some(button);
+            return;
         }
 
         let target = self.win.captured.or_else(|| self.pane_at(point).map(|(id, ..)| id));
@@ -2596,7 +3105,7 @@ impl At<'_> {
         let full = std::mem::take(&mut self.win.full) || animating || self.win.was_animating || changed;
         self.win.was_animating = animating;
 
-        let footer = self.footer();
+        let bar = self.bar();
         let focused = self.win.workspace.focused();
         let motion = &self.win.motion;
         let panes = &self.core.panes;
@@ -2612,8 +3121,8 @@ impl At<'_> {
             scene.push(PaneDraw {
                 terminal,
                 display,
-                rect: shell::terminal_rect(rect, footer),
-                rest: shell::terminal_rect(rest, footer),
+                rect: shell::terminal_rect(rect, bar),
+                rest: shell::terminal_rect(rest, bar),
                 focused: focused == Some(id),
                 dirty,
                 stale: false,
@@ -2674,9 +3183,7 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Wakeup(id) => running.wakeup(id),
             AppEvent::Spawned(id, terminal) => {
                 let Some(mut at) = running.at_pane(id) else { return };
-                if !at.spawned(id, *terminal) {
-                    at.win.exit = true;
-                }
+                at.spawned(id, *terminal);
             },
             AppEvent::Session(id, event) => {
                 if let Some(mut at) = running.at_pane(id) {
@@ -2743,11 +3250,7 @@ impl ApplicationHandler<AppEvent> for App {
                 match terminal.handle(event, &theme) {
                     Output::Title(title) => at.set_title(id, Some(title)),
                     Output::ResetTitle => at.set_title(id, None),
-                    Output::Exit => {
-                        if !at.close(id) {
-                            at.win.exit = true;
-                        }
-                    },
+                    Output::Exit => at.program_ended(id),
                     Output::ClipboardStore(ty, text) => at.core.clipboard.store(ty, text),
                     Output::ClipboardLoad(ty, format) => {
                         let text = format(&at.core.clipboard.load(ty));
@@ -2790,6 +3293,28 @@ impl ApplicationHandler<AppEvent> for App {
             if let Err(err) = at.win.gfx.window.drag_resize_window(direction) {
                 log::warn!("Could not resize the window: {err}");
             }
+            return;
+        }
+
+        // Over anything but the menu, a right press closes it and counts for what is there.
+        if let WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } = event
+            && at.win.shell.menu_open()
+        {
+            let scale = at.scale();
+            let at_point = egui::pos2(at.win.pointer.x as f32 / scale, at.win.pointer.y as f32 / scale);
+            if !at.win.shell.menu_contains(at_point) {
+                at.win.shell.close_menu();
+                at.win.chrome.float_closed();
+                at.request_frame();
+            }
+        }
+
+        if let WindowEvent::KeyboardInput { event: key, .. } = &event
+            && at.win.drag.is_some()
+            && key.state == ElementState::Pressed
+            && key.logical_key == Key::Named(NamedKey::Escape)
+        {
+            at.cancel_divider_drag();
             return;
         }
 
@@ -2918,6 +3443,12 @@ impl ApplicationHandler<AppEvent> for App {
             },
             WindowEvent::Focused(focused) => {
                 at.win.has_focus = focused;
+                // The release that would end a drag may never come now.
+                if !focused {
+                    at.win.drag = None;
+                    at.show_divider_pill(None, (0., 0.), false);
+                    at.win.shell.cancel_pane_drag(Instant::now());
+                }
                 if let Some(pane) = at.focused_mut() {
                     pane.content.set_focused(focused);
                     pane.dirty = true;
@@ -2935,9 +3466,9 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
                 let mods = self.modifiers;
-                if let Some(action) = action_for(&event, mods) {
-    if event.state == ElementState::Pressed && !at.perform(action) {
-                        at.win.exit = true;
+                if let Some(action) = action_for(event.logical_key.as_ref(), mods) {
+                    if event.state == ElementState::Pressed {
+                        at.perform(action);
                     }
                     return;
                 }
@@ -2979,8 +3510,9 @@ impl ApplicationHandler<AppEvent> for App {
                 if !held && let Some(direction) = at.resize_edge_at(point) {
                     at.win.pointer = position;
                     at.set_cursor(resize_cursor(direction));
-                } else if consumed {
+                } else if consumed && at.win.chrome.pointer_on_interface() {
                     at.win.pointer = position;
+                    at.show_divider_pill(None, (0., 0.), false);
                 } else {
                     at.pointer_moved(position, self.modifiers);
                 }
@@ -3149,7 +3681,56 @@ impl At<'_> {
     fn files_area(&self) -> Option<egui::Rect> {
         let id = self.win.workspace.focused()?;
         let &(_, rect) = self.win.rects.iter().find(|&&(pane, _)| pane == id)?;
-        Some(shell::content_points(rect, self.footer(), self.scale()))
+        Some(shell::content_points(rect, self.bar(), self.scale()))
+    }
+
+    /// Where a script means by `target`, in window pixels.
+    fn script_point(&self, target: &crate::bench::Point) -> Option<(f32, f32)> {
+        use crate::bench::Point as P;
+        let scale = self.scale();
+        let panel = |index: usize| self.win.rects.get(index).map(|&(_, rect)| rect);
+        match *target {
+            P::By(dx, dy) => Some((self.win.pointer.x as f32 + dx, self.win.pointer.y as f32 + dy)),
+            P::Pane(index, fx, fy) => {
+                let rect = panel(index)?;
+                Some((rect.x + rect.w * fx, rect.y + rect.h * fy))
+            },
+            P::Bar(index) => {
+                let rect = panel(index)?;
+                Some((rect.x + rect.w * 0.4, rect.y + PANE_BAR_HEIGHT * scale / 2.))
+            },
+            P::BarButton(index, from_right) => {
+                let rect = panel(index)?;
+                let (button, step) = (PANE_BAR_HEIGHT - 4., PANE_BAR_HEIGHT - 2.);
+                let x = rect.right() - (2. + button / 2. + from_right as f32 * step) * scale;
+                Some((x, rect.y + PANE_BAR_HEIGHT * scale / 2.))
+            },
+            P::Divider(index) => {
+                let tab = self.win.workspace.active()?;
+                let dividers = tab.layout.dividers(self.area(), self.spacing());
+                let divider = dividers.get(index)?;
+                Some(match divider.axis {
+                    Axis::Row => (divider.at, divider.area.y + divider.area.h / 2.),
+                    Axis::Column => (divider.area.x + divider.area.w / 2., divider.at),
+                })
+            },
+            P::SidebarEdge => {
+                let (_, height) = self.win.gfx.window_size();
+                Some((self.sidebar_width(), height / 2.))
+            },
+            P::FilesSplit | P::FilesQueue => {
+                let area = self.files_area()?;
+                let (x, y) = rmx_ui::widgets::files_edges(area, &self.core.ui.panels);
+                Some(match target {
+                    P::FilesSplit => (x * scale, (area.top() + 100.) * scale),
+                    _ => (area.center().x * scale, y * scale),
+                })
+            },
+            P::MenuRow(ref label) => {
+                let at = self.win.shell.menu_offers(label)?;
+                Some((at.x * scale, at.y * scale))
+            },
+        }
     }
 
     fn condition_holds(&self, condition: &crate::bench::Condition, windows: usize) -> bool {
@@ -3207,7 +3788,30 @@ impl At<'_> {
                         }
                 })
             }),
+            C::Unencrypted => self.core.ui.unencrypted,
+            C::SyncFailed(found) => {
+                matches!(&self.core.ui.sync, SyncState::Failed(reason) if reason.contains(found.as_str()))
+            },
             C::Clipboard(found) => self.bench_clipboard().contains(found.as_str()),
+            C::Zoomed(zoomed) => self.win.workspace.active().is_some_and(|tab| tab.zoomed == *zoomed),
+            C::Menu(open) => self.win.shell.menu_open() == *open,
+            C::MenuOffers(label) => self.win.shell.menu_offers(label).is_some(),
+            C::Sidebar(low, high) => (*low..=*high).contains(&self.win.shell.sidebar_width),
+            C::FilesSplit(low, high) => (*low..=*high).contains(&self.core.ui.panels.files_split),
+            C::FilesQueue(low, high) => (*low..=*high).contains(&self.core.ui.panels.files_queue),
+            C::Ratio(low, high) => {
+                let tab = self.win.workspace.active();
+                let dividers = tab.map(|tab| tab.layout.dividers(self.area(), self.spacing()));
+                dividers.as_ref().and_then(|dividers| dividers.first()).is_some_and(|divider| {
+                    (*low..=*high).contains(&self.divider_ratio(divider))
+                })
+            },
+            C::FirstSplit(axis) => {
+                let tab = self.win.workspace.active();
+                let dividers = tab.map(|tab| tab.layout.dividers(self.area(), self.spacing()));
+                dividers.as_ref().and_then(|dividers| dividers.first()).is_some_and(|d| d.axis == *axis)
+            },
+            C::TabName(name) => self.win.workspace.active().is_some_and(|tab| tab.name.as_deref() == Some(name)),
             C::Notice(found) => self
                 .win
                 .workspace
@@ -3265,9 +3869,7 @@ impl App {
             Some(Step::Action(action)) => {
                 let what = action.clone();
                 let start = Instant::now();
-                if !at.perform(action) {
-                    event_loop.exit();
-                }
+                at.perform(action);
                 self.bench.action(start.elapsed(), &format!("{what:?}"));
             },
             Some(Step::Ui(what, action)) => {
@@ -3420,7 +4022,7 @@ impl App {
                 let area = at.files_area();
                 let files = at.focused_files();
                 if let (Some(area), Some(files)) = (area, files)
-                    && let Some(point) = files.row_point(area, side, &name)
+                    && let Some(point) = files.row_point(area, side, &name, &at.core.ui.panels)
                 {
                     let scale = at.scale();
                     let position = PhysicalPosition::new(f64::from(point.x * scale), f64::from(point.y * scale));
@@ -3469,6 +4071,24 @@ impl App {
                 }
                 self.bench.action(start.elapsed(), "link");
             },
+            Some(Step::Shortcut(letter)) => {
+                // What the keyboard's way through `window_event` does, short of the key itself,
+                // which cannot be made up: a script has no way to build a winit `KeyEvent`.
+                let mods = ModifiersState::CONTROL | ModifiersState::SHIFT;
+                if !at.core.ui.locked()
+                    && !at.win.chrome.has_keyboard()
+                    && let Some(action) = action_for(Key::Character(letter.as_str()), mods)
+                {
+                    at.perform(action);
+                }
+            },
+            Some(Step::CloseTab(index)) => {
+                if let Some(id) = at.win.workspace.tabs().get(index).map(|tab| tab.id) {
+                    let start = Instant::now();
+                    at.ui_action(UiAction::TabClose(TabId(id)));
+                    self.bench.action(start.elapsed(), "close-tab");
+                }
+            },
             Some(Step::Window(index)) => self.script_window = index,
             Some(Step::Form(protocol)) => {
                 at.win.shell.dialog.open_form(protocol);
@@ -3483,6 +4103,14 @@ impl App {
                 if let Some(point) = point {
                     let scale = f64::from(at.scale());
                     let position = PhysicalPosition::new(f64::from(point.x) * scale, f64::from(point.y) * scale);
+                    let device_id = winit::event::DeviceId::dummy();
+                    let id = at.win.gfx.window.id();
+                    self.window_event(event_loop, id, WindowEvent::CursorMoved { device_id, position });
+                }
+            },
+            Some(Step::Point(target)) => {
+                if let Some((x, y)) = at.script_point(&target) {
+                    let position = PhysicalPosition::new(f64::from(x), f64::from(y));
                     let device_id = winit::event::DeviceId::dummy();
                     let id = at.win.gfx.window.id();
                     self.window_event(event_loop, id, WindowEvent::CursorMoved { device_id, position });
@@ -3527,6 +4155,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quick_connect_reads_user_host_and_port() {
+        let draft = quick_draft("alice@db.example.com:2222").unwrap();
+        assert_eq!((draft.username.as_str(), draft.host.as_str(), draft.port.as_str()), ("alice", "db.example.com", "2222"));
+        let draft = quick_draft("db.example.com").unwrap();
+        assert_eq!((draft.username.as_str(), draft.port.as_str()), ("", "22"));
+        assert!(quick_draft("alice@:22").is_none());
+        assert!(quick_draft("host:notaport").is_none());
+    }
+
+    #[test]
+    fn two_quick_presses_on_one_divider_are_a_double_click() {
+        let now = Instant::now();
+        assert!(divider_double_click(Some((1, now)), 1, now + Duration::from_millis(300)));
+        assert!(!divider_double_click(Some((0, now)), 1, now + Duration::from_millis(300)));
+        assert!(!divider_double_click(Some((1, now)), 1, now + DOUBLE_CLICK));
+        assert!(!divider_double_click(None, 1, now));
+    }
+
+    #[test]
     fn keys_of_a_file_pane_go_unmodified_or_with_shift() {
         let none = ModifiersState::empty();
         let down = || Key::Named(NamedKey::ArrowDown);
@@ -3536,6 +4183,15 @@ mod tests {
         assert_eq!(files_key_for(Key::Named(NamedKey::Tab), none), Some((FilesKey::Switch, false)));
         assert_eq!(files_key_for(Key::Named(NamedKey::F5), none), Some((FilesKey::Copy, false)));
         assert_eq!(files_key_for(Key::Character("a"), none), None);
+    }
+
+    #[test]
+    fn the_keys_offered_on_the_empty_page_do_what_it_says() {
+        let keys = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(action_for(Key::Character("t"), keys), Some(Action::NewTab));
+        assert_eq!(action_for(Key::Character("T"), keys), Some(Action::NewTab));
+        assert_eq!(action_for(Key::Character("n"), keys), Some(Action::NewConnection));
+        assert_eq!(action_for(Key::Character("t"), ModifiersState::CONTROL), None);
     }
 
     #[test]

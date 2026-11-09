@@ -19,6 +19,8 @@ pub struct Tab {
     pub layout: Split<PaneId>,
     pub focus: PaneId,
     pub zoomed: bool,
+    /// What the user called it, shown instead of what its focused pane is called.
+    pub name: Option<String>,
 }
 
 /// What closing a pane left behind.
@@ -75,7 +77,7 @@ impl Workspace {
 
     fn new_tab(&mut self, pane: PaneId) -> Tab {
         self.next_tab += 1;
-        Tab { id: self.next_tab, layout: Split::Pane(pane), focus: pane, zoomed: false }
+        Tab { id: self.next_tab, layout: Split::Pane(pane), focus: pane, zoomed: false, name: None }
     }
 
     /// The index of the tab with the id `id`.
@@ -138,9 +140,17 @@ impl Workspace {
     }
 
     /// Put back a tab saved earlier, as the last one, and switch to it if `active`.
-    pub fn restore_tab(&mut self, layout: Split<PaneId>, focus: PaneId, zoomed: bool, active: bool) {
+    pub fn restore_tab(
+        &mut self,
+        layout: Split<PaneId>,
+        focus: PaneId,
+        zoomed: bool,
+        name: Option<String>,
+        active: bool,
+    ) {
         let mut tab = self.new_tab(focus);
         tab.layout = layout;
+        tab.name = name;
         tab.zoomed = zoomed && tab.layout.panes().len() > 1;
         self.tabs.push(tab);
         if active {
@@ -265,6 +275,36 @@ impl Workspace {
         let tab = self.new_tab(pane);
         self.tabs.insert(at, tab);
         self.active = at;
+        true
+    }
+
+    /// Call the tab at `index` this, or again what its focused pane is called.
+    pub fn set_tab_name(&mut self, index: usize, name: Option<String>) {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.name = name;
+        }
+    }
+
+    /// Make each pane of the tab at `index` a tab of its own, in reading order, the first keeping
+    /// the tab. The focused pane stays focused, in its new tab. Returns whether it was a group.
+    pub fn ungroup(&mut self, index: usize) -> bool {
+        let Some(tab) = self.tabs.get(index).filter(|tab| tab.layout.panes().len() > 1) else {
+            return false;
+        };
+        let (focus, panes) = (tab.focus, tab.layout.panes());
+        let was_active = self.active == index;
+        self.tabs[index].layout = Split::Pane(panes[0]);
+        self.tabs[index].focus = panes[0];
+        self.tabs[index].zoomed = false;
+        for (offset, &pane) in panes[1..].iter().enumerate() {
+            let tab = self.new_tab(pane);
+            self.tabs.insert(index + 1 + offset, tab);
+        }
+        if was_active {
+            self.active = index + panes.iter().position(|&pane| pane == focus).unwrap_or(0);
+        } else if self.active > index {
+            self.active += panes.len() - 1;
+        }
         true
     }
 
@@ -520,6 +560,29 @@ mod tests {
         let tab = workspace.take_pane(2).unwrap();
         assert_eq!(tab.layout.panes(), [2]);
         assert!(workspace.tabs().is_empty());
+    }
+
+    #[test]
+    fn ungrouping_keeps_reading_order_and_the_focused_pane() {
+        let mut workspace = Workspace::default();
+        workspace.add_tab(9);
+        workspace.add_tab(1);
+        workspace.split(2, Axis::Row);
+        workspace.split(3, Axis::Column);
+        workspace.add_tab(8);
+        workspace.select(1);
+        workspace.focus(2);
+        assert!(workspace.ungroup(1));
+        let panes: Vec<_> = workspace.tabs().iter().map(|tab| tab.layout.panes()).collect();
+        assert_eq!(panes, [vec![9], vec![1], vec![2], vec![3], vec![8]]);
+        assert_eq!(workspace.focused(), Some(2));
+        assert!(!workspace.ungroup(0), "a lone pane is no group");
+
+        // Tabs after the group move along with the active one.
+        let mut workspace = two();
+        workspace.add_tab(3);
+        assert!(workspace.ungroup(0));
+        assert_eq!(workspace.focused(), Some(3));
     }
 
     #[test]

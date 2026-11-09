@@ -199,6 +199,11 @@ impl ChromeCore {
         if self.dirty { Some(self.start) } else { self.deadline }
     }
 
+    /// Whether something floats over the panes, like a menu or a dialog.
+    pub fn float_open(&self) -> bool {
+        self.float_open
+    }
+
     /// Whether the keyboard belongs to the interface just now: a field or something floating.
     pub fn has_keyboard(&self) -> bool {
         self.float_open || self.ctx.egui_wants_keyboard_input()
@@ -331,6 +336,12 @@ impl ChromeCore {
         self.pointer.is_some_and(|pos| self.pointer_concerns_egui(pos))
     }
 
+    /// A float was just closed outside egui: the pointer and keyboard are free at once.
+    pub fn float_closed(&mut self) {
+        self.float_open = false;
+        self.dirty = true;
+    }
+
     /// Release all buttons, after handing a drag to the compositor.
     pub fn cancel_pointer(&mut self) {
         self.buttons_delivered = 0;
@@ -397,9 +408,12 @@ impl ChromeCore {
         self.textures.append(output.textures_delta);
         self.take_platform_output(output.platform_output);
 
-        // Anything above the root layer is a float: motion over panes concerns it after all.
+        // Anything above the root layer is a float: motion over panes concerns it after all. A
+        // tooltip only says something, and leaves the keyboard where it was.
         self.float_open = self.ctx.memory(|m| {
-            m.areas().visible_layer_ids().iter().any(|layer| layer.order != egui::Order::Background)
+            m.areas().visible_layer_ids().iter().any(|layer| {
+                layer.order != egui::Order::Background && layer.order != egui::Order::Tooltip
+            })
         });
 
         let delay = output
@@ -570,6 +584,10 @@ impl Chrome {
 
         let ppp = self.core.ppp;
         let primitives = &mut self.core.primitives;
+        // Room for every clip is made on a full frame, so that a partial one never allocates.
+        if damage.is_none() {
+            self.clips.reserve(primitives.len().saturating_sub(self.clips.len()));
+        }
         if let Some(damage) = damage {
             let clip = Rect::from_min_size(
                 pos2(damage.x as f32 / ppp, damage.y as f32 / ppp),

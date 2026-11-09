@@ -14,14 +14,15 @@ use rmx_layout::{PaneId, Rect};
 use rmx_ui::egui::{
     self, Color32, Context, CornerRadius, Id, LayerId, Order, Stroke, StrokeKind, Ui, pos2, vec2,
 };
-use rmx_ui::theme::{self, FOOTER_HEIGHT, Palette, RADIUS, RADIUS_SM, SIDEBAR_WIDTH, STRIP_HEIGHT};
+use rmx_ui::theme::{self, PANE_BAR_HEIGHT, Palette, RADIUS, RADIUS_SM, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH, STRIP_HEIGHT};
 use rmx_ui::widgets::{
-    ContextMenu, FilesKey, FilesState, HostKeyView, MenuItem, NewConnectionState, NodeKind, PaneFooterView,
-    PromptState, QuickItem, QuickOpenState, SIDEBAR_STATUS_HEIGHT, SettingsState, SettingsView,
-    SidebarStatus, SnippetRow, SnippetsState, TabStripState, TabView, TitleBarView, TreeModel, TreeState, VaultSetupState,
-    VaultSetupView, VaultState, VaultView, context_menu, files_pane, host_key_dialog,
-    new_connection_dialog, pane_footer, pane_notice, pane_overlay, prompt_dialog, quick_open,
-    settings_dialog, sidebar, sidebar_status, snippets_dialog, title_bar, vault_setup, vault_unlock,
+    ContextMenu, FilesKey, FilesState, HostKeyView, MenuItem, NewConnectionState, NodeKind, PaneBarView,
+    Panels, PromptState, QuickItem, QuickOpenState, Reveal, SIDEBAR_STATUS_HEIGHT, SessionDot, SettingsState,
+    SettingsView, SidebarStatus, SnippetRow, SnippetsState, TabStripState, TabView, TitleBarView, TreeModel,
+    TreeState, VaultSetupState, VaultSetupView, VaultState, VaultView, context_menu, empty_state, files_pane,
+    host_key_dialog, new_connection_dialog, paint_pill, pane_bar, pane_notice, pane_overlay, prompt_dialog,
+    quick_open, resize_handle, settings_dialog, sidebar, sidebar_status, snippets_dialog, title_bar, vault_setup,
+    vault_unlock,
 };
 use rmx_ui::{FileSide, NodeId, Protocol, TabId, UiAction, fonts, icons};
 use std::collections::HashMap;
@@ -40,6 +41,12 @@ const PREVIEW_FADE_MS: u64 = 100;
 const SLOT_BAR: f32 = 3.;
 /// Width of the label following a dragged pane, in points.
 const DRAG_LABEL: f32 = 180.;
+/// Opacity of the chrome over a pane being dragged.
+const VEIL: f32 = 0.4;
+/// How long a divider's pill takes to show, hide or grow, in milliseconds.
+const PILL_MS: u64 = 140;
+/// The least room the sidebar leaves the panes, in points.
+const PANES_MIN: f32 = 240.;
 
 /// What the shell needs from the app, for one pass.
 pub struct ShellView<'a> {
@@ -54,8 +61,8 @@ pub struct ShellView<'a> {
     pub area: Rect,
     /// Pixels between panes.
     pub spacing: f32,
-    /// The height of a pane's footer, in pixels.
-    pub footer: f32,
+    /// The height of a pane's bar, in pixels.
+    pub bar: f32,
     /// The smallest pane, in pixels.
     pub min_pane: (f32, f32),
     pub maximized: bool,
@@ -119,6 +126,21 @@ impl Preview {
     }
 }
 
+/// The pill on the divider under the pointer.
+struct Pill {
+    /// The divider's band in points, whether it stands upright, and the pointer's place along it.
+    place: Option<(egui::Rect, bool, f32)>,
+    /// How shown it is: 0 hidden, 1 hovered, 2 dragged.
+    level: Tween<f32>,
+    target: f32,
+}
+
+impl Default for Pill {
+    fn default() -> Self {
+        Self { place: None, level: Tween::new(0.), target: 0. }
+    }
+}
+
 /// What keeps the panes from being shown.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Gate {
@@ -134,7 +156,7 @@ impl From<&Phase> for Gate {
         match phase {
             Phase::Setup(path) => Self::Setup(path.display().to_string()),
             Phase::Locked(path) => Self::Locked(path.display().to_string()),
-            Phase::Unlocked(_) => Self::Open,
+            Phase::Unlocked { .. } => Self::Open,
         }
     }
 }
@@ -170,6 +192,8 @@ pub struct Common {
     pub gate: Gate,
     unlock: VaultState,
     setup: VaultSetupState,
+    /// The open database has no master password: nothing can be locked, and it says so.
+    pub unencrypted: bool,
     /// A key is being derived.
     pub vault_busy: bool,
     pub vault_error: Option<String>,
@@ -185,6 +209,8 @@ pub struct Common {
     files: HashMap<PaneId, FilesState>,
     /// The vault's snippets. A new list is a new `Arc`, which is how the dialog tells.
     pub snippets: Arc<Vec<SnippetRow>>,
+    /// The sizes the panels were dragged to, the same in every window.
+    pub panels: Panels,
 }
 
 impl Default for Common {
@@ -196,6 +222,7 @@ impl Default for Common {
             gate: Gate::Starting,
             unlock: VaultState::default(),
             setup: VaultSetupState::default(),
+            unencrypted: false,
             vault_busy: false,
             vault_error: None,
             sync: SyncState::Off,
@@ -205,6 +232,7 @@ impl Default for Common {
             asking_window: 0,
             files: HashMap::new(),
             snippets: Arc::default(),
+            panels: Panels::default(),
         }
     }
 }
@@ -231,6 +259,12 @@ impl Common {
         self.files.entry(pane).or_default().select(side, name);
     }
 
+    /// What is selected in a column of file pane `pane`, or else `name`.
+    pub fn files_selected_or(&self, pane: PaneId, side: FileSide, name: &Arc<str>) -> Vec<Arc<str>> {
+        let selected = self.files.get(&pane).map_or_else(Vec::new, |files| files.selected(side));
+        if selected.is_empty() || !selected.contains(name) { vec![name.clone()] } else { selected }
+    }
+
     /// What is selected in a column of file pane `pane`.
     #[cfg(feature = "bench")]
     pub fn files_selected(&mut self, pane: PaneId, side: FileSide) -> Vec<std::sync::Arc<str>> {
@@ -246,8 +280,8 @@ impl Common {
         self.snippets = Arc::new(snippets);
         self.tree.set_query(&query);
         for pane in panes {
-            if let (Some(remote), crate::pane::Link::Live) = (&pane.remote, &pane.link) {
-                self.tree.set_live(NodeId(remote.node), true);
+            if let Some(remote) = &pane.remote {
+                self.tree.set_state(NodeId(remote.node), session_dot(panes, remote.node));
             }
         }
     }
@@ -271,15 +305,38 @@ impl Common {
             (_, SyncState::Failed(reason)) => (reason, true),
             (Some((note, bad)), _) => (note, *bad),
             (None, SyncState::Done(text)) => (text, false),
-            (None, _) => ("Sync is off", false),
+            (None, _) => ("", false),
         };
-        SidebarStatus { text, failed, busy: matches!(self.sync, SyncState::Running), can_sync }
+        let busy = matches!(self.sync, SyncState::Running);
+        SidebarStatus { unencrypted: self.unencrypted, text, failed, busy, can_sync }
+    }
+}
+
+/// How the sessions to `node` are doing, the best of them.
+pub fn session_dot(panes: &[Pane], node: u64) -> SessionDot {
+    use crate::pane::Link;
+    let links = || panes.iter().filter(|pane| pane.remote.as_ref().is_some_and(|r| r.node == node)).map(|pane| &pane.link);
+    if links().any(|link| *link == Link::Live) {
+        SessionDot::Live
+    } else if links().any(|link| matches!(link, Link::Connecting { .. })) {
+        SessionDot::Connecting
+    } else if links().any(|link| matches!(link, Link::Failed { .. })) {
+        SessionDot::Failed
+    } else if links().any(|link| matches!(link, Link::Closed { .. })) {
+        SessionDot::Closed
+    } else {
+        SessionDot::None
     }
 }
 
 /// The state of everything around the panes of one window.
 pub struct Shell {
     pub sidebar_open: bool,
+    /// How wide the sidebar is, in points.
+    pub sidebar_width: f32,
+    /// How far along the controls of each pane's bar have come.
+    bars: HashMap<PaneId, Reveal>,
+    pill: Pill,
     tabs: TabStripState,
     pub settings: SettingsState,
     pub quick: QuickOpenState,
@@ -300,6 +357,9 @@ impl Default for Shell {
     fn default() -> Self {
         Self {
             sidebar_open: true,
+            sidebar_width: SIDEBAR_WIDTH,
+            bars: HashMap::new(),
+            pill: Pill::default(),
             tabs: TabStripState::default(),
             settings: SettingsState::default(),
             quick: QuickOpenState::default(),
@@ -327,20 +387,20 @@ fn pixels(rect: egui::Rect, scale: f32) -> Rect {
     Rect::new(rect.left() * scale, rect.top() * scale, rect.width() * scale, rect.height() * scale)
 }
 
-/// The part of a pane's panel that its terminal draws in, above its footer.
-pub fn terminal_rect(panel: Rect, footer: f32) -> Rect {
-    Rect::new(panel.x, panel.y, panel.w, (panel.h - footer).max(1.))
+/// The part of a pane's panel that its content takes, below its bar.
+pub fn terminal_rect(panel: Rect, bar: f32) -> Rect {
+    Rect::new(panel.x, panel.y + bar, panel.w, (panel.h - bar).max(1.))
 }
 
 /// The part of a pane's panel its content takes, in points.
-pub fn content_points(panel: Rect, footer: f32, scale: f32) -> egui::Rect {
-    points(terminal_rect(panel, footer), scale)
+pub fn content_points(panel: Rect, bar: f32, scale: f32) -> egui::Rect {
+    points(terminal_rect(panel, bar), scale)
 }
 
-/// The footer of a pane's panel, in points.
-pub fn footer_rect(panel: Rect, scale: f32) -> egui::Rect {
+/// The bar of a pane's panel, in points.
+pub fn bar_rect(panel: Rect, scale: f32) -> egui::Rect {
     let rect = points(panel, scale);
-    egui::Rect::from_min_max(pos2(rect.left(), rect.bottom() - FOOTER_HEIGHT), rect.max)
+    egui::Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + PANE_BAR_HEIGHT))
 }
 
 fn pane_title(panes: &[Pane], id: PaneId) -> &str {
@@ -364,6 +424,9 @@ fn tab_glyph(panes: &[Pane], common: &Common, tab: &Tab) -> char {
 }
 
 fn tab_label(panes: &[Pane], tab: &Tab) -> String {
+    if let Some(name) = &tab.name {
+        return name.clone();
+    }
     let title = pane_title(panes, tab.focus);
     match tab.layout.panes().len() {
         1 => title.to_owned(),
@@ -377,7 +440,7 @@ impl Shell {
         self.palette.clear();
         let command = |label: &str, glyph, pick| PaletteEntry {
             label: label.to_owned(),
-            detail: "Command",
+            detail: "",
             glyph,
             pick,
         };
@@ -385,6 +448,8 @@ impl Shell {
             command("New tab", icons::PLUS, Pick::Run(Action::NewTab)),
             command("Split right", icons::COLUMNS_2, Pick::Run(Action::Split(Axis::Row))),
             command("Split down", icons::ROWS_2, Pick::Run(Action::Split(Axis::Column))),
+            command("Local shell right", icons::TERMINAL, Pick::Run(Action::SplitLocal(Axis::Row))),
+            command("Local shell below", icons::TERMINAL, Pick::Run(Action::SplitLocal(Axis::Column))),
             command("Zoom pane", icons::SQUARE, Pick::Run(Action::Zoom)),
             command("Close pane", icons::X, Pick::Run(Action::ClosePane)),
             command("Next tab", icons::CHEVRON_RIGHT, Pick::Run(Action::CycleTab(1))),
@@ -400,20 +465,22 @@ impl Shell {
             command("Snippets", icons::PENCIL, Pick::Run(Action::Snippets)),
             command("Settings", icons::SETTINGS, Pick::Run(Action::OpenSettings)),
             command("Toggle theme", icons::MONITOR, Pick::Run(Action::ToggleTheme)),
-            command("Lock vault", icons::LOCK, Pick::Run(Action::Lock)),
             command("Sync now", icons::FOLDER_SYNC, Pick::Run(Action::SyncNow)),
             command("Send Ctrl+Alt+Del", icons::MONITOR, Pick::Run(Action::SendCtrlAltDel)),
             command("Toggle desktop scale", icons::MONITOR_COG, Pick::Run(Action::ToggleScale)),
         ]);
+        if !common.unencrypted {
+            self.palette.push(command("Lock vault", icons::LOCK, Pick::Run(Action::Lock)));
+        }
         self.palette.extend(workspace.tabs().iter().enumerate().map(|(index, tab)| PaletteEntry {
             label: format!("Go to tab: {}", tab_label(panes, tab)),
-            detail: "Tab",
+            detail: "",
             glyph: tab_glyph(panes, common, tab),
             pick: Pick::SelectTab(index),
         }));
         self.palette.extend(common.snippets.iter().map(|row| PaletteEntry {
             label: row.name.clone(),
-            detail: "Snippet",
+            detail: "",
             glyph: icons::CORNER_DOWN_LEFT,
             pick: Pick::Snippet(row.id),
         }));
@@ -421,7 +488,7 @@ impl Shell {
             let NodeKind::Connection(protocol) = node.kind else { return None };
             Some(PaletteEntry {
                 label: node.label.clone(),
-                detail: "Connection",
+                detail: "",
                 glyph: protocol.icon(),
                 pick: Pick::Connection(node.id.0),
             })
@@ -445,12 +512,54 @@ impl Shell {
         self.menu.open(pos);
     }
 
-    /// A press on a pane's footer became a drag.
+    /// Whether the context menu is open.
+    pub fn menu_open(&self) -> bool {
+        self.menu.is_open()
+    }
+
+    /// The labels of what the context menu offers, and where a row is, for driving it from a script.
+    #[cfg(feature = "bench")]
+    pub fn menu_offers(&self, label: &str) -> Option<egui::Pos2> {
+        self.menu.row_center(&self.menu_items, label)
+    }
+
+    /// Whether the context menu covers `pos`, in points.
+    pub fn menu_contains(&self, pos: egui::Pos2) -> bool {
+        self.menu.contains(pos)
+    }
+
+    pub fn close_menu(&mut self) {
+        self.menu.close();
+    }
+
+    /// Edit the name of the tab `id`, starting from `name`.
+    pub fn start_tab_rename(&mut self, id: TabId, name: &str) {
+        self.tabs.start_rename(id, name);
+    }
+
+    /// Show the pill on a divider's band at `place`, or hide it, in points. Returns whether what
+    /// shows changed.
+    pub fn hover_divider(&mut self, place: Option<(egui::Rect, bool, f32)>, dragged: bool, now: Instant) -> bool {
+        let target = match (&place, dragged) {
+            (_, true) => 2.,
+            (Some(_), false) => 1.,
+            (None, false) => 0.,
+        };
+        let changed = target != self.pill.target || (place.is_some() && place != self.pill.place);
+        if place.is_some() {
+            self.pill.place = place;
+        }
+        self.pill.target = target;
+        self.pill.level.to(target, now, PILL_MS, Curve::EASE_OUT);
+        changed
+    }
+
+    /// A press on a pane's bar became a drag.
     pub fn start_pane_drag(&mut self, workspace: &Workspace, pane: PaneId) {
         let index = workspace.tabs().iter().position(|tab| tab.layout.panes().contains(&pane));
         let Some(tab) = index else { return };
         let panes = workspace.tabs()[tab].layout.panes();
-        // The footer of a tab's only pane stands for the tab.
+        // The bar of a tab's only pane stands for the tab.
         let source = match panes.iter().position(|&id| id == pane) {
             Some(at) if panes.len() > 1 => Source::Pane(tab, at),
             _ => Source::Tab(tab),
@@ -501,12 +610,13 @@ impl Shell {
             now: Instant::now(),
             area: Rect::default(),
             spacing: 0.,
-            footer: 0.,
+            bar: 0.,
             min_pane: (0., 0.),
             maximized: false,
         };
         common.gate = Gate::Open;
         self.show(ui, &view, &mut common);
+        let _ = empty_state(ui, egui::Rect::from_min_size(pos2(0., 0.), vec2(640., 480.)));
     }
 
     /// Run the whole interface for one pass.
@@ -531,6 +641,11 @@ impl Shell {
                 label,
                 glyph: tab_glyph(view.panes, common, &view.workspace.tabs()[index]),
                 active: index == active,
+                status: view
+                    .panes
+                    .iter()
+                    .find(|pane| pane.id == view.workspace.tabs()[index].focus)
+                    .map_or(rmx_ui::widgets::PaneStatus::Connected, Pane::status),
             })
             .collect();
 
@@ -540,6 +655,7 @@ impl Shell {
             tabs: if common.locked() { &[] } else { &tabs },
             maximized: view.maximized,
             sidebar_open: self.sidebar_open,
+            sidebar_width: self.sidebar_width,
         };
         let action = title_bar(ui, bar, &title, &mut self.tabs, now);
         self.actions.extend(action);
@@ -557,20 +673,38 @@ impl Shell {
             let status = SIDEBAR_STATUS_HEIGHT;
             let side = egui::Rect::from_min_max(
                 pos2(0., STRIP_HEIGHT),
-                pos2(SIDEBAR_WIDTH, screen.bottom() - status),
+                pos2(self.sidebar_width, screen.bottom() - status),
             );
             let action = sidebar(ui, side, &mut common.tree, &mut common.tree_state);
             self.actions.extend(action);
             let foot = egui::Rect::from_min_max(
                 pos2(0., screen.bottom() - status),
-                pos2(SIDEBAR_WIDTH, screen.bottom()),
+                pos2(self.sidebar_width, screen.bottom()),
             );
             let line = common.status_line();
             let action = sidebar_status(ui, foot, &line);
             self.actions.extend(action);
+
+            let edge = self.sidebar_width;
+            let band = egui::Rect::from_min_max(pos2(edge - 3., STRIP_HEIGHT), pos2(edge + 4., screen.bottom()));
+            let handle = resize_handle(ui, band, Id::unique("sidebar-edge"), true, edge);
+            if let Some(x) = handle.to {
+                let most = SIDEBAR_MAX.min((screen.width() - PANES_MIN).max(SIDEBAR_MIN));
+                self.actions.push(UiAction::SidebarResize(x.clamp(SIDEBAR_MIN, most)));
+            }
+            if handle.reset {
+                self.actions.push(UiAction::SidebarResize(SIDEBAR_WIDTH));
+            }
+            if handle.released || handle.reset {
+                self.actions.push(UiAction::PanelsChanged);
+            }
         }
 
         self.show_panes(ui, palette, view, common);
+        if view.workspace.tabs().is_empty() {
+            let action = empty_state(ui, points(view.area, scale));
+            self.actions.extend(action);
+        }
         self.follow_pane_drag(&ctx, view);
         self.preview.paint(&ctx, scale, palette, now);
         self.paint_drag_label(&ctx, palette, view);
@@ -581,19 +715,12 @@ impl Shell {
         let action = new_connection_dialog(&ctx, &mut self.dialog);
         self.actions.extend(action);
 
-        let view_text;
-        let (sync_status, syncing) = match &common.sync {
-            SyncState::Off => ("Not syncing", false),
-            SyncState::Running => ("Syncing...", true),
-            SyncState::Done(text) | SyncState::Failed(text) => {
-                view_text = text.clone();
-                (view_text.as_str(), false)
-            },
-        };
-        let action = snippets_dialog(&ctx, &mut self.snippets, &common.snippets);
+        let action = snippets_dialog(&ctx, &mut self.snippets, &common.snippets, &mut common.panels);
         self.actions.extend(action);
 
-        let action = settings_dialog(&ctx, &mut self.settings, &SettingsView { sync_status, syncing });
+        let syncing = matches!(common.sync, SyncState::Running);
+        let settings = SettingsView { syncing, unencrypted: common.unencrypted };
+        let action = settings_dialog(&ctx, &mut self.settings, &settings, &mut common.panels);
         self.actions.extend(action);
 
         let items: Vec<QuickItem<'_>> = self
@@ -658,15 +785,16 @@ impl Shell {
         self.actions.extend(action);
     }
 
-    /// The footer and the rounded outline of each pane.
+    /// The bar and the rounded outline of each pane.
     fn show_panes(&mut self, ui: &mut Ui, palette: &Palette, view: &ShellView<'_>, common: &mut Common) {
         let scale = ui.ctx().pixels_per_point();
+        let tab = view.workspace.active();
+        let grouped = tab.is_some_and(|tab| tab.layout.panes().len() > 1);
+        let zoomed = tab.is_some_and(|tab| tab.zoomed);
         for &(id, rest) in view.rects {
             let panel = view.motion.frame(id, view.now).unwrap_or(rest);
-            let foot = footer_rect(panel, scale);
+            let top = bar_rect(panel, scale);
             let Some(pane) = view.panes.iter().find(|pane| pane.id == id) else { continue };
-            let size = pane.content.size_fact();
-            let encoding = pane.content.is_text().then_some("UTF-8");
             let forwards = pane
                 .remote
                 .as_ref()
@@ -675,28 +803,35 @@ impl Shell {
                     1 => "1 forward".to_owned(),
                     count => format!("{count} forwards"),
                 });
-            let target = pane.remote.as_ref().map(|remote| remote.target.as_str());
-            let facts: Vec<&str> = target
-                .into_iter()
-                .chain(forwards.as_deref())
-                .chain(size.as_deref())
-                .chain(encoding)
-                .collect();
-            let footer = PaneFooterView {
+            let tooltip: Vec<String> = pane.content.size_fact().into_iter().chain(forwards).collect();
+            let tooltip = tooltip.join("  ");
+            let ssh = pane.remote.as_ref().is_some_and(|remote| {
+                common.nodes.get(&remote.node).is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
+            });
+            let bar = PaneBarView {
                 pane: rmx_ui::PaneId(id),
                 status: pane.status(),
                 title: pane.label(),
-                facts: &facts,
+                target: pane.remote.as_ref().map_or("", |remote| remote.target.as_str()),
+                tooltip: &tooltip,
+                focused: view.workspace.focused() == Some(id),
+                grouped,
+                zoomed,
+                files: ssh && pane.content.terminal().is_some() && pane.link == crate::pane::Link::Live,
             };
-            let action = pane_footer(ui, foot, &footer);
+            let reveal = self.bars.entry(id).or_default();
+            if self.drag.is_some() {
+                reveal.hide();
+            }
+            let action = pane_bar(ui, top, &bar, reveal, view.now);
             self.actions.extend(action);
 
-            let area = points(terminal_rect(panel, view.footer), scale);
+            let area = points(terminal_rect(panel, view.bar), scale);
             if let Some(files) = pane.content.files() {
                 let files_view = files.view(rmx_ui::PaneId(id));
                 let state = common.files.entry(id).or_default();
                 let focused = view.workspace.focused() == Some(id);
-                files_pane(ui, area, &files_view, focused, state, &mut self.actions);
+                files_pane(ui, area, &files_view, focused, state, &mut common.panels, &mut self.actions);
             }
             if let Some(overlay) = pane.overlay() {
                 let action = pane_overlay(ui, area, rmx_ui::PaneId(id), &overlay);
@@ -706,6 +841,24 @@ impl Shell {
                 let action = pane_notice(ui, area, rmx_ui::PaneId(id), notice);
                 self.actions.extend(action);
             }
+        }
+        self.bars.retain(|id, _| view.panes.iter().any(|pane| pane.id == *id));
+
+        // The pane being held is veiled, as lifted out of its place.
+        if let Some(drag) = &self.drag
+            && let Some(&(_, rest)) = view.rects.iter().find(|(id, _)| *id == drag.pane)
+        {
+            let panel = points(view.motion.frame(drag.pane, view.now).unwrap_or(rest), scale);
+            ui.painter_at(panel).rect_filled(panel, CornerRadius::same(RADIUS), palette.chrome.gamma_multiply(VEIL));
+        }
+
+        let level = self.pill.level.get(view.now);
+        if let (Some((band, upright, along)), true) = (self.pill.place, level > 0.) {
+            let layer = LayerId::new(Order::Foreground, Id::unique("divider-pill"));
+            paint_pill(&ui.ctx().layer_painter(layer), band, upright, along, level, palette);
+        }
+        if self.pill.level.running(view.now) {
+            ui.ctx().request_repaint();
         }
 
         common.files.retain(|id, _| view.panes.iter().any(|pane| pane.id == *id));
@@ -744,6 +897,7 @@ impl Shell {
             Scene::new(view.workspace, bar, view.area, tabs, drag.source, view.min_pane, view.spacing);
         let screen = ctx.content_rect();
         scene.window = Some(Rect::new(0., 0., screen.width() * scale, screen.height() * scale));
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         let point = (f64::from(latest.x * scale), f64::from(latest.y * scale));
         let target = scene.target(drag.source, point);
         let preview = target.and_then(|target| scene.preview(target, SLOT_BAR * scale));
@@ -794,9 +948,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_terminal_stops_above_the_footer() {
+    fn the_terminal_starts_below_the_bar() {
         let panel = Rect::new(10., 20., 300., 200.);
-        assert_eq!(terminal_rect(panel, 24.), Rect::new(10., 20., 300., 176.));
+        assert_eq!(terminal_rect(panel, 24.), Rect::new(10., 44., 300., 176.));
     }
 
     #[test]
@@ -825,7 +979,19 @@ mod tests {
         shell.open_palette(&workspace, &[], &Common::default());
         assert!(shell.quick.is_open());
         assert!(shell.palette.iter().any(|entry| entry.label == "Split right"));
-        assert_eq!(shell.palette.iter().filter(|entry| entry.detail == "Tab").count(), 2);
+        assert_eq!(shell.palette.iter().filter(|entry| entry.label.starts_with("Go to tab")).count(), 2);
         assert!(matches!(shell.picked(0), Some(Picked::Run(Action::NewTab))));
+    }
+
+    #[test]
+    fn only_what_can_be_locked_offers_to_be() {
+        let lock_offered = |unencrypted| {
+            let common = Common { unencrypted, ..Common::default() };
+            let mut shell = Shell::default();
+            shell.open_palette(&Workspace::default(), &[], &common);
+            shell.palette.iter().any(|entry| entry.label == "Lock vault")
+        };
+        assert!(lock_offered(false));
+        assert!(!lock_offered(true));
     }
 }

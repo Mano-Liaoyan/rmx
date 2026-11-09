@@ -2,11 +2,13 @@
 
 pub mod context_menu;
 pub mod controls;
+pub mod empty;
 pub mod files;
-pub mod footer;
 pub mod host_key;
 pub mod new_connection;
 pub mod overlay;
+pub mod pane_bar;
+pub mod panels;
 pub mod prompt;
 pub mod quick_open;
 pub mod settings;
@@ -19,13 +21,15 @@ pub mod vault;
 pub use crate::float::float_frame;
 pub use context_menu::{ContextMenu, MenuItem, context_menu};
 pub use controls::{
-    ButtonKind, InputOptions, button, button_full, icon_button, segmented, text_input,
+    ButtonKind, InputOptions, button, button_full, checkbox, icon_button, segmented, text_input,
 };
+pub use empty::empty_state;
 pub use files::{
     CONFLICT_POLICIES, FileColumnView, FileKind, FileRow, FilesKey, FilesState, FilesView, TransferRow,
-    TransferRowState, file_row_point, files_pane,
+    TransferRowState, file_row_point, files_edges, files_pane,
 };
-pub use footer::{PaneFooterView, PaneStatus, pane_footer};
+pub use pane_bar::{PaneBarView, PaneStatus, pane_bar};
+pub use panels::{Handle, Panels, Reveal, paint_pill, resize_handle};
 pub use host_key::{HostKeyStatus, HostKeyView, host_key_body, host_key_dialog};
 pub use new_connection::{
     AuthKind, ConnectionDraft, NewConnectionState, RdpSecurity, ScaleChoice, SerialPortChoice, new_connection_body,
@@ -39,7 +43,7 @@ pub use snippets::{SnippetRow, SnippetsState, snippets_dialog};
 pub use tabs::{TabStripState, TabView, tab_strip};
 pub use title_bar::{TitleBarView, title_bar};
 pub use tree::{
-    NodeKind, SIDEBAR_STATUS_HEIGHT, SidebarStatus, TreeModel, TreeNode, TreeState, connection_tree,
+    NodeKind, SIDEBAR_STATUS_HEIGHT, SessionDot, SidebarStatus, TreeModel, TreeNode, TreeState, connection_tree,
     sidebar, sidebar_status,
 };
 pub use vault::{VaultSetupState, VaultSetupView, VaultState, VaultView, vault_setup, vault_unlock};

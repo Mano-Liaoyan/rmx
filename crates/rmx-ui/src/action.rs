@@ -99,6 +99,12 @@ pub enum FilesAction {
     Cancel(u64),
     Retry(u64),
     ClearFinished,
+    /// Make the folder `name` in the column.
+    NewFolder { side: FileSide, name: String },
+    /// Call `from`, in the column, `to`.
+    Rename { side: FileSide, from: Arc<str>, to: String },
+    /// Remove `names` from the column.
+    Delete { side: FileSide, names: Vec<Arc<str>> },
     /// Pick the policy at this index of [`CONFLICT_POLICIES`](crate::widgets::CONFLICT_POLICIES).
     Policy(usize),
 }
@@ -137,19 +143,6 @@ impl Protocol {
             Protocol::Rdp => "RDP",
             Protocol::Telnet => "Telnet",
             Protocol::Serial => "Serial",
-        }
-    }
-
-    /// A few words on what it is for.
-    pub const fn blurb(self) -> &'static str {
-        match self {
-            Protocol::Ssh => "Secure shell",
-            Protocol::Sftp => "Files over SSH",
-            Protocol::Ftp => "File transfer",
-            Protocol::Vnc => "Remote screen",
-            Protocol::Rdp => "Windows desktop",
-            Protocol::Telnet => "Plain terminal",
-            Protocol::Serial => "Local port",
         }
     }
 
@@ -201,6 +194,15 @@ pub enum UiAction {
         id: TabId,
         pos: Pos2,
     },
+    /// Edit the name of tab `id` where it is shown.
+    TabStartRename(TabId),
+    /// Call tab `id` this, or again what its focused pane is called.
+    TabRename {
+        id: TabId,
+        name: Option<String>,
+    },
+    /// Make each pane of tab `id` a tab of its own.
+    TabUngroup(TabId),
     /// Tab `id` was dragged off the strip: follow it until the button is up.
     TabDragOut(TabId),
     /// Give tab `id` a window of its own.
@@ -209,6 +211,17 @@ pub enum UiAction {
     TabToWindow(TabId, u64),
     TreeSelect(NodeId),
     TreeOpen(NodeId),
+    /// Connect to this node in a new pane beside the focused one, stacked when `down`.
+    TreeOpenSplit {
+        id: NodeId,
+        down: bool,
+    },
+    /// Browse the files of this node.
+    TreeOpenFiles(NodeId),
+    /// Show a session to this node.
+    TreeShow(NodeId),
+    TreeReconnect(NodeId),
+    TreeDisconnect(NodeId),
     TreeFolderToggled {
         id: NodeId,
         expanded: bool,
@@ -217,6 +230,14 @@ pub enum UiAction {
         id: NodeId,
         pos: Pos2,
     },
+    /// Put this text on the clipboard.
+    CopyText(String),
+    /// Connect to what was typed, as `user@host:port`.
+    QuickConnect(String),
+    /// The sidebar is being dragged to this width, in points.
+    SidebarResize(f32),
+    /// A panel was let go at a new size: remember it.
+    PanelsChanged,
     /// Show the new-connection dialog.
     NewConnection,
     ConnectionCancel,
@@ -232,12 +253,16 @@ pub enum UiAction {
     VaultCreate {
         password: Sensitive,
         key_file: String,
+        /// The user has read that without a password nothing is encrypted, and agreed.
+        plain_ok: bool,
     },
     /// Make a working copy of a vault that another device has synced.
     VaultJoin {
         password: Sensitive,
         key_file: String,
         sync: Box<SyncDraft>,
+        /// As for [`VaultCreate`](Self::VaultCreate).
+        plain_ok: bool,
     },
     /// Lock now.
     VaultLock,
@@ -281,14 +306,21 @@ pub enum UiAction {
     ImportSshConfig,
     PaneSplitRight(PaneId),
     PaneSplitDown(PaneId),
-    /// The user took hold of a pane by its footer: follow the primary button until it is up.
+    /// The user took hold of a pane by its bar: follow the primary button until it is up.
     PaneDragStart(PaneId),
+    PaneZoom(PaneId),
+    /// Open the same session again, in a new tab.
+    PaneDuplicate(PaneId),
+    /// Make this pane a tab of its own.
+    PaneToTab(PaneId),
+    /// Give this pane a window of its own.
+    PaneToWindow(PaneId),
+    PaneCopy(PaneId),
+    PanePaste(PaneId),
     PaneMenu {
         id: PaneId,
         pos: Pos2,
     },
-    /// An app-defined command from a context menu.
-    Command(u32),
     /// A click in a pane that keeps its pointer for itself.
     PaneFocus(PaneId),
     /// Send Ctrl+Alt+Del to this pane's remote desktop.
@@ -298,6 +330,19 @@ pub enum UiAction {
     /// Browse the files of this SSH pane at its working directory.
     PaneOpenFiles(PaneId),
     Files(PaneId, FilesAction),
+    /// The menu of a column of a file pane, of the row `name` or else its empty space.
+    FilesMenu {
+        pane: PaneId,
+        side: FileSide,
+        name: Option<Arc<str>>,
+        pos: Pos2,
+    },
+    /// Ask what to call a new folder.
+    FilesAskNewFolder(PaneId, FileSide),
+    /// Ask what to call a file instead.
+    FilesAskRename(PaneId, FileSide, Arc<str>),
+    /// Ask whether to remove these.
+    FilesAskDelete(PaneId, FileSide, Vec<Arc<str>>),
 }
 
 #[cfg(test)]

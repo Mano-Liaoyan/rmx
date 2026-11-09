@@ -92,8 +92,11 @@ pub const TREE_ROW_HEIGHT: f32 = 28.;
 pub const TREE_ICON: f32 = 14.;
 /// Width of the sidebar.
 pub const SIDEBAR_WIDTH: f32 = 260.;
-/// Height of a pane's footer.
-pub const FOOTER_HEIGHT: f32 = 24.;
+/// Narrowest and widest the sidebar is dragged to.
+pub const SIDEBAR_MIN: f32 = 180.;
+pub const SIDEBAR_MAX: f32 = 560.;
+/// Height of the bar on top of each pane.
+pub const PANE_BAR_HEIGHT: f32 = 24.;
 /// Small text, used for almost everything.
 pub const TEXT_SM: f32 = 12.;
 /// Large text, for titles.
@@ -102,6 +105,9 @@ pub const TEXT_LG: f32 = 14.;
 pub const FLOAT_IN: f64 = 0.1;
 /// The scale a floating surface appears from.
 pub const FLOAT_SCALE: f32 = 0.95;
+/// How long a context menu takes to pop in from the pointer, in seconds, and the scale it grows from.
+pub const MENU_IN: f64 = 0.14;
+pub const MENU_SCALE: f32 = 0.92;
 /// How long tabs take to slide, in milliseconds.
 pub const TAB_SLIDE_MS: u64 = 200;
 

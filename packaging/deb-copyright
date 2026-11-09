@@ -1,0 +1,18 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: rmx
+Source: https://github.com/Mano-Liaoyan/rmx
+
+Files: *
+Copyright: rmx contributors
+License: Apache-2.0
+ See /usr/share/doc/rmx/LICENSE-APACHE and /usr/share/doc/rmx/NOTICE.
+
+Files: crates/rmx-ui/assets/geist-*
+Copyright: 2023 Vercel, in collaboration with basement.studio
+License: OFL-1.1
+ See /usr/share/doc/rmx/LICENSE-Geist-OFL.txt.
+
+Files: crates/rmx-ui/assets/lucide-*
+Copyright: 2026 Lucide Icons and Contributors
+License: ISC
+ See /usr/share/doc/rmx/LICENSE-Lucide-ISC.txt.

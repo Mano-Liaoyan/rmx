@@ -151,9 +151,9 @@ const KNOWN_FILES: [&str; 6] = [
 ];
 
 fn find_and_map() -> Option<FontData> {
-    let (path, index) = ask_fontconfig().or_else(scan_font_dirs)?;
-    let blob = map_file(&path)?;
-    log::debug!("CJK fallback: {path} face {index}");
+    let mut candidates = ask_fontconfig();
+    candidates.extend(scan_font_dirs());
+    let (blob, index) = first_usable(&candidates, map_file)?;
     let font = FontData::from_blob(blob, index);
     // A variable CJK face starts at its lightest; UI text wants the regular weight.
     let weighted = font.variation_axes().iter().any(|axis| axis.tag == Tag::new(b"wght"));
@@ -164,34 +164,64 @@ fn find_and_map() -> Option<FontData> {
     Some(font)
 }
 
-/// Ask `fc-list` for a regular CJK face.
-fn ask_fontconfig() -> Option<(String, u32)> {
+type Bytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
+
+/// The first of `candidates` that `map` can read and that is a font: egui aborts on a file it
+/// cannot parse, and doing without CJK glyphs is never worth that.
+fn first_usable(candidates: &[(String, u32)], map: impl Fn(&str) -> Option<Bytes>) -> Option<(Bytes, u32)> {
+    candidates.iter().find_map(|(path, index)| {
+        let blob = map(path)?;
+        if !is_font((*blob).as_ref(), *index) {
+            log::warn!("Skipping {path}: not a font this interface can draw with");
+            return None;
+        }
+        log::debug!("CJK fallback: {path} face {index}");
+        Some((blob, *index))
+    })
+}
+
+/// Whether face `index` of `bytes` parses the way egui will parse it.
+fn is_font(bytes: &[u8], index: u32) -> bool {
+    skrifa::FontRef::from_index(bytes, index).is_ok()
+}
+
+/// Whether `path` is one of the kinds of file a font can be drawn from: fontconfig also lists
+/// bitmap fonts, such as `.pcf.gz`.
+fn is_outline_font(path: &str) -> bool {
+    let extension = path.rsplit_once('.').map_or("", |(_, extension)| extension);
+    ["ttf", "otf", "ttc"].iter().any(|known| extension.eq_ignore_ascii_case(known))
+}
+
+/// Ask `fc-list` for regular CJK faces, best first.
+fn ask_fontconfig() -> Vec<(String, u32)> {
     let output = Command::new("fc-list")
         .args([":lang=zh-cn", "-f", "%{file}\t%{index}\t%{family}\t%{style}\n"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    let listing = String::from_utf8_lossy(&output.stdout);
-    pick_face(&listing)
+        .output();
+    output.map_or_else(|_| Vec::new(), |output| pick_faces(&String::from_utf8_lossy(&output.stdout)))
 }
 
-/// Choose the best face in `fc-list` output.
-fn pick_face(listing: &str) -> Option<(String, u32)> {
+/// The usable faces of `fc-list` output, best first.
+fn pick_faces(listing: &str) -> Vec<(String, u32)> {
     let rank = |family: &str| PREFERRED.iter().position(|name| family.contains(name));
-    listing
+    let mut faces: Vec<_> = listing
         .lines()
         .filter_map(|line| {
             let mut fields = line.split('\t');
             let (file, index, family, style) =
                 (fields.next()?, fields.next()?, fields.next()?, fields.next()?);
+            if !is_outline_font(file) {
+                return None;
+            }
             // Variable fonts list one line per named instance, numbered in the high bits.
             let index = index.parse::<u32>().ok()?;
             let regular = style.split(',').any(|style| style == "Regular");
             Some((!regular, rank(family).unwrap_or(PREFERRED.len()), file, index & 0xffff))
         })
-        .min_by_key(|&(not_regular, rank, ..)| (not_regular, rank))
-        .map(|(.., file, index)| (file.to_owned(), index))
+        .collect();
+    faces.sort_by_key(|&(not_regular, rank, ..)| (not_regular, rank));
+    faces.into_iter().map(|(.., file, index)| (file.to_owned(), index)).collect()
 }
 
 /// Look for a known file under the usual directories.
@@ -286,11 +316,35 @@ mod tests {
         let listing = "/a.ttc\t3\tNoto Sans CJK JP\tRegular\n/a.ttc\t2\tNoto Sans CJK SC,Noto \
                        Sans CJK SC Bold\tBold\n/a.ttc\t2\tNoto Sans CJK \
                        SC\tRegular\n/b.ttf\t0\tSome Font\tRegular\n";
-        assert_eq!(pick_face(listing), Some(("/a.ttc".to_owned(), 2)));
+        assert_eq!(pick_faces(listing).first(), Some(&("/a.ttc".to_owned(), 2)));
     }
 
     #[test]
     fn strips_the_named_instance_from_a_face_index() {
-        assert_eq!(pick_face("/v.ttf\t65537\tX\tRegular\n"), Some(("/v.ttf".to_owned(), 1)));
+        assert_eq!(pick_faces("/v.ttf\t65537\tX\tRegular\n"), [("/v.ttf".to_owned(), 1)]);
+    }
+
+    #[test]
+    fn only_outline_fonts_are_candidates() {
+        let listing = "/usr/share/fonts/misc/18x18ja.pcf.gz\t0\tMisc Fixed\tRegular\n\
+                       /fonts/a.OTF\t0\tSome Font\tRegular\n";
+        assert_eq!(pick_faces(listing), [("/fonts/a.OTF".to_owned(), 0)]);
+        assert!(pick_faces("/fonts/a.pcf\t0\tX\tRegular\n").is_empty());
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_falls_through_to_the_next() {
+        let candidates =
+            [("broken".to_owned(), 0), ("missing".to_owned(), 0), ("good".to_owned(), 0)];
+        let map = |path: &str| -> Option<Bytes> {
+            match path {
+                "broken" => Some(Arc::new(vec![0u8; 64])),
+                "good" => Some(Arc::new(GEIST_REGULAR.to_vec())),
+                _ => None,
+            }
+        };
+        let (blob, index) = first_usable(&candidates, map).expect("the third one is a font");
+        assert_eq!(((*blob).as_ref().len(), index), (GEIST_REGULAR.len(), 0));
+        assert!(first_usable(&candidates[..2], map).is_none(), "no font is no failure");
     }
 }

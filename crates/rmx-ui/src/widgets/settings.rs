@@ -7,11 +7,14 @@ use egui::{Align, Context, Id, Layout, RichText, Sense, Ui, vec2};
 use crate::action::UiAction;
 use crate::draw::{hline, palette};
 use crate::theme::{CONTROL_HEIGHT, TEXT_LG, TEXT_SM, ThemeMode};
+use crate::float::Resizable;
 use crate::{float, fonts, icons};
 
 use super::controls::{ButtonKind, InputOptions, button, button_full, segmented, text_input};
+use super::panels::{Panels, group_rule};
 
 const WIDTH: f32 = 560.;
+const MIN_SIZE: [f32; 2] = [420., 260.];
 const LABEL: f32 = 112.;
 
 /// Where a vault is synced.
@@ -91,9 +94,10 @@ impl SettingsState {
 
 /// What the dialog reports.
 #[derive(Clone, Copy, Debug)]
-pub struct SettingsView<'a> {
-    pub sync_status: &'a str,
+pub struct SettingsView {
     pub syncing: bool,
+    /// The database has no master password, so there is nothing to lock.
+    pub unencrypted: bool,
 }
 
 fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
@@ -144,27 +148,27 @@ pub fn sync_fields(ui: &mut Ui, salt: Id, sync: &mut SyncDraft, none: bool) {
     match sync.kind {
         SyncKind::None => {},
         SyncKind::Local => {
-            field(ui, salt, "Folder or file", &mut sync.path, "~/Sync/rmx.rmxdb", false);
+            field(ui, salt, "Folder or file", &mut sync.path, "", false);
         },
         SyncKind::WebDav => {
-            field(ui, salt, "File URL", &mut sync.url, "https://dav.example.com/rmx.rmxdb", false);
-            field(ui, salt, "User", &mut sync.user, "Optional", false);
-            field(ui, salt, "Password", &mut sync.secret, "Stored in the vault", true);
+            field(ui, salt, "File URL", &mut sync.url, "", false);
+            field(ui, salt, "User", &mut sync.user, "", false);
+            field(ui, salt, "Password", &mut sync.secret, "", true);
         },
         SyncKind::S3 => {
-            field(ui, salt, "Endpoint", &mut sync.url, "https://s3.example.com", false);
-            field(ui, salt, "Bucket", &mut sync.bucket, "rmx", false);
-            field(ui, salt, "Region", &mut sync.region, "us-east-1", false);
-            field(ui, salt, "Object key", &mut sync.key, "rmx.rmxdb", false);
+            field(ui, salt, "Endpoint", &mut sync.url, "", false);
+            field(ui, salt, "Bucket", &mut sync.bucket, "", false);
+            field(ui, salt, "Region", &mut sync.region, "", false);
+            field(ui, salt, "Object key", &mut sync.key, "", false);
             field(ui, salt, "Access key", &mut sync.access_key, "", false);
-            field(ui, salt, "Secret key", &mut sync.secret, "Stored in the vault", true);
+            field(ui, salt, "Secret key", &mut sync.secret, "", true);
         },
         SyncKind::Sftp => {
-            field(ui, salt, "Host", &mut sync.host, "files.example.com", false);
-            field(ui, salt, "Port", &mut sync.port, "22", false);
+            field(ui, salt, "Host", &mut sync.host, "", false);
+            field(ui, salt, "Port", &mut sync.port, "", false);
             field(ui, salt, "User", &mut sync.user, "", false);
-            field(ui, salt, "Password", &mut sync.secret, "Stored in the vault", true);
-            field(ui, salt, "Remote file", &mut sync.path, "/home/me/rmx.rmxdb", false);
+            field(ui, salt, "Password", &mut sync.secret, "", true);
+            field(ui, salt, "Remote file", &mut sync.path, "", false);
         },
     }
 }
@@ -173,23 +177,24 @@ pub fn sync_fields(ui: &mut Ui, salt: Id, sync: &mut SyncDraft, none: bool) {
 pub fn settings_dialog(
     ctx: &Context,
     state: &mut SettingsState,
-    view: &SettingsView<'_>,
+    view: &SettingsView,
+    panels: &mut Panels,
 ) -> Option<UiAction> {
     let draft = state.draft.as_deref_mut()?;
     let id = Id::unique("settings-dialog");
-    let height = (ctx.content_rect().height() - 120.).max(120.);
-    let modal = float::modal(ctx, id, WIDTH, |ui| settings_body(ui, id, draft, view, height));
+    let default = [WIDTH, (ctx.content_rect().height() - 120.).max(MIN_SIZE[1])];
+    let mut changed = false;
+    let resize = Resizable { size: &mut panels.settings, default, min: MIN_SIZE, changed: &mut changed };
+    let modal = float::resizable_modal(ctx, id, resize, |ui, size| settings_body(ui, id, draft, view, size[1]));
+    if changed {
+        return Some(UiAction::PanelsChanged);
+    }
     let action = modal.inner.or(modal.dismissed.then_some(UiAction::SettingsCancel));
     if matches!(action, Some(UiAction::SettingsCancel | UiAction::SettingsSave(_))) {
         state.close();
         ctx.request_repaint();
     }
     action
-}
-
-fn section(ui: &mut Ui, title: &str) {
-    let p = palette(ui);
-    ui.label(RichText::new(title).font(fonts::medium(TEXT_SM)).color(p.muted_fg));
 }
 
 fn on_off(ui: &mut Ui, salt: Id, value: &mut bool) {
@@ -203,7 +208,7 @@ fn settings_body(
     ui: &mut Ui,
     id: Id,
     draft: &mut SettingsDraft,
-    view: &SettingsView<'_>,
+    view: &SettingsView,
     max_height: f32,
 ) -> Option<UiAction> {
     let p = palette(ui);
@@ -221,43 +226,26 @@ fn settings_body(
     egui::ScrollArea::vertical().max_height(max_height - 110.).show(ui, |ui| {
         egui::Frame::new().inner_margin(16).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.;
-            section(ui, "Appearance");
             row(ui, "Theme", |ui| {
                 let mut selected = usize::from(draft.theme == ThemeMode::Light);
                 if segmented(ui, id.with("theme"), &["Dark", "Light"], &mut selected).changed() {
                     draft.theme = [ThemeMode::Dark, ThemeMode::Light][selected];
                 }
             });
-            ui.add_space(8.);
 
-            section(ui, "Security");
-            field(
-                ui,
-                id,
-                "Auto-lock after",
-                &mut draft.auto_lock_minutes,
-                "Minutes, empty for never",
-                false,
-            );
-            ui.add_space(8.);
+            if !view.unencrypted {
+                group_rule(ui);
+                field(ui, id, "Auto-lock, min", &mut draft.auto_lock_minutes, "", false);
+            }
 
-            section(ui, "Sync");
+            group_rule(ui);
             sync_fields(ui, id.with("sync"), &mut draft.sync, true);
             if draft.sync.kind != SyncKind::None {
                 row(ui, "Sync on save", |ui| on_off(ui, id.with("on-save"), &mut draft.sync_on_save));
-                field(
-                    ui,
-                    id,
-                    "Every",
-                    &mut draft.sync_interval_minutes,
-                    "Minutes, empty for only when asked",
-                    false,
-                );
+                field(ui, id, "Every, min", &mut draft.sync_interval_minutes, "", false);
             }
-            ui.label(RichText::new(view.sync_status).color(p.muted_fg).size(TEXT_SM));
-            ui.add_space(8.);
 
-            section(ui, "Import");
+            group_rule(ui);
             let glyph = Some(icons::KEY_ROUND);
             let import = button_full(ui, glyph, "Import ~/.ssh/config", ButtonKind::Secondary, true, None);
             if import.clicked() {

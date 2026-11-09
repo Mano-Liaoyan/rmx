@@ -7,7 +7,7 @@ use egui::{Id, Rect, Sense, Ui, Vec2, pos2};
 use crate::action::UiAction;
 use crate::draw::{hline, palette, vline};
 use crate::icons;
-use crate::theme::{SIDEBAR_WIDTH, STRIP_HEIGHT, TAB_HEIGHT};
+use crate::theme::{STRIP_HEIGHT, TAB_HEIGHT};
 
 use super::controls::paint_icon_button;
 use super::tabs::{TabStripState, TabView, tab_strip};
@@ -24,6 +24,7 @@ pub struct TitleBarView<'a> {
     pub tabs: &'a [TabView<'a>],
     pub maximized: bool,
     pub sidebar_open: bool,
+    pub sidebar_width: f32,
 }
 
 /// Draw the title bar in `rect`, which is [`STRIP_HEIGHT`] tall.
@@ -41,7 +42,7 @@ pub fn title_bar(
     let mut action = None;
 
     painter.rect_filled(rect, 0., p.chrome);
-    let lead = if view.sidebar_open { SIDEBAR_WIDTH } else { CONTROL + EDGE * 2. };
+    let lead = if view.sidebar_open { view.sidebar_width } else { CONTROL + EDGE * 2. };
     let lead_rect = Rect::from_min_size(rect.min, egui::vec2(lead, rect.height()));
     if view.sidebar_open {
         painter.rect_filled(lead_rect, 0., p.sidebar);
