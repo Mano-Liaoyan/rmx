@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The installer behind packaging\windows\build.ps1, for WiX 5. UpgradeCode must never change:
+     it is how a new version finds the old one to replace. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <Package Name="rmx" Manufacturer="rmx" Version="$(var.Version)"
+             UpgradeCode="94505032-7AD3-4F07-AD17-EFED8398F50D" Scope="perMachine">
+        <MajorUpgrade DowngradeErrorMessage="A newer version of rmx is already installed." />
+        <MediaTemplate EmbedCab="yes" />
+
+        <Icon Id="rmx.ico" SourceFile="packaging\windows\rmx.ico" />
+        <Property Id="ARPPRODUCTICON" Value="rmx.ico" />
+
+        <StandardDirectory Id="ProgramMenuFolder" />
+        <StandardDirectory Id="ProgramFiles64Folder">
+            <Directory Id="INSTALLFOLDER" Name="rmx">
+                <Component Id="Program">
+                    <File Id="Program" Source="target\release\rmx.exe" KeyPath="yes">
+                        <Shortcut Id="StartMenu" Directory="ProgramMenuFolder" Name="rmx"
+                                  WorkingDirectory="INSTALLFOLDER" Icon="rmx.ico" Advertise="yes" />
+                    </File>
+                </Component>
+                <Component Id="Licence">
+                    <File Id="Licence" Source="LICENSE-APACHE" Name="LICENSE-APACHE.txt" KeyPath="yes" />
+                </Component>
+                <Component Id="Notice">
+                    <File Id="Notice" Source="NOTICE" Name="NOTICE.txt" KeyPath="yes" />
+                </Component>
+                <Component Id="GeistLicence">
+                    <File Id="GeistLicence" Source="crates\rmx-ui\assets\LICENSE-Geist-OFL.txt" KeyPath="yes" />
+                </Component>
+                <Component Id="LucideLicence">
+                    <File Id="LucideLicence" Source="crates\rmx-ui\assets\LICENSE-Lucide-ISC.txt" KeyPath="yes" />
+                </Component>
+            </Directory>
+        </StandardDirectory>
+
+        <Feature Id="Main">
+            <ComponentRef Id="Program" />
+            <ComponentRef Id="Licence" />
+            <ComponentRef Id="Notice" />
+            <ComponentRef Id="GeistLicence" />
+            <ComponentRef Id="LucideLicence" />
+        </Feature>
+    </Package>
+</Wix>

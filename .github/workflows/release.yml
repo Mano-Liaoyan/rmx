@@ -1,0 +1,72 @@
+name: Release
+
+# A `v*` tag builds the installers and attaches them to that tag's release, making the release if
+# there is none yet. Run by hand, it only builds them, as artifacts of the run.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            run: cargo run -p xtask -- package
+          - os: macos-latest
+            name: macos
+            run: ./packaging/macos/build.sh
+          - os: windows-latest
+            name: windows
+            run: ./packaging/windows/build.ps1
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: The tag is the version in Cargo.toml
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: grep -qx "version = \"${GITHUB_REF_NAME#v}\"" Cargo.toml
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: ${{ matrix.run }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            target/dist/*.deb
+            target/dist/*.rpm
+            target/dist/*.dmg
+            target/dist/*.msi
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          gh release view "$TAG" > /dev/null 2>&1 \
+            || gh release create "$TAG" --title "rmx ${TAG#v}" --generate-notes --prerelease --verify-tag
+          gh release upload "$TAG" * --clobber
