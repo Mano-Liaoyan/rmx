@@ -17,7 +17,7 @@ rmx-terminal = { path = "crates/rmx-terminal" }
 
 alacritty_terminal = { version = "0.26", default-features = false }
 crossfont = "0.8.1"
-glutin = { version = "0.32.3", default-features = false, features = ["egl", "x11", "glx", "wayland"] }
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "x11", "glx", "wayland", "wgl"] }
 log = "0.4"
 parking_lot = "0.12"
 unicode-width = "0.2"

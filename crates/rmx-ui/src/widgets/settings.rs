@@ -94,7 +94,9 @@ impl SettingsState {
 
 /// What the dialog reports.
 #[derive(Clone, Copy, Debug)]
-pub struct SettingsView {
+pub struct SettingsView<'a> {
+    /// The vault's file, as it is shown.
+    pub vault: &'a str,
     pub syncing: bool,
     /// The database has no master password, so there is nothing to lock.
     pub unencrypted: bool,
@@ -177,7 +179,7 @@ pub fn sync_fields(ui: &mut Ui, salt: Id, sync: &mut SyncDraft, none: bool) {
 pub fn settings_dialog(
     ctx: &Context,
     state: &mut SettingsState,
-    view: &SettingsView,
+    view: &SettingsView<'_>,
     panels: &mut Panels,
 ) -> Option<UiAction> {
     let draft = state.draft.as_deref_mut()?;
@@ -190,7 +192,7 @@ pub fn settings_dialog(
         return Some(UiAction::PanelsChanged);
     }
     let action = modal.inner.or(modal.dismissed.then_some(UiAction::SettingsCancel));
-    if matches!(action, Some(UiAction::SettingsCancel | UiAction::SettingsSave(_))) {
+    if matches!(action, Some(UiAction::SettingsCancel | UiAction::SettingsSave(_) | UiAction::VaultAskMove)) {
         state.close();
         ctx.request_repaint();
     }
@@ -208,7 +210,7 @@ fn settings_body(
     ui: &mut Ui,
     id: Id,
     draft: &mut SettingsDraft,
-    view: &SettingsView,
+    view: &SettingsView<'_>,
     max_height: f32,
 ) -> Option<UiAction> {
     let p = palette(ui);
@@ -237,6 +239,19 @@ fn settings_body(
                 group_rule(ui);
                 field(ui, id, "Auto-lock, min", &mut draft.auto_lock_minutes, "", false);
             }
+
+            group_rule(ui);
+            row(ui, "Vault file", |ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if button(ui, "Move", ButtonKind::Secondary).clicked() {
+                        action = Some(UiAction::VaultAskMove);
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        let path = RichText::new(view.vault).font(fonts::mono(TEXT_SM)).color(p.muted_fg);
+                        ui.add(egui::Label::new(path).truncate()).on_hover_text(view.vault);
+                    });
+                });
+            });
 
             group_rule(ui);
             sync_fields(ui, id.with("sync"), &mut draft.sync, true);

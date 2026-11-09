@@ -141,13 +141,21 @@ const PREFERRED: [&str; 7] = [
 ];
 
 /// Files to accept when fontconfig is not available.
-const KNOWN_FILES: [&str; 6] = [
+const KNOWN_FILES: [&str; 12] = [
     "NotoSansCJK-Regular.ttc",
     "NotoSansCJKsc-Regular.otf",
     "SourceHanSansSC-Regular.otf",
     "wqy-microhei.ttc",
     "wqy-zenhei.ttc",
     "DroidSansFallbackFull.ttf",
+    // macOS.
+    "PingFang.ttc",
+    "Hiragino Sans GB.ttc",
+    "STHeiti Medium.ttc",
+    // Windows.
+    "msyh.ttc",
+    "Deng.ttf",
+    "simhei.ttf",
 ];
 
 fn find_and_map() -> Option<FontData> {
@@ -226,13 +234,7 @@ fn pick_faces(listing: &str) -> Vec<(String, u32)> {
 
 /// Look for a known file under the usual directories.
 fn scan_font_dirs() -> Option<(String, u32)> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let mut stack = vec![
-        "/usr/share/fonts".into(),
-        "/usr/local/share/fonts".into(),
-        format!("{home}/.local/share/fonts"),
-        format!("{home}/.fonts"),
-    ];
+    let mut stack = font_dirs();
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
             let path = entry.path();
@@ -250,6 +252,29 @@ fn scan_font_dirs() -> Option<(String, u32)> {
         }
     }
     None
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn font_dirs() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    vec![
+        "/usr/share/fonts".into(),
+        "/usr/local/share/fonts".into(),
+        format!("{home}/.local/share/fonts"),
+        format!("{home}/.fonts"),
+    ]
+}
+
+#[cfg(target_os = "macos")]
+fn font_dirs() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    vec![format!("{home}/Library/Fonts"), "/Library/Fonts".into(), "/System/Library/Fonts".into()]
+}
+
+#[cfg(windows)]
+fn font_dirs() -> Vec<String> {
+    let windows = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    vec![format!("{windows}\\Fonts")]
 }
 
 /// A read-only mapping of a whole file. CJK fonts run to tens of megabytes, of which a session

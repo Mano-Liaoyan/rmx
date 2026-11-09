@@ -199,6 +199,8 @@ enum Reply {
     LoseEdits(Vec<PaneId>, UiAction),
     /// Go to the vault at the path typed.
     VaultPath,
+    /// Move the vault's file to the path typed.
+    VaultMove,
 }
 
 /// What `key` does in a file pane, and whether Shift is adding to the selection.
@@ -677,9 +679,14 @@ fn port_choice(port: &rmx_serial::serial::PortInfo) -> rmx_ui::widgets::SerialPo
 /// What every window is made with: the app draws its own frame.
 fn window_attributes(size: (f64, f64), maximized: bool) -> WindowAttributes {
     // Wayland's app id and X11's class, by which the desktop finds `rmx.desktop`.
-    use winit::platform::{wayland::WindowAttributesExtWayland as Wayland, x11::WindowAttributesExtX11 as X11};
-    let attributes = Wayland::with_name(Window::default_attributes(), "rmx", "rmx");
-    X11::with_name(attributes, "rmx", "rmx")
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let attributes = {
+        use winit::platform::{wayland::WindowAttributesExtWayland as Wayland, x11::WindowAttributesExtX11 as X11};
+        X11::with_name(Wayland::with_name(Window::default_attributes(), "rmx", "rmx"), "rmx", "rmx")
+    };
+    #[cfg(any(target_os = "macos", windows))]
+    let attributes = Window::default_attributes();
+    attributes
         .with_title("rmx")
         .with_decorations(false)
         .with_min_inner_size(LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
@@ -1651,6 +1658,11 @@ impl At<'_> {
                     self.core.vault.send(Request::Switch(path));
                 }
             },
+            Reply::VaultMove => {
+                if let Some(path) = first.filter(|path| !path.is_empty()) {
+                    self.core.vault.send(Request::Move(path));
+                }
+            },
             Reply::DeleteConnection(node) => {
                 if fields.is_some() {
                     self.core.vault.send(Request::DeleteConnection(node));
@@ -2145,6 +2157,7 @@ impl At<'_> {
         items.push(MenuItem::Separator);
         items.push(menu_item(icons::FOLDER_OPEN, "Open vault", UiAction::VaultAskPath { create: false }, false));
         items.push(menu_item(icons::PLUS, "New vault", UiAction::VaultAskPath { create: true }, false));
+        items.push(menu_item(icons::FOLDER_SYNC, "Move vault", UiAction::VaultAskMove, false));
         items
     }
 
@@ -2217,6 +2230,7 @@ impl At<'_> {
                     | UiAction::VaultMenu(_)
                     | UiAction::VaultSwitch(_)
                     | UiAction::VaultAskPath { .. }
+                    | UiAction::VaultAskMove
                     | UiAction::HostKeyAcceptAlways
                     | UiAction::HostKeyAcceptOnce
                     | UiAction::HostKeyReject
@@ -2458,6 +2472,10 @@ impl At<'_> {
                 };
                 let field = PromptField { label: String::new(), secret: false, value };
                 self.ask_here(PromptState::new(title, "", vec![field]), Reply::VaultPath);
+            },
+            UiAction::VaultAskMove => {
+                let field = PromptField { label: String::new(), secret: false, value: self.core.ui.vault_path.clone() };
+                self.ask_here(PromptState::new("Move vault", "", vec![field]), Reply::VaultMove);
             },
             UiAction::VaultUnlock { mut password, key_file } => {
                 let password = Secret::new(password.take());

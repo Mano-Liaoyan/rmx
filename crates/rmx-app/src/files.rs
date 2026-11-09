@@ -1,6 +1,5 @@
 //! A file pane: two listings and a queue of copies, with everything that waits off the main thread.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -1054,7 +1053,8 @@ pub struct Applied {
 
 /// The directory the local column opens at.
 pub fn local_home() -> String {
-    std::env::var("HOME").ok().filter(|home| Path::new(home).is_dir()).unwrap_or_else(|| "/".to_owned())
+    let home = std::env::home_dir().filter(|home| home.is_dir());
+    home.and_then(|home| home.to_str().map(str::to_owned)).unwrap_or_else(|| "/".to_owned())
 }
 
 #[cfg(test)]

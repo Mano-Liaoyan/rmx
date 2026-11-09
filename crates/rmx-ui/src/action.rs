@@ -286,6 +286,8 @@ pub enum UiAction {
     VaultAskPath {
         create: bool,
     },
+    /// Ask where this vault's file should go.
+    VaultAskMove,
     HostKeyReject,
     HostKeyAcceptOnce,
     HostKeyAcceptAlways,

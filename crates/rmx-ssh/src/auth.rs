@@ -385,9 +385,16 @@ impl<H: Handler> Authenticator<'_, H> {
     }
 
     async fn agent(&mut self, socket: Option<&Path>) -> Result<Outcome, Error> {
+        #[cfg(unix)]
         let client = match socket {
             Some(path) => AgentClient::connect_uds(path).await,
             None => AgentClient::connect_env().await,
+        };
+        // Windows' OpenSSH agent listens on a named pipe, and sets no variable to say where.
+        #[cfg(windows)]
+        let client = {
+            let pipe = socket.unwrap_or(Path::new(r"\\.\pipe\openssh-ssh-agent"));
+            AgentClient::connect_named_pipe(pipe).await
         };
         let mut client = match client {
             Ok(client) => client,

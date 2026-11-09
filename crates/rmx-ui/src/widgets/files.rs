@@ -379,19 +379,10 @@ fn format_size(bytes: u64) -> String {
 /// A time in the local zone, as `2026-11-08 14:02`.
 fn format_time(time: SystemTime) -> String {
     let Ok(since) = time.duration_since(SystemTime::UNIX_EPOCH) else { return String::new() };
-    let seconds = since.as_secs() as libc::time_t;
-    let mut local: libc::tm = unsafe { std::mem::zeroed() };
-    // Safety: both pointers are to live values for the length of the call.
-    if unsafe { libc::localtime_r(&seconds, &mut local) }.is_null() {
-        return String::new();
-    }
+    let Some(local) = crate::local_time(since.as_secs()) else { return String::new() };
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}",
-        local.tm_year + 1900,
-        local.tm_mon + 1,
-        local.tm_mday,
-        local.tm_hour,
-        local.tm_min
+        local.year, local.month, local.day, local.hour, local.minute
     )
 }
 

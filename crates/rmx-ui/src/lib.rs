@@ -14,6 +14,7 @@ mod float;
 pub mod fonts;
 pub mod icons;
 pub mod input;
+mod local_time;
 pub mod snippet;
 pub mod theme;
 pub mod virtual_list;
@@ -23,4 +24,5 @@ pub use egui;
 
 pub use action::{FileSide, FilesAction, NodeId, PaneId, Protocol, Sensitive, TabId, UiAction};
 pub use chrome::{Chrome, ChromeCore, ChromeOutput, FrameStats, PixelRect};
+pub use local_time::{LocalTime, local_time};
 pub use theme::{Palette, ThemeMode};

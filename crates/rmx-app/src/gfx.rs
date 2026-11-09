@@ -205,26 +205,57 @@ struct Glyphs {
     scale: f64,
 }
 
-/// Find the fonts on a thread of their own, to run alongside setting up GL.
-fn load_fonts(scale: f64) -> JoinHandle<Result<Glyphs, String>> {
-    thread::spawn(move || {
-        let rasterizer = Rasterizer::new().map_err(|err| err.to_string())?;
-        let mut cache =
-            GlyphCache::new(rasterizer, &scaled_font(scale)).map_err(|err| err.to_string())?;
-        let common = cache.rasterize_common();
-        mark("fonts");
-        Ok(Glyphs { cache, common, scale })
-    })
+fn find_fonts(scale: f64) -> Result<Glyphs, String> {
+    let rasterizer = Rasterizer::new().map_err(|err| err.to_string())?;
+    let mut cache = GlyphCache::new(rasterizer, &scaled_font(scale)).map_err(|err| err.to_string())?;
+    let common = cache.rasterize_common();
+    mark("fonts");
+    Ok(Glyphs { cache, common, scale })
 }
 
-fn wait_for_fonts(fonts: JoinHandle<Result<Glyphs, String>>) -> Result<Glyphs, String> {
-    fonts.join().map_err(|_| String::from("the thread finding fonts panicked"))?
+/// Fonts being found on a thread of their own, alongside setting up GL.
+#[cfg(not(windows))]
+struct FontLoad(JoinHandle<Result<Glyphs, String>>);
+
+#[cfg(not(windows))]
+impl FontLoad {
+    fn start(scale: f64) -> Self {
+        Self(thread::spawn(move || find_fonts(scale)))
+    }
+
+    fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+
+    fn wait(self) -> Result<Glyphs, String> {
+        self.0.join().map_err(|_| String::from("the thread finding fonts panicked"))?
+    }
+}
+
+/// DirectWrite's fonts stay on the thread that found them, so on Windows that is the thread that
+/// asks for them, when it does.
+#[cfg(windows)]
+struct FontLoad(f64);
+
+#[cfg(windows)]
+impl FontLoad {
+    fn start(scale: f64) -> Self {
+        Self(scale)
+    }
+
+    fn is_finished(&self) -> bool {
+        true
+    }
+
+    fn wait(self) -> Result<Glyphs, String> {
+        find_fonts(self.0)
+    }
 }
 
 /// Fonts being found, and the interface's being laid out, on threads while the window and GL are
 /// set up.
 pub struct Early {
-    fonts: JoinHandle<Result<Glyphs, String>>,
+    fonts: FontLoad,
     chrome: JoinHandle<(rmx_ui::ChromeCore, Shell)>,
 }
 
@@ -240,7 +271,7 @@ impl Early {
             mark("chrome");
             (core, shell)
         });
-        Self { fonts: load_fonts(scale), chrome }
+        Self { fonts: FontLoad::start(scale), chrome }
     }
 
     /// Whether making the window can begin without waiting.
@@ -301,7 +332,7 @@ impl Gfx {
         let mut renderer = Renderer::new(&context, None)?;
         mark("shaders");
 
-        let Glyphs { cache: mut glyph_cache, common, scale } = wait_for_fonts(fonts)?;
+        let Glyphs { cache: mut glyph_cache, common, scale } = fonts.wait()?;
         renderer.with_loader(|mut api| glyph_cache.load_rasterized(common, &mut api));
         // The font was picked before the window knew its screen, usually rightly.
         if scale != window.scale_factor() {

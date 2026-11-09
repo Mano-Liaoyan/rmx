@@ -8,7 +8,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use rmx_ssh::{AuthMethod, HostConfig, SecretString};
 use rmx_ui::widgets::{
@@ -65,6 +65,8 @@ pub enum Request {
     Lock,
     /// Close the vault and go to the one at this path, which need not exist yet.
     Switch(String),
+    /// Move this vault's file to this path, or into this folder, and carry on from there.
+    Move(String),
     /// The user did something: the auto-lock starts over.
     Touch,
     SaveConnection(Box<ConnectionDraft>),
@@ -197,17 +199,57 @@ fn non_empty(text: &str) -> Option<String> {
 }
 
 fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+    match (path.strip_prefix("~/"), std::env::home_dir()) {
+        (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(path),
     }
 }
 
 /// A private key kept out of every file: the SSH library reads it through `/proc`.
+#[cfg(target_os = "linux")]
 pub struct KeyHold {
     fd: i32,
 }
 
+/// A private key for the SSH library to read. Only Linux has a file that is not on disk, so here
+/// it is a file of the user's own in the temporary directory, removed when the session is done.
+#[cfg(not(target_os = "linux"))]
+pub struct KeyHold {
+    path: PathBuf,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl KeyHold {
+    fn new(key: &Secret) -> Result<Self, String> {
+        use std::io::Write;
+
+        let mut name = [0u8; 8];
+        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut name)
+            .map_err(|_| "could not hold the key".to_owned())?;
+        let name: String = name.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hold = Self { path: std::env::temp_dir().join(format!("rmx-key-{name}")) };
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let written = options.open(&hold.path).and_then(|mut file| file.write_all(key.expose().as_bytes()));
+        written.map_err(|err| format!("could not hold the key: {err}"))?;
+        Ok(hold)
+    }
+
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Drop for KeyHold {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl KeyHold {
     fn new(key: &Secret) -> Result<Self, String> {
         // Closed on exec, so that a local shell does not inherit the key.
@@ -229,6 +271,7 @@ impl KeyHold {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for KeyHold {
     fn drop(&mut self) {
         unsafe { libc::close(self.fd) };
@@ -363,8 +406,44 @@ impl Actor {
         if self.is_open() && self.sync_due.take().is_some() {
             self.run_sync(false);
         }
+        self.go_to(path);
+    }
+
+    /// Put this vault's file, and the files beside it, at `typed`: a path, or a folder to keep its
+    /// name in. Nothing already there is replaced. The vault is closed for it, which is what
+    /// makes the file whole.
+    fn relocate(&mut self, typed: &str) -> Result<Option<PathBuf>, String> {
+        let text = |err: std::io::Error| err.to_string();
+        let mut path = std::path::absolute(expand_home(typed.trim())).map_err(text)?;
+        if path.is_dir() {
+            path.push(self.path.file_name().ok_or("The vault has no file name")?);
+        }
+        if path == self.path {
+            return Ok(None);
+        }
+        if !self.path.is_file() {
+            return Err("There is no vault file to move yet".to_owned());
+        }
+        if path.exists() {
+            return Err(format!("{} already exists", path.display()));
+        }
+        if self.is_open() && self.sync_due.take().is_some() {
+            self.run_sync(false);
+        }
+        self.vault = None;
+        move_vault(&self.path, &path)?;
+        Ok(Some(path))
+    }
+
+    /// Leave the vault that is open for the one at `path`.
+    fn go_to(&mut self, path: PathBuf) {
         self.vault = None;
         self.path = path;
+        if self.path.is_file()
+            && let Some(state) = &self.state
+        {
+            state.set_last_vault(&self.path);
+        }
         self.ids.clear();
         self.collapsed.clear();
         self.auto_lock = None;
@@ -453,6 +532,15 @@ impl Actor {
             },
             Request::Lock => self.lock(),
             Request::Switch(path) => self.switch(&path),
+            Request::Move(path) => match self.relocate(&path) {
+                Ok(Some(path)) => {
+                    let moved = format!("Vault moved to {}", path.display());
+                    self.go_to(path);
+                    self.notice(moved, false);
+                },
+                Ok(None) => {},
+                Err(reason) => self.notice(reason, true),
+            },
             Request::Touch => self.active = Instant::now(),
             Request::SaveLayout(layout) => self.save_layout(&layout),
             Request::SaveSession(session) => self.save_session(&session),
@@ -1100,8 +1188,8 @@ impl Actor {
     }
 
     fn import_ssh_config(&mut self) -> Result<String, String> {
-        let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-        let path = PathBuf::from(home).join(".ssh/config");
+        let home = std::env::home_dir().ok_or("There is no home directory")?;
+        let path = home.join(".ssh/config");
         let config = rmx_ssh::ssh_config::SshConfig::load(&path)
             .map_err(|err| format!("Could not read {}: {err}", path.display()))?;
         let imported = import_hosts(self.open()?, &config)?;
@@ -1290,10 +1378,8 @@ fn describe_sync_error(err: Error) -> String {
 }
 
 fn clock_now() -> String {
-    let now = unsafe { libc::time(std::ptr::null_mut()) };
-    let mut local: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&now, &mut local) };
-    format!("{:02}:{:02}", local.tm_hour, local.tm_min)
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |now| now.as_secs());
+    rmx_ui::local_time(now).map_or_else(String::new, |local| format!("{:02}:{:02}", local.hour, local.minute))
 }
 
 fn describe_report(report: &SyncReport) -> String {
@@ -1304,6 +1390,38 @@ fn describe_report(report: &SyncReport) -> String {
         (false, false) => "up to date",
     };
     format!("Synced at {}, {what}", clock_now())
+}
+
+/// Rename, or copy and remove where the two are on different filesystems.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to)?;
+    std::fs::remove_file(from)
+}
+
+/// Move a closed vault's file, and the files beside it, making the folder it goes to.
+fn move_vault(from: &Path, to: &Path) -> Result<(), String> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("Could not make {}: {err}", parent.display()))?;
+    }
+    move_file(from, to).map_err(|err| format!("Could not move the vault: {err}"))?;
+    // Its own settings for this device, and whatever a crash left of the journal.
+    for suffix in [".local", "-wal", "-shm", "-journal"] {
+        let beside = |path: &Path| {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            PathBuf::from(name)
+        };
+        let (from, to) = (beside(from), beside(to));
+        if from.exists()
+            && let Err(err) = move_file(&from, &to)
+        {
+            log::warn!("Could not move {}: {err}", from.display());
+        }
+    }
+    Ok(())
 }
 
 /// A folder names the file in it.
@@ -1739,9 +1857,25 @@ mod tests {
     }
 
     #[test]
-    fn a_held_key_reads_back_and_is_not_on_disk() {
+    fn a_moved_vault_opens_where_it_went_with_its_device_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("v.rmxdb"), dir.path().join("synced/folder/moved.rmxdb"));
+        let vault = Vault::create_plain(&from).unwrap();
+        let node = vault.local_state().node_id().unwrap();
+        drop(vault);
+
+        move_vault(&from, &to).unwrap();
+
+        assert!(!from.exists() && !dir.path().join("v.rmxdb.local").exists());
+        let vault = Vault::open_plain(&to).unwrap();
+        assert_eq!(vault.local_state().node_id().unwrap(), node);
+    }
+
+    #[test]
+    fn a_held_key_reads_back() {
         let hold = KeyHold::new(&Secret::new("private material")).unwrap();
         let path = hold.path();
+        #[cfg(target_os = "linux")]
         assert!(path.starts_with("/proc/self/fd"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "private material");
     }

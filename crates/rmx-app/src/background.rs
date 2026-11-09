@@ -114,13 +114,7 @@ pub struct Paths {
 impl Paths {
     /// `RMX_DATA_DIR`, or the user's data directory.
     fn locate() -> Self {
-        let home = || std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-        let dir = std::env::var_os("RMX_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| {
-            let data = std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home().join(".local/share"));
-            data.join("rmx")
-        });
+        let dir = std::env::var_os("RMX_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| user_data().join("rmx"));
         Self { state: dir.join("app.local"), default_vault: dir.join("vault.rmxdb") }
     }
 }
@@ -211,6 +205,23 @@ impl AppState {
     }
 }
 
+/// Where this platform keeps a user's application data.
+fn user_data() -> PathBuf {
+    let home = || std::env::home_dir().unwrap_or_default();
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| home().join("AppData/Roaming"))
+    } else if cfg!(target_os = "macos") {
+        home().join("Library/Application Support")
+    } else {
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"))
+    }
+}
+
+/// Windows keeps a profile directory to its user already.
+#[cfg(not(unix))]
+fn set_private(_dir: &Path) {}
+
+#[cfg(unix)]
 fn set_private(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Err(err) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {

@@ -396,6 +396,7 @@ fn show_lines(ui: &mut Ui, rows: Rect, id: Id, view: &TextView<'_>, lines: &[u32
 }
 
 /// The field a file is edited in, with its line numbers. Returns whether to save.
+#[allow(clippy::too_many_arguments)]
 fn show_editor(
     ui: &mut Ui,
     rows: Rect,
