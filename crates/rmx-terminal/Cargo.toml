@@ -1,0 +1,28 @@
+[package]
+name = "rmx-terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal.workspace = true
+bitflags = "2.2.1"
+bytes = "1"
+memchr = "2"
+parking_lot.workspace = true
+rmx-render.workspace = true
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+winit.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+polling = "3"
+signal-hook = "0.4"
+
+[dev-dependencies]
+libc = "0.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[[bench]]
+name = "throughput"
+harness = false

@@ -1,0 +1,46 @@
+[package]
+name = "rmx-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rmx"
+path = "src/main.rs"
+
+[dependencies]
+alacritty_terminal.workspace = true
+crossfont.workspace = true
+glutin.workspace = true
+log.workspace = true
+rmx-display = { path = "../rmx-display" }
+rmx-layout.workspace = true
+rmx-render.workspace = true
+rmx-terminal.workspace = true
+rmx-ui = { path = "../rmx-ui" }
+unicode-width.workspace = true
+winit.workspace = true
+copypasta = { version = "0.10.2", default-features = false, features = ["wayland", "x11"] }
+async-trait = { version = "0.1", default-features = false }
+bytes = { version = "1", default-features = false, features = ["std"] }
+libc = { version = "0.2", default-features = false }
+rmx-rdp = { path = "../rmx-rdp" }
+rmx-serial.workspace = true
+rmx-ssh = { path = "../rmx-ssh" }
+rmx-transfer = { path = "../rmx-transfer" }
+rmx-vault = { path = "../rmx-vault" }
+rmx-vnc = { path = "../rmx-vnc" }
+ring = "0.17"
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system"], optional = true }
+wayland-client = { version = "0.31", default-features = false, optional = true }
+wayland-protocols = { version = "0.32", default-features = false, features = ["client"], optional = true }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = { version = "3", default-features = false, features = ["getrandom"] }
+
+[features]
+# Records frame times and startup for `xtask bench`. Compiled out of normal builds.
+bench = ["rmx-render/bench", "dep:wayland-backend", "dep:wayland-client", "dep:wayland-protocols"]
+# Compile and statically link OpenSSL, for machines without libopenssl-devel.
+vendored-openssl = ["rmx-vault/vendored-openssl"]

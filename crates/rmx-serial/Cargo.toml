@@ -1,0 +1,20 @@
+[package]
+name = "rmx-serial"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes = { version = "1", default-features = false, features = ["std"] }
+log = { version = "0.4", default-features = false }
+memchr = { version = "2", default-features = false, features = ["std"] }
+rmx-terminal.workspace = true
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[dev-dependencies]
+tempfile = { version = "3", default-features = false, features = ["getrandom"] }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }

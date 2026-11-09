@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+default-members = ["crates/rmx-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+rmx-layout = { path = "crates/rmx-layout" }
+rmx-render = { path = "crates/rmx-render" }
+rmx-serial = { path = "crates/rmx-serial" }
+rmx-terminal = { path = "crates/rmx-terminal" }
+
+alacritty_terminal = { version = "0.26", default-features = false }
+crossfont = "0.8.1"
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "x11", "glx", "wayland"] }
+log = "0.4"
+parking_lot = "0.12"
+unicode-width = "0.2"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+
+# Smallest code by default; the crates a frame runs through are built for speed below.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+incremental = false
+
+[profile.release.package.rmx-render]
+opt-level = 3
+[profile.release.package.rmx-terminal]
+opt-level = 3
+[profile.release.package.rmx-layout]
+opt-level = 3
+[profile.release.package.alacritty_terminal]
+opt-level = 3
+[profile.release.package.vte]
+opt-level = 3
+[profile.release.package.egui]
+opt-level = 3
+[profile.release.package.epaint]
+opt-level = 3
+[profile.release.package.emath]
+opt-level = 3
+[profile.release.package.egui_glow]
+opt-level = 3

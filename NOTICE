@@ -1,0 +1,8 @@
+rmx
+Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE).
+
+The terminal renderer, key encoding, and pane layout code derive from Alacritty
+(https://github.com/alacritty/alacritty), Copyright Joe Wilm and the Alacritty
+contributors, Apache-2.0, through the alacritty-tabbed fork.
+
+Interface design tokens follow dbx (https://github.com/t8y2/dbx), Apache-2.0.

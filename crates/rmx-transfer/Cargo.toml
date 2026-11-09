@@ -1,0 +1,24 @@
+[package]
+name = "rmx-transfer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { version = "0.1", default-features = false }
+bytes = { version = "1", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "std"] }
+log = { version = "0.4", default-features = false }
+russh-sftp = { version = "3.0", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
+suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-ring"] }
+thiserror = { version = "2", default-features = false }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
+tokio-util = { version = "0.7", default-features = false }
+
+[dev-dependencies]
+russh = { version = "0.65", default-features = false, features = ["ring"] }
+rustls-pemfile = { version = "2", default-features = false, features = ["std"] }
+tempfile = { version = "3", default-features = false }
+tokio = { version = "1", default-features = false, features = ["process", "rt-multi-thread", "test-util"] }

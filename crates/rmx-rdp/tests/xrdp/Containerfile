@@ -1,0 +1,14 @@
+# Disposable RDP servers for tests/xrdp.rs: xrdp for TLS, FreeRDP's shadow server for NLA. Credentials come from the environment at run time.
+FROM docker.io/library/debian:trixie-slim
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        xrdp xorgxrdp xserver-xorg-core xauth x11-xserver-utils xterm xclip openssl ssl-cert procps \
+        freerdp3-shadow-x11 winpr3-utils xvfb \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /etc/X11 \
+    && printf 'allowed_users=anybody\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
+COPY entrypoint.sh /entrypoint.sh
+COPY session.sh /etc/xrdp/startwm.sh
+RUN chmod 0755 /entrypoint.sh /etc/xrdp/startwm.sh
+EXPOSE 3389
+ENTRYPOINT ["/entrypoint.sh"]
