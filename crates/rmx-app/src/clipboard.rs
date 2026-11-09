@@ -2,7 +2,9 @@
 
 use copypasta::ClipboardProvider;
 use copypasta::nop_clipboard::NopClipboardContext;
+#[cfg(not(any(target_os = "macos", windows)))]
 use copypasta::wayland_clipboard;
+#[cfg(not(any(target_os = "macos", windows)))]
 use copypasta::x11_clipboard::{Clipboard as ClipboardSelection, Primary, X11ClipboardContext};
 use rmx_terminal::ClipboardType;
 use winit::raw_window_handle::RawDisplayHandle;
@@ -13,6 +15,20 @@ pub struct Clipboard {
 }
 
 impl Clipboard {
+    /// One clipboard, and no selection: only X11 and Wayland have that.
+    #[cfg(any(target_os = "macos", windows))]
+    pub fn new(_display: RawDisplayHandle) -> Self {
+        let clipboard: Box<dyn ClipboardProvider> = match copypasta::ClipboardContext::new() {
+            Ok(clipboard) => Box::new(clipboard),
+            Err(err) => {
+                log::warn!("Could not reach the clipboard: {err}");
+                Box::new(NopClipboardContext)
+            },
+        };
+        Self { clipboard, selection: Box::new(NopClipboardContext) }
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
     pub fn new(display: RawDisplayHandle) -> Self {
         if let RawDisplayHandle::Wayland(display) = display {
             // Safety: the display outlives the clipboards, which are dropped with the window.

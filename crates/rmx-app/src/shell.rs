@@ -3,6 +3,7 @@
 //! Everything here runs inside an egui pass, which [`rmx_ui::Chrome`] only runs on input, while
 //! something animates, or when the app says the state shown has changed.
 
+use std::path::Path;
 use std::time::Instant;
 
 use rmx_layout::anim::{Curve, Tween};
@@ -186,8 +187,10 @@ enum Pick {
 
 /// `path` with the home directory as `~`.
 pub fn short_path(path: &str) -> String {
-    match std::env::var("HOME").ok().and_then(|home| path.strip_prefix(&home).map(str::to_owned)) {
-        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+    let home = std::env::home_dir();
+    let home = home.as_deref().and_then(Path::to_str);
+    match home.and_then(|home| path.strip_prefix(home)) {
+        Some(rest) if rest.starts_with(['/', '\\']) => format!("~{rest}"),
         _ => path.to_owned(),
     }
 }
@@ -758,7 +761,8 @@ impl Shell {
         self.actions.extend(action);
 
         let syncing = matches!(common.sync, SyncState::Running);
-        let settings = SettingsView { syncing, unencrypted: common.unencrypted };
+        let vault = short_path(&common.vault_path);
+        let settings = SettingsView { vault: &vault, syncing, unencrypted: common.unencrypted };
         let action = settings_dialog(&ctx, &mut self.settings, &settings, &mut common.panels);
         self.actions.extend(action);
 

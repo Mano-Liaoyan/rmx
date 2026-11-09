@@ -15,4 +15,4 @@ zeroize = { version = "1", default-features = false, features = ["alloc"] }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 
 [dev-dependencies]
-glutin = { version = "0.32.3", default-features = false, features = ["egl", "wayland", "x11", "glx"] }
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "wayland", "x11", "glx", "wgl"] }

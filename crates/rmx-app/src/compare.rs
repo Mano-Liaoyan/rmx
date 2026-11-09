@@ -94,7 +94,7 @@ pub fn compare(left: &str, right: &str) -> Comparison {
 mod tests {
     use super::*;
 
-    fn text_of<'a>(text: &'a str, line: Option<DiffLine>) -> Option<&'a str> {
+    fn text_of(text: &str, line: Option<DiffLine>) -> Option<&str> {
         line.map(|line| &text[line.start as usize..line.end as usize])
     }
 

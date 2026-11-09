@@ -1,5 +1,8 @@
 //! rmx: a remote connection manager.
 
+// No console window behind the application on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod app;
 mod background;
 #[cfg(feature = "bench")]
