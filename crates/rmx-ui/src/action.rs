@@ -312,6 +312,8 @@ pub enum UiAction {
     /// Stop showing that output was lost.
     PaneDismissNotice(PaneId),
     OpenSettings,
+    /// Switch between the light and the dark theme.
+    ToggleTheme,
     SettingsSave(Box<SettingsDraft>),
     SettingsCancel,
     SyncNow,
