@@ -271,8 +271,9 @@ impl Running {
             VaultEvent::Phase(phase) => {
                 let was_locked = self.core.ui.locked();
                 self.core.ui.gate = Gate::from(&phase);
-                if let store::Phase::Unlocked { unencrypted } = phase {
-                    self.core.ui.unencrypted = unencrypted;
+                if let store::Phase::Unlocked { unencrypted, key_file } = &phase {
+                    self.core.ui.unencrypted = *unencrypted;
+                    self.core.ui.vault_key_file = key_file.as_ref().map_or_else(String::new, |path| path.display().to_string());
                 }
                 self.core.ui.asking_hidden =
                     self.core.ui.locked() && matches!(self.core.answer, Some((_, Some(_))));
@@ -331,6 +332,11 @@ impl Running {
                 self.core.ui.vault_others = others.iter().map(|path| path.display().to_string()).collect();
             },
             VaultEvent::Notice(text, bad) => self.core.ui.status_note = Some((text, bad)),
+            VaultEvent::RemoteKeyChanged => {
+                if let Some(mut at) = self.at_active() {
+                    at.ask_remote_password();
+                }
+            },
             VaultEvent::Settings(draft) => {
                 if let Some(at) = self.at_active() {
                     at.win.shell.settings.open(*draft);

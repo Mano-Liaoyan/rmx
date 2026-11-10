@@ -446,6 +446,17 @@ impl Vault {
         self.local.clear_sync_cursors()
     }
 
+    /// Checks that `credentials` are the ones the working copy is encrypted with, as before
+    /// [`change_credentials`](Self::change_credentials): [`Error::WrongKey`] if not.
+    pub fn check_credentials(&mut self, credentials: &Credentials) -> Result<()> {
+        self.require_encrypted()?;
+        let (_, params) = key::parse_salt(&key::read_salt(&self.path)?)?;
+        let session = self.session()?;
+        let current = session.key.as_ref().ok_or(Error::Locked)?;
+        let derived = credentials.derive(current.salt(), params)?;
+        if derived.same_as(current) { Ok(()) } else { Err(Error::WrongKey) }
+    }
+
     pub(crate) fn require_encrypted(&self) -> Result<()> {
         match self.kind {
             VaultKind::Encrypted => Ok(()),

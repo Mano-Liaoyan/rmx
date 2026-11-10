@@ -169,6 +169,25 @@ fn idle_timeout_locks_without_being_polled() {
 }
 
 #[test]
+fn checking_credentials_tells_the_current_ones_from_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v.rmxdb");
+    let key_file = dir.path().join("key");
+    generate_key_file(&key_file).unwrap();
+    let mut vault = Vault::create(&path, &creds(), fast_kdf()).unwrap();
+    vault.check_credentials(&creds()).unwrap();
+    assert!(matches!(vault.check_credentials(&Credentials::new("nope")), Err(Error::WrongKey)));
+    let with_file = creds().with_key_file(&key_file);
+    assert!(matches!(vault.check_credentials(&with_file), Err(Error::WrongKey)));
+
+    vault.change_credentials(&with_file, fast_kdf()).unwrap();
+    vault.check_credentials(&with_file).unwrap();
+    assert!(matches!(vault.check_credentials(&creds()), Err(Error::WrongKey)));
+    vault.lock();
+    assert!(matches!(vault.check_credentials(&with_file), Err(Error::Locked)));
+}
+
+#[test]
 fn changing_credentials_replaces_the_old_ones() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("v.rmxdb");
