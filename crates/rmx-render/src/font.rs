@@ -77,6 +77,15 @@ impl Font {
 
 impl Default for Font {
     fn default() -> Self {
-        Self::new(FontDescription::new("monospace"), Size::new(11.25))
+        Self::new(FontDescription::new(DEFAULT_FAMILY), Size::new(11.25))
     }
 }
+
+/// A fixed-width family every install of the platform has. `monospace` is a fontconfig alias:
+/// DirectWrite and Core Text know no family by that name, and the terminal would fail to start.
+#[cfg(windows)]
+const DEFAULT_FAMILY: &str = "Consolas";
+#[cfg(target_os = "macos")]
+const DEFAULT_FAMILY: &str = "Menlo";
+#[cfg(not(any(windows, target_os = "macos")))]
+const DEFAULT_FAMILY: &str = "monospace";
