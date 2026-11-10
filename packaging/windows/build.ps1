@@ -7,9 +7,10 @@ $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select
 # An .msi version is numbers only.
 $msiVersion = $version -replace '-.*$', ''
 
-# The C runtime goes into the binary, so that it needs no redistributable installed.
-$env:RUSTFLAGS = '-C target-feature=+crt-static'
-cargo build --release --locked -p rmx-app --features vendored-openssl
+# A prebuilt OpenSSL, linked statically along with the C runtime, so that the binary needs no
+# DLL or redistributable installed.
+. "$PSScriptRoot\openssl.ps1"
+cargo build --release --locked -p rmx-app
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 dotnet tool install --global wix --version 5.0.2
