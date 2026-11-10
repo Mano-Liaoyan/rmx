@@ -40,7 +40,7 @@ use tokio_rustls::client::TlsStream;
 use crate::clipboard::{Action as ClipboardAction, ClipboardHandle};
 use crate::input::InputMapper;
 use crate::outbox::{Frame, Outbox, Rect};
-use crate::{RdpConfig, RdpError, Security, tls};
+use crate::{Quality, RdpConfig, RdpError, Security, tls};
 
 /// Network frames waiting to be decoded. Beyond this, reading stops and the server is throttled.
 const FRAME_QUEUE: usize = 8;
@@ -173,6 +173,7 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
     let codec_settings: &[&str] = if config.remotefx { &[] } else { &["remotefx:off"] };
     let codecs = client_codecs_capabilities(codec_settings)
         .map_err(|error| RdpError::Handshake(format!("codec configuration: {error}")))?;
+    let (color_depth, connection_type, performance_flags) = quality_settings(config.quality);
     Ok(Config {
         desktop_size: DesktopSize { width: config.width, height: config.height },
         monitor_layout: None,
@@ -196,9 +197,9 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         keyboard_subtype: 0,
         keyboard_functional_keys_count: 12,
         keyboard_layout: config.keyboard_layout,
-        connection_type: ConnectionType::Lan,
+        connection_type,
         ime_file_name: String::new(),
-        bitmap: Some(BitmapConfig { lossy_compression: true, color_depth: 32, codecs }),
+        bitmap: Some(BitmapConfig { lossy_compression: true, color_depth, codecs }),
         dig_product_id: String::new(),
         client_dir: String::new(),
         alternate_shell: String::new(),
@@ -211,7 +212,7 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         autologon: true,
         enable_audio_playback: false,
         enable_audio_capture: false,
-        performance_flags: PerformanceFlags::default(),
+        performance_flags,
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
         compression_type: None,
@@ -222,6 +223,27 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         multitransport_flags: None,
         support_dyn_vc_gfx_protocol: false,
     })
+}
+
+/// The color depth, connection type and desktop effects a [`Quality`] asks for.
+fn quality_settings(quality: Quality) -> (u32, ConnectionType, PerformanceFlags) {
+    match quality {
+        Quality::Best => (
+            32,
+            ConnectionType::Lan,
+            PerformanceFlags::ENABLE_FONT_SMOOTHING | PerformanceFlags::ENABLE_DESKTOP_COMPOSITION,
+        ),
+        Quality::Balanced => (32, ConnectionType::Lan, PerformanceFlags::default()),
+        Quality::Fast => (
+            16,
+            ConnectionType::BroadbandLow,
+            PerformanceFlags::DISABLE_WALLPAPER
+                | PerformanceFlags::DISABLE_FULLWINDOWDRAG
+                | PerformanceFlags::DISABLE_MENUANIMATIONS
+                | PerformanceFlags::DISABLE_THEMING
+                | PerformanceFlags::DISABLE_CURSOR_SHADOW,
+        ),
+    }
 }
 
 /// What the network tasks tell the decoder.
@@ -649,4 +671,43 @@ impl Session {
 
 fn session_error(error: ironrdp_session::SessionError) -> String {
     error.report().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(quality: Quality) -> Config {
+        let mut config = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
+        config.quality = quality;
+        connector_config(&config).unwrap()
+    }
+
+    #[test]
+    fn balanced_keeps_the_library_defaults() {
+        let config = config(Quality::default());
+        assert_eq!(config.bitmap.unwrap().color_depth, 32);
+        assert_eq!(config.performance_flags, PerformanceFlags::default());
+        assert_eq!(config.connection_type, ConnectionType::Lan);
+    }
+
+    #[test]
+    fn best_turns_the_desktop_effects_on() {
+        let flags = config(Quality::Best).performance_flags;
+        assert!(!flags.intersects(
+            PerformanceFlags::DISABLE_WALLPAPER
+                | PerformanceFlags::DISABLE_FULLWINDOWDRAG
+                | PerformanceFlags::DISABLE_MENUANIMATIONS
+                | PerformanceFlags::DISABLE_THEMING
+        ));
+        assert!(flags.contains(PerformanceFlags::ENABLE_DESKTOP_COMPOSITION));
+    }
+
+    #[test]
+    fn fast_asks_for_fewer_colors_and_no_effects() {
+        let config = config(Quality::Fast);
+        assert_eq!(config.bitmap.unwrap().color_depth, 16);
+        assert!(config.performance_flags.contains(PerformanceFlags::DISABLE_WALLPAPER));
+        assert!(!config.performance_flags.contains(PerformanceFlags::ENABLE_FONT_SMOOTHING));
+    }
 }

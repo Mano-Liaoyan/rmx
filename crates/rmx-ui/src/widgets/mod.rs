@@ -34,8 +34,8 @@ pub use pane_bar::{PaneBarView, PaneStatus, pane_bar};
 pub use panels::{Handle, Panels, Reveal, paint_pill, resize_handle};
 pub use host_key::{HostKeyStatus, HostKeyView, host_key_body, host_key_dialog};
 pub use new_connection::{
-    AuthKind, ConnectionDraft, NewConnectionState, RdpSecurity, ScaleChoice, SerialPortChoice, new_connection_body,
-    new_connection_dialog,
+    AuthKind, ConnectionDraft, NewConnectionState, RdpQuality, RdpSecurity, ScaleChoice,
+    SerialPortChoice, VncColors, new_connection_body, new_connection_dialog,
 };
 pub use overlay::{PaneOverlay, notice_rect, overlay_rect, pane_notice, pane_overlay};
 pub use prompt::{PromptField, PromptState, prompt_dialog};

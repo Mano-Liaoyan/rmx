@@ -16,7 +16,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{Instant, sleep_until};
 use vnc::client::VncClient;
-use vnc::{DesktopLayout, Rect as VncRect, ResizeError, VncError, VncEvent, X11Event};
+use vnc::{DesktopLayout, PixelFormat, Rect as VncRect, ResizeError, VncError, VncEvent, X11Event};
 
 use crate::coalesce::{InvalidRect, Outbox, Rect};
 use crate::input;
@@ -44,11 +44,13 @@ enum End {
 
 pub(crate) async fn run(
     client: VncClient,
+    format: PixelFormat,
     input: Receiver<InputEvent>,
     events: Sender<DisplayEvent>,
 ) {
     let mut session = Session {
         client,
+        format,
         events,
         outbox: Outbox::default(),
         held: 0,
@@ -65,6 +67,8 @@ pub(crate) async fn run(
 
 struct Session {
     client: VncClient,
+    /// The format the server was asked to send pixels in.
+    format: PixelFormat,
     events: Sender<DisplayEvent>,
     outbox: Outbox,
     /// Buttons currently down, which a wheel notch must keep down.
@@ -229,11 +233,8 @@ impl Session {
         }
     }
 
-    fn handle_image(&mut self, rect: VncRect, mut pixels: Vec<u8>) -> Option<End> {
-        // Raw rectangles carry the server's padding byte where BGRA8 needs alpha.
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[3] = u8::MAX;
-        }
+    fn handle_image(&mut self, rect: VncRect, pixels: Vec<u8>) -> Option<End> {
+        let pixels = to_bgra(&self.format, pixels);
         let (x, y) = (u32::from(rect.x), u32::from(rect.y));
         let (width, height) = (u32::from(rect.width), u32::from(rect.height));
         let update = FrameUpdate { x, y, width, height, pixels };
@@ -306,6 +307,40 @@ impl Session {
 }
 
 /// Waits for the resize in `slot`, which the caller guarantees is there.
+/// Pixels in `format` as opaque BGRA8.
+fn to_bgra(format: &PixelFormat, mut pixels: Vec<u8>) -> Vec<u8> {
+    if format.bits_per_pixel == 32 {
+        // Full color is already BGRA, with the server's padding byte where alpha belongs.
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = u8::MAX;
+        }
+        return pixels;
+    }
+    let channel = |value: u32, max: u16, shift: u8| {
+        let max = u32::from(max);
+        let level = (value >> shift) & max;
+        // Rounded, so that the largest level is 255 and none is 0 but the smallest.
+        ((level * 255 + max / 2) / max) as u8
+    };
+    let convert = |value: u32| {
+        [
+            channel(value, format.blue_max, format.blue_shift),
+            channel(value, format.green_max, format.green_shift),
+            channel(value, format.red_max, format.red_shift),
+            u8::MAX,
+        ]
+    };
+    match format.bits_per_pixel {
+        16 => pixels
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|pixel| convert(u32::from(u16::from_le_bytes(*pixel))))
+            .collect(),
+        _ => pixels.iter().flat_map(|&pixel| convert(u32::from(pixel))).collect(),
+    }
+}
+
 async fn poll_resize(slot: &mut Option<ResizeFuture>) -> Result<DesktopLayout, ResizeError> {
     match slot {
         Some(future) => future.await,
@@ -408,13 +443,18 @@ mod tests {
         }
 
         async fn raw(&mut self, x: u16, y: u16, w: u16, h: u16, pixel: [u8; 4]) {
+            self.raw_pixels(x, y, w, h, &pixel).await;
+        }
+
+        /// A Raw rectangle filled with `pixel`, in whatever format the client asked for.
+        async fn raw_pixels(&mut self, x: u16, y: u16, w: u16, h: u16, pixel: &[u8]) {
             let mut message = vec![0, 0, 0, 1];
             for field in [x, y, w, h] {
                 message.extend_from_slice(&field.to_be_bytes());
             }
             message.extend_from_slice(&0i32.to_be_bytes());
             for _ in 0..u32::from(w) * u32::from(h) {
-                message.extend_from_slice(&pixel);
+                message.extend_from_slice(pixel);
             }
             self.write(&message).await;
         }
@@ -644,6 +684,47 @@ mod tests {
         assert_eq!(next_event(&mut handle).await, DisplayEvent::Clipboard("from server".into()));
         server.write(&[2]).await;
         assert_eq!(next_event(&mut handle).await, DisplayEvent::Bell);
+    }
+
+    /// The first update of a 1x1 desktop whose one pixel the server sends as `pixel`.
+    async fn one_pixel_at(color_depth: crate::ColorDepth, pixel: &[u8]) -> Vec<u8> {
+        let config = Config { color_depth, ..Config::default() };
+        let (mut server, mut handle) = start(1, 1, config).await;
+        assert!(matches!(next_event(&mut handle).await, DisplayEvent::Resized { .. }));
+        server.raw_pixels(0, 0, 1, 1, pixel).await;
+        let DisplayEvent::Update(update) = next_event(&mut handle).await else {
+            panic!("expected the raw update");
+        };
+        update.pixels
+    }
+
+    #[tokio::test]
+    async fn sixteen_bit_pixels_reach_the_interface_in_bgra() {
+        use crate::ColorDepth::Bits16;
+        // 5-6-5 little-endian: full red, half green, no blue.
+        let pixel = (31u16 << 11 | 32 << 5).to_le_bytes();
+        assert_eq!(one_pixel_at(Bits16, &pixel).await, [0, 130, 255, 255]);
+        assert_eq!(one_pixel_at(Bits16, &u16::MAX.to_le_bytes()).await, [255; 4]);
+    }
+
+    #[tokio::test]
+    async fn eight_bit_pixels_reach_the_interface_in_bgra() {
+        use crate::ColorDepth::Bits8;
+        // 3-3-2: no red, full green, full blue.
+        assert_eq!(one_pixel_at(Bits8, &[0b0001_1111]).await, [255, 255, 0, 255]);
+        assert_eq!(one_pixel_at(Bits8, &[0]).await, [0, 0, 0, 255]);
+    }
+
+    #[tokio::test]
+    async fn fewer_colors_leave_tight_out() {
+        let config = Config { color_depth: crate::ColorDepth::Bits16, ..Config::default() };
+        let (mut server, _handle) = start(2, 2, config).await;
+
+        let message = server.next_matching(|m| matches!(m, Received::Encodings(_))).await;
+
+        let Received::Encodings(encodings) = message else { unreachable!() };
+        assert!(!encodings.contains(&7), "offered Tight at 16 bits: {encodings:?}");
+        assert!(encodings.contains(&16), "ZRLE missing from {encodings:?}");
     }
 
     #[tokio::test]
