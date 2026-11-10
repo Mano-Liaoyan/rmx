@@ -201,6 +201,10 @@ enum Reply {
     VaultPath,
     /// Move the vault's file to the path typed.
     VaultMove,
+    /// Change the master password: the current one, the new one twice, and a key file.
+    VaultPassword,
+    /// The synced copy's new master password and key file.
+    VaultRemotePassword,
 }
 
 /// What `key` does in a file pane, and whether Shift is adding to the selection.
@@ -1551,6 +1555,18 @@ impl At<'_> {
         }
     }
 
+    /// The synced copy's master password was changed on another device: ask for the new one.
+    fn ask_remote_password(&mut self) {
+        let fields = vec![
+            PromptField { label: "New master password".to_owned(), secret: true, value: String::new() },
+            PromptField { label: "Key file (optional)".to_owned(), secret: false, value: self.core.ui.vault_key_file.clone() },
+        ];
+        let detail = "Another device changed the synced copy's master password. Enter it to keep syncing; this vault will use it too.";
+        let mut state = PromptState::new("Master password changed", detail, fields);
+        state.submit = "Use it".to_owned();
+        self.ask_here(state, Reply::VaultRemotePassword);
+    }
+
     /// Put the next question that still matters in the dialog. While the vault is locked only a
     /// question from syncing can be asked: sessions are out of sight.
     fn next_prompt(&mut self) {
@@ -1661,6 +1677,28 @@ impl At<'_> {
             Reply::VaultMove => {
                 if let Some(path) = first.filter(|path| !path.is_empty()) {
                     self.core.vault.send(Request::Move(path));
+                }
+            },
+            Reply::VaultPassword => {
+                if let Some([current, new, repeat, key_file]) = fields.as_deref() {
+                    if new.expose() != repeat.expose() {
+                        self.core.ui.status_note = Some(("The new passwords do not match".to_owned(), true));
+                    } else {
+                        self.core.ui.status_note = Some(("Changing the master password\u{2026}".to_owned(), false));
+                        self.core.vault.send(Request::ChangePassword {
+                            current: Secret::new(current.expose()),
+                            new: Secret::new(new.expose()),
+                            key_file: key_path(key_file.expose()),
+                        });
+                    }
+                }
+            },
+            Reply::VaultRemotePassword => {
+                if let Some([password, key_file]) = fields.as_deref() {
+                    self.core.vault.send(Request::AdoptPassword {
+                        password: Secret::new(password.expose()),
+                        key_file: key_path(key_file.expose()),
+                    });
                 }
             },
             Reply::DeleteConnection(node) => {
@@ -2476,6 +2514,28 @@ impl At<'_> {
             UiAction::VaultAskMove => {
                 let field = PromptField { label: String::new(), secret: false, value: self.core.ui.vault_path.clone() };
                 self.ask_here(PromptState::new("Move vault", "", vec![field]), Reply::VaultMove);
+            },
+            UiAction::VaultAskPassword => {
+                let secret = |label: &str| PromptField { label: label.to_owned(), secret: true, value: String::new() };
+                let key_file = PromptField {
+                    label: "Key file (optional)".to_owned(),
+                    secret: false,
+                    value: self.core.ui.vault_key_file.clone(),
+                };
+                let fields = vec![
+                    secret("Current master password"),
+                    secret("New master password"),
+                    secret("Repeat the new master password"),
+                    key_file,
+                ];
+                let detail = if matches!(self.core.ui.sync, SyncState::Off) {
+                    ""
+                } else {
+                    "The synced copy changes too. Other devices will ask for the new password."
+                };
+                let mut state = PromptState::new("Change master password", detail, fields);
+                state.submit = "Change".to_owned();
+                self.ask_here(state, Reply::VaultPassword);
             },
             UiAction::VaultUnlock { mut password, key_file } => {
                 let password = Secret::new(password.take());

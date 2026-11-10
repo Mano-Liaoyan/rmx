@@ -288,6 +288,8 @@ pub enum UiAction {
     },
     /// Ask where this vault's file should go.
     VaultAskMove,
+    /// Ask for the current master password and a new one.
+    VaultAskPassword,
     HostKeyReject,
     HostKeyAcceptOnce,
     HostKeyAcceptAlways,

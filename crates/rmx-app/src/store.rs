@@ -62,6 +62,11 @@ pub enum Request {
     Create { password: Secret, key_file: Option<PathBuf>, plain_ok: bool },
     Unlock { password: Secret, key_file: Option<PathBuf> },
     Join { password: Secret, key_file: Option<PathBuf>, sync: Box<SyncDraft>, plain_ok: bool },
+    /// Re-encrypt the vault with a new master password and key file, and the synced copy too.
+    /// The current password must be right; the current key file is the one it was opened with.
+    ChangePassword { current: Secret, new: Secret, key_file: Option<PathBuf> },
+    /// The synced copy was re-keyed on another device: take on its password and key file.
+    AdoptPassword { password: Secret, key_file: Option<PathBuf> },
     Lock,
     /// Close the vault and go to the one at this path, which need not exist yet.
     Switch(String),
@@ -146,7 +151,8 @@ pub enum Phase {
     /// No vault yet, at this path.
     Setup(PathBuf),
     Locked(PathBuf),
-    Unlocked { unencrypted: bool },
+    /// With the key file it was opened with, if any.
+    Unlocked { unencrypted: bool, key_file: Option<PathBuf> },
 }
 
 /// What sync is doing.
@@ -173,6 +179,8 @@ pub enum VaultEvent {
     Saved { node: u64, connect: bool },
     /// Which vault this is, and the others this device knows.
     Vaults { current: PathBuf, others: Vec<PathBuf> },
+    /// The synced copy has another master password: ask for it.
+    RemoteKeyChanged,
 }
 
 /// The number the tree knows a row by, stable across reloads and devices.
@@ -296,6 +304,10 @@ struct Actor {
     state: Option<AppState>,
     path: PathBuf,
     vault: Option<Vault>,
+    /// The key file the open vault was opened with, which a password change keeps unless told.
+    key_file: Option<PathBuf>,
+    /// The user has been asked for the synced copy's new password since the vault was opened.
+    asked_remote_key: bool,
     /// The last tree's numbers for its rows.
     ids: HashMap<u64, Id>,
     collapsed: HashSet<Id>,
@@ -322,6 +334,8 @@ pub fn spawn(
         state,
         path,
         vault: None,
+        key_file: None,
+        asked_remote_key: false,
         ids: HashMap::new(),
         collapsed: HashSet::new(),
         active: Instant::now(),
@@ -438,6 +452,7 @@ impl Actor {
     /// Leave the vault that is open for the one at `path`.
     fn go_to(&mut self, path: PathBuf) {
         self.vault = None;
+        self.key_file = None;
         self.path = path;
         if self.path.is_file()
             && let Some(state) = &self.state
@@ -470,7 +485,7 @@ impl Actor {
             return;
         }
         match Vault::open_plain(&self.path) {
-            Ok(vault) => self.opened(vault),
+            Ok(vault) => self.opened(vault, None),
             Err(err) => {
                 self.send(VaultEvent::Phase(self.resting_phase()));
                 self.send(VaultEvent::OpenFailed(err.to_string()));
@@ -530,6 +545,16 @@ impl Actor {
             Request::Join { password, key_file, sync, plain_ok } => {
                 self.join(password, key_file, *sync, plain_ok);
             },
+            Request::ChangePassword { current, new, key_file } => {
+                match self.change_password(current, new, key_file) {
+                    Ok(message) => self.notice(message, false),
+                    Err(err) => self.notice(err, true),
+                }
+            },
+            Request::AdoptPassword { password, key_file } => match self.adopt_password(password, key_file) {
+                Ok(message) => self.notice(message, false),
+                Err(err) => self.notice(err, true),
+            },
             Request::Lock => self.lock(),
             Request::Switch(path) => self.switch(&path),
             Request::Move(path) => match self.relocate(&path) {
@@ -571,7 +596,10 @@ impl Actor {
                     self.notice("Settings saved", false);
                 }
             },
-            Request::SyncNow => self.run_sync(true),
+            Request::SyncNow => {
+                self.asked_remote_key = false;
+                self.run_sync(true);
+            },
             Request::EditConnection(node) => match self.draft_of(node) {
                 Ok(draft) => self.send(VaultEvent::Draft(Box::new(draft))),
                 Err(err) => self.notice(err, true),
@@ -645,7 +673,7 @@ impl Actor {
     }
 
     fn create(&mut self, password: Secret, key_file: Option<PathBuf>, plain_ok: bool) {
-        let protection = match Protection::asked_for(password, key_file, plain_ok) {
+        let protection = match Protection::asked_for(password, key_file.clone(), plain_ok) {
             Ok(protection) => protection,
             Err(reason) => {
                 self.send(VaultEvent::OpenFailed(reason));
@@ -666,14 +694,14 @@ impl Actor {
             Protection::Plain => Vault::create_plain(&self.path),
         };
         match created {
-            Ok(vault) => self.opened(vault),
+            Ok(vault) => self.opened(vault, key_file),
             Err(err) => self.send(VaultEvent::OpenFailed(err.to_string())),
         }
     }
 
     fn unlock(&mut self, password: Secret, key_file: Option<PathBuf>) {
         off_main("argon2");
-        let credentials = Self::credentials(password, key_file);
+        let credentials = Self::credentials(password, key_file.clone());
         let result = match self.vault.take() {
             Some(mut vault) => match vault.unlock(&credentials) {
                 Ok(()) => Ok(vault),
@@ -685,13 +713,13 @@ impl Actor {
             None => Vault::open(&self.path, &credentials),
         };
         match result {
-            Ok(vault) => self.opened(vault),
+            Ok(vault) => self.opened(vault, key_file),
             Err(err) => self.send(VaultEvent::OpenFailed(err.to_string())),
         }
     }
 
     fn join(&mut self, password: Secret, key_file: Option<PathBuf>, sync: SyncDraft, plain_ok: bool) {
-        let protection = match Protection::asked_for(password, key_file, plain_ok) {
+        let protection = match Protection::asked_for(password, key_file.clone(), plain_ok) {
             Ok(protection) => protection,
             Err(reason) => {
                 self.send(VaultEvent::OpenFailed(reason));
@@ -728,7 +756,7 @@ impl Actor {
                 if let Err(err) = store_sync_settings(&mut vault, &settings, "") {
                     self.notice(format!("Could not save the sync settings: {err}"), true);
                 }
-                self.opened(vault);
+                self.opened(vault, key_file);
             },
             Err(Error::KindMismatch { remote: VaultKind::Encrypted, .. }) => {
                 self.send(VaultEvent::OpenFailed("The synced copy is encrypted: enter its master password".to_owned()));
@@ -741,7 +769,7 @@ impl Actor {
     }
 
     /// A vault has just been opened: load what depends on it.
-    fn opened(&mut self, mut vault: Vault) {
+    fn opened(&mut self, mut vault: Vault, key_file: Option<PathBuf>) {
         if let Some(state) = &self.state {
             state.set_last_vault(&self.path);
         }
@@ -764,8 +792,11 @@ impl Actor {
         self.sync = parse_sync(&vault, &settings);
         self.active = Instant::now();
         self.vault = Some(vault);
+        self.key_file = if unencrypted { None } else { key_file };
+        self.asked_remote_key = false;
         self.schedule_interval();
-        self.send(VaultEvent::Phase(Phase::Unlocked { unencrypted }));
+        let key_file = self.key_file.clone();
+        self.send(VaultEvent::Phase(Phase::Unlocked { unencrypted, key_file }));
         self.announce_vaults();
         self.send_tree();
         self.announce_sync();
@@ -1287,43 +1318,27 @@ impl Actor {
     }
 
     fn run_sync(&mut self, interactive: bool) {
-        let Some(settings) = self.sync.clone() else {
+        if self.sync.is_none() {
             self.send(VaultEvent::Sync(SyncState::Off));
             return;
-        };
+        }
         if !self.is_open() {
             return;
         }
-        off_main("sync");
-        self.send(VaultEvent::Sync(SyncState::Running));
-
-        let known = match self.open().and_then(|v| v.list::<KnownHost>().map_err(text)) {
-            Ok(known) => known,
-            Err(err) => {
-                self.send(VaultEvent::Sync(SyncState::Failed(err)));
-                return;
+        match self.with_backend(interactive, |vault, backend| vault.sync(backend)) {
+            Ok(Err(Error::RemoteKeyChanged)) => {
+                self.send(VaultEvent::Sync(SyncState::Failed(describe_sync_error(Error::RemoteKeyChanged))));
+                if !std::mem::replace(&mut self.asked_remote_key, true) {
+                    self.send(VaultEvent::RemoteKeyChanged);
+                }
             },
-        };
-        let (backend, trusted) = match self.backend(&settings.draft, known, interactive) {
-            Ok(built) => built,
-            Err(err) => {
-                self.send(VaultEvent::Sync(SyncState::Failed(err)));
-                return;
-            },
-        };
-        let result = match self.open() {
-            Ok(vault) => vault.sync(backend.as_ref()).map_err(describe_sync_error),
-            Err(err) => Err(err),
-        };
-        drop(backend);
-
-        let rows = trusted.lock().map(|mut rows| std::mem::take(&mut *rows)).unwrap_or_default();
-        if let Some(vault) = &mut self.vault {
-            for row in rows {
-                let _ = vault.put(&row);
-            }
+            Ok(result) => self.report_sync(result.map_err(describe_sync_error)),
+            Err(err) => self.report_sync(Err(err)),
         }
+    }
 
+    /// Say how a sync went, and show what it brought.
+    fn report_sync(&mut self, result: Result<SyncReport, String>) {
         match result {
             Ok(report) => {
                 self.send(VaultEvent::Sync(SyncState::Done(describe_report(&report))));
@@ -1332,6 +1347,105 @@ impl Actor {
                 }
             },
             Err(err) => self.send(VaultEvent::Sync(SyncState::Failed(err))),
+        }
+    }
+
+    /// Run `work` against the open vault and its sync backend, keeping the host keys the user
+    /// trusted on the way. The outer error is a backend that could not be got going.
+    fn with_backend(
+        &mut self,
+        interactive: bool,
+        work: impl FnOnce(&mut Vault, &dyn SyncBackend) -> rmx_vault::Result<SyncReport>,
+    ) -> Result<rmx_vault::Result<SyncReport>, String> {
+        let settings = self.sync.clone().ok_or("sync is off")?;
+        off_main("sync");
+        self.send(VaultEvent::Sync(SyncState::Running));
+        let known = self.open()?.list::<KnownHost>().map_err(text)?;
+        let (backend, trusted) = self.backend(&settings.draft, known, interactive)?;
+        let vault = self.open()?;
+        let result = work(vault, backend.as_ref());
+        drop(backend);
+
+        let rows = trusted.lock().map(|mut rows| std::mem::take(&mut *rows)).unwrap_or_default();
+        for row in rows {
+            let _ = vault.put(&row);
+        }
+        Ok(result)
+    }
+
+    /// Re-encrypt with `new` and `key_file`, once `current` has been shown to be the password.
+    /// With sync set up the synced copy goes over to it as well, or else nothing changes.
+    fn change_password(
+        &mut self,
+        current: Secret,
+        new: Secret,
+        key_file: Option<PathBuf>,
+    ) -> Result<String, String> {
+        if new.is_empty() && key_file.is_none() {
+            return Err("Enter a new master password or a key file".to_owned());
+        }
+        off_main("argon2");
+        let old_key_file = self.key_file.clone();
+        let old = Self::credentials(current, old_key_file.clone());
+        let new = Self::credentials(new, key_file.clone());
+        let vault = self.open()?;
+        vault.check_credentials(&old).map_err(|err| match err {
+            Error::WrongKey => "The current master password is wrong".to_owned(),
+            Error::Unencrypted => "This vault has no master password to change".to_owned(),
+            other => other.to_string(),
+        })?;
+        vault.change_credentials(&new, KdfParams::RECOMMENDED).map_err(text)?;
+        self.key_file = key_file;
+        if self.sync.is_none() {
+            return Ok("Master password changed".to_owned());
+        }
+        let pushed = self
+            .with_backend(true, |vault, backend| vault.push_new_credentials(backend, &old))
+            .and_then(|result| result.map_err(describe_sync_error));
+        match pushed {
+            Ok(report) => {
+                self.report_sync(Ok(report));
+                Ok("Master password changed, here and in the synced copy".to_owned())
+            },
+            Err(err) => {
+                self.report_sync(Err(err.clone()));
+                let undone = self
+                    .open()
+                    .and_then(|vault| vault.change_credentials(&old, KdfParams::RECOMMENDED).map_err(text));
+                match undone {
+                    Ok(()) => {
+                        self.key_file = old_key_file;
+                        Err(format!("The synced copy could not be updated, so the master password is unchanged: {err}"))
+                    },
+                    Err(back) => Err(format!(
+                        "The synced copy could not be updated ({err}) and the old master password could not be put back ({back}): this vault now opens with the new one"
+                    )),
+                }
+            },
+        }
+    }
+
+    /// Follow a password change made on another device.
+    fn adopt_password(&mut self, password: Secret, key_file: Option<PathBuf>) -> Result<String, String> {
+        if password.is_empty() && key_file.is_none() {
+            return Err("Enter the new master password or key file".to_owned());
+        }
+        off_main("argon2");
+        let credentials = Self::credentials(password, key_file.clone());
+        let adopted = self
+            .with_backend(true, |vault, backend| vault.adopt_remote_credentials(backend, &credentials))
+            .and_then(|result| result.map_err(describe_sync_error));
+        match adopted {
+            Ok(report) => {
+                self.key_file = key_file;
+                self.asked_remote_key = false;
+                self.report_sync(Ok(report));
+                Ok("This vault now uses the new master password".to_owned())
+            },
+            Err(err) => {
+                self.report_sync(Err(err.clone()));
+                Err(err)
+            },
         }
     }
 }
@@ -1371,8 +1485,9 @@ fn text(err: impl std::fmt::Display) -> String {
 fn describe_sync_error(err: Error) -> String {
     match err {
         Error::RemoteKeyChanged => {
-            "The remote copy has a different master password".to_owned()
+            "The synced copy has a different master password".to_owned()
         },
+        Error::WrongKey => "That is not the synced copy's master password or key file".to_owned(),
         other => other.to_string(),
     }
 }

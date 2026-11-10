@@ -192,7 +192,15 @@ pub fn settings_dialog(
         return Some(UiAction::PanelsChanged);
     }
     let action = modal.inner.or(modal.dismissed.then_some(UiAction::SettingsCancel));
-    if matches!(action, Some(UiAction::SettingsCancel | UiAction::SettingsSave(_) | UiAction::VaultAskMove)) {
+    if matches!(
+        action,
+        Some(
+            UiAction::SettingsCancel
+                | UiAction::SettingsSave(_)
+                | UiAction::VaultAskMove
+                | UiAction::VaultAskPassword
+        )
+    ) {
         state.close();
         ctx.request_repaint();
     }
@@ -238,6 +246,13 @@ fn settings_body(
             if !view.unencrypted {
                 group_rule(ui);
                 field(ui, id, "Auto-lock, min", &mut draft.auto_lock_minutes, "", false);
+                row(ui, "Master password", |ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if button(ui, "Change", ButtonKind::Secondary).clicked() {
+                            action = Some(UiAction::VaultAskPassword);
+                        }
+                    });
+                });
             }
 
             group_rule(ui);

@@ -206,6 +206,12 @@ impl VaultKey {
         self.salt
     }
 
+    /// Whether both are the same key, compared in constant time.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        let diff = self.raw.iter().zip(other.raw.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        diff == 0 && self.salt == other.salt
+    }
+
     /// The SQLCipher raw-key literal: `x'<key hex><salt hex>'`.
     pub(crate) fn keyspec(&self) -> Zeroizing<String> {
         const HEX: &[u8; 16] = b"0123456789abcdef";

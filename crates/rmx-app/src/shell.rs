@@ -205,6 +205,8 @@ pub struct Common {
     setup: VaultSetupState,
     /// The open database has no master password: nothing can be locked, and it says so.
     pub unencrypted: bool,
+    /// The key file the open vault was unlocked with, or empty.
+    pub vault_key_file: String,
     /// A key is being derived.
     pub vault_busy: bool,
     pub vault_error: Option<String>,
@@ -237,6 +239,7 @@ impl Default for Common {
             unlock: VaultState::default(),
             setup: VaultSetupState::default(),
             unencrypted: false,
+            vault_key_file: String::new(),
             vault_busy: false,
             vault_error: None,
             sync: SyncState::Off,
