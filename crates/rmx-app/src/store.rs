@@ -1352,11 +1352,11 @@ impl Actor {
 
     /// Run `work` against the open vault and its sync backend, keeping the host keys the user
     /// trusted on the way. The outer error is a backend that could not be got going.
-    fn with_backend(
+    fn with_backend<T>(
         &mut self,
         interactive: bool,
-        work: impl FnOnce(&mut Vault, &dyn SyncBackend) -> rmx_vault::Result<SyncReport>,
-    ) -> Result<rmx_vault::Result<SyncReport>, String> {
+        work: impl FnOnce(&mut Vault, &dyn SyncBackend) -> rmx_vault::Result<T>,
+    ) -> Result<rmx_vault::Result<T>, String> {
         let settings = self.sync.clone().ok_or("sync is off")?;
         off_main("sync");
         self.send(VaultEvent::Sync(SyncState::Running));
@@ -1408,6 +1408,13 @@ impl Actor {
                 Ok("Master password changed, here and in the synced copy".to_owned())
             },
             Err(err) => {
+                // An error after the upload leaves the synced copy on the new password already:
+                // putting the old one back here would split the two.
+                let landed = self.with_backend(false, |vault, backend| vault.remote_has_current_key(backend));
+                if matches!(landed, Ok(Ok(true))) {
+                    self.run_sync(false);
+                    return Ok("Master password changed, here and in the synced copy".to_owned());
+                }
                 self.report_sync(Err(err.clone()));
                 let undone = self
                     .open()

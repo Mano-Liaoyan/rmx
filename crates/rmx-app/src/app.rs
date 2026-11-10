@@ -1561,8 +1561,8 @@ impl At<'_> {
             PromptField { label: "New master password".to_owned(), secret: true, value: String::new() },
             PromptField { label: "Key file (optional)".to_owned(), secret: false, value: self.core.ui.vault_key_file.clone() },
         ];
-        let detail = "Another device changed the synced copy's master password. Enter it to keep syncing; this vault will use it too.";
-        let mut state = PromptState::new("Master password changed", detail, fields);
+        let detail = "The synced copy has a different master password, such as one set on another device. Enter it to keep syncing; this vault will use it too.";
+        let mut state = PromptState::new("Synced copy has another password", detail, fields);
         state.submit = "Use it".to_owned();
         self.ask_here(state, Reply::VaultRemotePassword);
     }

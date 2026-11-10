@@ -180,6 +180,14 @@ impl Vault {
         self.run_sync(backend, RemoteKey::Replace(old))
     }
 
+    /// Whether the remote copy is already encrypted with the working copy's key: after
+    /// [`push_new_credentials`](Self::push_new_credentials) failed, whether it got there anyway.
+    pub fn remote_has_current_key(&mut self, backend: &dyn SyncBackend) -> Result<bool> {
+        self.require_encrypted()?;
+        let key = self.session()?.key.clone().ok_or(Error::Locked)?;
+        Ok(backend.get()?.is_some_and(|remote| remote.data.starts_with(&key.salt())))
+    }
+
     /// Follows a password change made on another device: `new` must open the remote copy, and
     /// the working copy is re-encrypted to match it before syncing.
     pub fn adopt_remote_credentials(

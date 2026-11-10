@@ -5,7 +5,10 @@ mod common;
 use std::sync::Arc;
 
 use common::{MemoryBackend, creds, fast_kdf, replicas};
-use rmx_vault::{Connection, Credentials, Error, Folder, Id, SyncBackend, Vault};
+use rmx_vault::{
+    BackendError, Connection, Credentials, Error, Folder, Id, RemoteObject, RemoteVersion, SyncBackend,
+    Vault,
+};
 
 fn folder(name: &str) -> Folder {
     Folder { name: name.to_owned(), ..Default::default() }
@@ -261,4 +264,47 @@ fn snapshots_are_taken_from_the_committed_state_only() {
     vaults[0].snapshot(&snapshot).unwrap();
     let report = vaults[1].merge_snapshot(&snapshot).unwrap();
     assert!(report.changed, "a snapshot must include rows still in the WAL");
+}
+
+/// Stores the upload, then reports an error, as a backend that fails after its write does.
+struct LandsThenFails(MemoryBackend);
+
+impl SyncBackend for LandsThenFails {
+    fn id(&self) -> String {
+        self.0.id()
+    }
+
+    fn head(&self) -> Result<Option<RemoteVersion>, BackendError> {
+        self.0.head()
+    }
+
+    fn get(&self) -> Result<Option<RemoteObject>, BackendError> {
+        self.0.get()
+    }
+
+    fn put_if_match(
+        &self,
+        data: &[u8],
+        expected: Option<&RemoteVersion>,
+    ) -> Result<Option<RemoteVersion>, BackendError> {
+        self.0.put_if_match(data, expected)?;
+        Err(BackendError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied)))
+    }
+}
+
+#[test]
+fn a_push_that_failed_after_landing_is_told_from_one_that_did_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = MemoryBackend::default();
+    let new = Credentials::new("rotated password");
+    let mut a = Vault::create(&dir.path().join("a.rmxdb"), &creds(), fast_kdf()).unwrap();
+    a.sync(&backend).unwrap();
+    assert!(a.remote_has_current_key(&backend).unwrap());
+
+    a.change_credentials(&new, fast_kdf()).unwrap();
+    assert!(!a.remote_has_current_key(&backend).unwrap(), "not pushed yet");
+    let flaky = LandsThenFails(backend);
+    assert!(a.push_new_credentials(&flaky, &creds()).is_err());
+    assert!(a.remote_has_current_key(&flaky).unwrap(), "the upload got there");
+    a.sync(&flaky.0).unwrap();
 }
