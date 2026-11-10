@@ -412,3 +412,17 @@ impl GlyphCache {
         self.load_glyphs_for_font(self.bold_italic_key, loader);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default family is one the platform's font system can find; without it the terminal,
+    /// and with it the application, does not start.
+    #[test]
+    fn default_font_loads() {
+        let rasterizer = Rasterizer::new().expect("rasterizer");
+        let cache = GlyphCache::new(rasterizer, &Font::default()).expect("default font");
+        assert!(cache.font_metrics().average_advance > 0.);
+    }
+}
