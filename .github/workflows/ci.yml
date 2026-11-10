@@ -35,12 +35,13 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            features: ""
           - os: windows-latest
-            features: --features vendored-openssl
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Prebuilt OpenSSL
+        if: runner.os == 'Windows'
+        run: ./packaging/windows/openssl.ps1
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked -p rmx-app ${{ matrix.features }}
+      - run: cargo build --locked -p rmx-app
