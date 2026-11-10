@@ -12,7 +12,7 @@ use bytes::Bytes;
 use rmx_layout::PaneId;
 use rmx_render::SizeInfo;
 use rmx_display::{DisplayEvent, DisplayHandle};
-use rmx_rdp::{CertificatePolicy, CertificatePrompt, RdpConfig, RdpError, Security};
+use rmx_rdp::{CertificatePolicy, CertificatePrompt, Quality, RdpConfig, RdpError, Security};
 use rmx_ssh::{
     ConnectConfig, ConnectOptions, HostConfig, HostKeyCheck, HostKeyDecision, HostKeyRejection,
     HostKeyVerifier, KeyboardChallenge, PortForward, PromptContext, Prompter, PublicKey,
@@ -26,7 +26,7 @@ use rmx_transfer::{
     DialedStream, FtpConfig, FtpDialer, FtpFs, FtpTls, RemoteFs, SftpFs, SftpOptions, TunnelStream,
 };
 use rmx_ui::Protocol;
-use rmx_ui::widgets::{HostKeyStatus, PromptField, RdpSecurity, ScaleChoice};
+use rmx_ui::widgets::{HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, VncColors};
 use rmx_vault::{KnownHost, Tunnel};
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
@@ -396,6 +396,8 @@ pub struct ConnectPlan {
     pub scale: ScaleChoice,
     pub follow_size: bool,
     pub rdp_security: RdpSecurity,
+    pub rdp_quality: RdpQuality,
+    pub vnc_colors: VncColors,
     pub ftps: bool,
     pub serial: SerialConfig,
 }
@@ -1025,8 +1027,13 @@ async fn run_vnc(
     vault: VaultHandle,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), String> {
-    let ConnectPlan { endpoint, jumps, holds, scale, follow_size, .. } = plan;
+    let ConnectPlan { endpoint, jumps, holds, scale, follow_size, vnc_colors, .. } = plan;
     let Endpoint { host, port, password, .. } = endpoint;
+    let color_depth = match vnc_colors {
+        VncColors::Full => rmx_vnc::ColorDepth::Full,
+        VncColors::Bits16 => rmx_vnc::ColorDepth::Bits16,
+        VncColors::Bits8 => rmx_vnc::ColorDepth::Bits8,
+    };
     reporter.send(LinkEvent::Target(format!("{host}:{port}")));
     let mut password = password.map(|secret| secret.expose().to_owned());
 
@@ -1036,7 +1043,8 @@ async fn run_vnc(
         reporter.send(LinkEvent::Stage("Starting the session".to_owned()));
         for attempt in 0..PASSWORD_ATTEMPTS {
             let stream = open_stream(tunnel.as_ref(), &host, port).await?;
-            let config = rmx_vnc::Config { password: password.clone(), ..rmx_vnc::Config::default() };
+            let config =
+                rmx_vnc::Config { password: password.clone(), color_depth, ..rmx_vnc::Config::default() };
             let connect = tokio::time::timeout(CONNECT_TIMEOUT, rmx_vnc::connect(stream, config));
             let result = connect.await.map_err(|_| "the server did not answer".to_owned())?;
             match result {
@@ -1099,7 +1107,8 @@ async fn run_rdp(
     vault: VaultHandle,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), String> {
-    let ConnectPlan { endpoint, jumps, holds, scale, follow_size, rdp_security, .. } = plan;
+    let ConnectPlan { endpoint, jumps, holds, scale, follow_size, rdp_security, rdp_quality, .. } =
+        plan;
     let Endpoint { host, port, user, password, domain } = endpoint;
     reporter.send(LinkEvent::Target(format!("{user}@{host}:{port}")));
     let mut password = password.map(|secret| secret.expose().to_owned());
@@ -1113,6 +1122,11 @@ async fn run_rdp(
             RdpSecurity::Negotiate => Security::NlaOrTls,
             RdpSecurity::Nla => Security::Nla,
             RdpSecurity::Tls => Security::Tls,
+        };
+        let quality = match rdp_quality {
+            RdpQuality::Best => Quality::Best,
+            RdpQuality::Balanced => Quality::Balanced,
+            RdpQuality::Fast => Quality::Fast,
         };
 
         for attempt in 0..PASSWORD_ATTEMPTS {
@@ -1132,6 +1146,7 @@ async fn run_rdp(
             // Asking is the only way a certificate is judged here: nothing is accepted unseen.
             config.certificate = CertificatePolicy::Ask(prompts_tx);
             config.security = security;
+            config.quality = quality;
             config.domain = domain.clone();
             config.connect_timeout = CONNECT_TIMEOUT;
 

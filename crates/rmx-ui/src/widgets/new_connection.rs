@@ -52,6 +52,26 @@ pub enum RdpSecurity {
     Tls,
 }
 
+/// How much of an RDP picture to trade for bandwidth.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RdpQuality {
+    /// Full color and every desktop effect.
+    Best,
+    #[default]
+    Balanced,
+    /// Fewer colors and no desktop effects, for a slow link.
+    Fast,
+}
+
+/// How many colors a VNC session asks for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VncColors {
+    #[default]
+    Full,
+    Bits16,
+    Bits8,
+}
+
 /// A connection as entered in the dialog.
 #[derive(Clone, PartialEq)]
 pub struct ConnectionDraft {
@@ -87,6 +107,10 @@ pub struct ConnectionDraft {
     pub follow_size: bool,
     /// RDP: how the server may authenticate.
     pub rdp_security: RdpSecurity,
+    /// RDP: how much picture to trade for bandwidth.
+    pub rdp_quality: RdpQuality,
+    /// VNC: how many colors to ask for.
+    pub vnc_colors: VncColors,
     /// FTP: whether to upgrade with `AUTH TLS`.
     pub ftps: bool,
 }
@@ -127,6 +151,8 @@ impl ConnectionDraft {
             scale: ScaleChoice::default(),
             follow_size: true,
             rdp_security: RdpSecurity::default(),
+            rdp_quality: RdpQuality::default(),
+            vnc_colors: VncColors::default(),
             ftps: false,
         }
     }
@@ -562,6 +588,14 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                             [RdpSecurity::Negotiate, RdpSecurity::Nla, RdpSecurity::Tls][selected];
                     }
                 });
+                row(ui, "Quality", |ui| {
+                    let mut selected = draft.rdp_quality as usize;
+                    let options = ["Best", "Balanced", "Fast"];
+                    if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
+                        draft.rdp_quality =
+                            [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast][selected];
+                    }
+                });
                 section(ui);
                 field(ui, "cd-user", "Username", &mut draft.username, "", false);
                 field(ui, "cd-domain", "Domain", &mut draft.domain, "", false);
@@ -577,6 +611,14 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
             Protocol::Vnc => {
                 field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                 display_options(ui, draft);
+                row(ui, "Colors", |ui| {
+                    let mut selected = draft.vnc_colors as usize;
+                    let options = ["Full", "16-bit", "8-bit"];
+                    if segmented(ui, Id::unique("cd-colors"), &options, &mut selected).changed() {
+                        draft.vnc_colors =
+                            [VncColors::Full, VncColors::Bits16, VncColors::Bits8][selected];
+                    }
+                });
                 section(ui);
                 field(
                     ui,

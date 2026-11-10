@@ -13,8 +13,8 @@ use std::time::{Duration, Instant, SystemTime};
 use rmx_ssh::{AuthMethod, HostConfig, SecretString};
 use rmx_ui::widgets::{
     SnippetRow,
-    AuthKind, ConnectionDraft, NodeKind, RdpSecurity, ScaleChoice, SettingsDraft, SyncDraft, SyncKind,
-    TreeModel, TreeNode,
+    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SettingsDraft, SyncDraft, SyncKind,
+    TreeModel, TreeNode, VncColors,
 };
 use rmx_ui::widgets::SessionDot;
 use rmx_ui::{NodeId, Protocol, ThemeMode};
@@ -49,6 +49,8 @@ const KEY_COLLAPSED: &str = "tree.collapsed";
 const OPTION_SCALE: &str = "scale";
 const OPTION_RESIZE: &str = "resize";
 const OPTION_SECURITY: &str = "security";
+const OPTION_QUALITY: &str = "quality";
+const OPTION_COLORS: &str = "colors";
 const OPTION_FTPS: &str = "ftps";
 const OPTION_DOMAIN: &str = "domain";
 const OPTION_BAUD: &str = "baud";
@@ -951,6 +953,8 @@ impl Actor {
             scale,
             follow_size: settings.get(OPTION_RESIZE).is_none_or(|value| value != "keep"),
             rdp_security,
+            rdp_quality: rdp_quality(&settings),
+            vnc_colors: vnc_colors(&settings),
             ftps: settings.get(OPTION_FTPS).is_some_and(|value| value == "1"),
             serial: serial_config(&settings),
         })
@@ -1042,6 +1046,8 @@ impl Actor {
             OPTION_SCALE,
             OPTION_RESIZE,
             OPTION_SECURITY,
+            OPTION_QUALITY,
+            OPTION_COLORS,
             OPTION_FTPS,
             OPTION_DOMAIN,
             OPTION_BAUD,
@@ -1073,6 +1079,14 @@ impl Actor {
             if let Some(domain) = non_empty(&draft.domain) {
                 settings.insert(OPTION_DOMAIN.to_owned(), domain);
             }
+            if let Some(quality) = rdp_quality_option(draft.rdp_quality) {
+                settings.insert(OPTION_QUALITY.to_owned(), quality.to_owned());
+            }
+        }
+        if draft.protocol == Protocol::Vnc
+            && let Some(colors) = vnc_colors_option(draft.vnc_colors)
+        {
+            settings.insert(OPTION_COLORS.to_owned(), colors.to_owned());
         }
         if draft.protocol == Protocol::Ftp && draft.ftps {
             settings.insert(OPTION_FTPS.to_owned(), "1".to_owned());
@@ -1163,6 +1177,8 @@ impl Actor {
             Some("tls") => RdpSecurity::Tls,
             _ => RdpSecurity::Negotiate,
         };
+        draft.rdp_quality = rdp_quality(&settings);
+        draft.vnc_colors = vnc_colors(&settings);
         draft.ftps = settings.get(OPTION_FTPS).is_some_and(|value| value == "1");
         draft.domain = settings.get(OPTION_DOMAIN).cloned().unwrap_or_default();
         Ok(draft)
@@ -1458,6 +1474,42 @@ impl Actor {
 }
 
 type TrustedKeys = std::sync::Arc<std::sync::Mutex<Vec<KnownHost>>>;
+
+/// What the form saves for an RDP quality; nothing for the default.
+fn rdp_quality_option(quality: RdpQuality) -> Option<&'static str> {
+    match quality {
+        RdpQuality::Best => Some("best"),
+        RdpQuality::Balanced => None,
+        RdpQuality::Fast => Some("fast"),
+    }
+}
+
+/// What the form saves for a VNC color depth; nothing for the default.
+fn vnc_colors_option(colors: VncColors) -> Option<&'static str> {
+    match colors {
+        VncColors::Full => None,
+        VncColors::Bits16 => Some("16"),
+        VncColors::Bits8 => Some("8"),
+    }
+}
+
+/// How much picture an RDP connection trades for bandwidth, from what the form saved.
+fn rdp_quality(settings: &BTreeMap<String, String>) -> RdpQuality {
+    match settings.get(OPTION_QUALITY).map(String::as_str) {
+        Some("best") => RdpQuality::Best,
+        Some("fast") => RdpQuality::Fast,
+        _ => RdpQuality::Balanced,
+    }
+}
+
+/// How many colors a VNC connection asks for, from what the form saved.
+fn vnc_colors(settings: &BTreeMap<String, String>) -> VncColors {
+    match settings.get(OPTION_COLORS).map(String::as_str) {
+        Some("16") => VncColors::Bits16,
+        Some("8") => VncColors::Bits8,
+        _ => VncColors::Full,
+    }
+}
 
 /// How to set up a serial port, from what the form saved.
 fn serial_config(settings: &BTreeMap<String, String>) -> SerialConfig {
@@ -1928,6 +1980,22 @@ mod tests {
         let collapsed = HashSet::from([a.id]);
         let (nodes, ..) = tree_nodes(vec![a], Vec::new(), &collapsed);
         assert!(!nodes[0].expanded);
+    }
+
+    #[test]
+    fn display_quality_reads_back_as_saved() {
+        let saved = |key: &str, value: Option<&str>| {
+            value.map(|value| BTreeMap::from([(key.to_owned(), value.to_owned())])).unwrap_or_default()
+        };
+        for quality in [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast] {
+            assert_eq!(rdp_quality(&saved(OPTION_QUALITY, rdp_quality_option(quality))), quality);
+        }
+        for colors in [VncColors::Full, VncColors::Bits16, VncColors::Bits8] {
+            assert_eq!(vnc_colors(&saved(OPTION_COLORS, vnc_colors_option(colors))), colors);
+        }
+        // Connections saved before there was a choice keep what they had.
+        assert_eq!(rdp_quality(&BTreeMap::new()), RdpQuality::Balanced);
+        assert_eq!(vnc_colors(&BTreeMap::new()), VncColors::Full);
     }
 
     #[test]

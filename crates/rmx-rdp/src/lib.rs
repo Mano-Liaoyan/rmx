@@ -45,6 +45,24 @@ pub enum Security {
     NlaOrTls,
 }
 
+/// How much of the picture a session trades for bandwidth.
+///
+/// Each step asks the server for less: fewer colors, fewer desktop effects, and a slower
+/// connection type, which servers use to pick their codecs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    /// 32-bit color with the wallpaper, themes, animations, font smoothing, desktop composition
+    /// and window contents while dragging, for a fast network.
+    Best,
+    /// 32-bit color and font smoothing, without menu animations or window contents while
+    /// dragging.
+    #[default]
+    Balanced,
+    /// 16-bit color with no wallpaper, themes, animations, cursor shadow or font smoothing, for
+    /// a slow link. RemoteFX needs 32-bit color, so servers send plain bitmaps instead.
+    Fast,
+}
+
 /// How to decide whether the server's TLS certificate is acceptable.
 ///
 /// RDP servers almost always present a self-signed certificate, so there is no chain to check.
@@ -102,6 +120,8 @@ pub struct RdpConfig {
     /// Offer RemoteFX. Without it the server falls back to plain bitmap updates, which are
     /// lossless but need far more bandwidth.
     pub remotefx: bool,
+    /// How much of the picture to trade for bandwidth.
+    pub quality: Quality,
     /// The name this client gives the server.
     pub client_name: String,
     /// The bound of the [`DisplayHandle::events`] channel. A smaller value coalesces harder.
@@ -130,6 +150,7 @@ impl RdpConfig {
             certificate: CertificatePolicy::Pinned(sha256),
             keyboard_layout: 0x0409,
             remotefx: true,
+            quality: Quality::default(),
             client_name: "rmx".to_owned(),
             event_capacity: 8,
             connect_timeout: Duration::from_secs(30),
@@ -150,6 +171,7 @@ impl fmt::Debug for RdpConfig {
             .field("certificate", &self.certificate)
             .field("keyboard_layout", &self.keyboard_layout)
             .field("remotefx", &self.remotefx)
+            .field("quality", &self.quality)
             .field("client_name", &self.client_name)
             .field("event_capacity", &self.event_capacity)
             .field("connect_timeout", &self.connect_timeout)
