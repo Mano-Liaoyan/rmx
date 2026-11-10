@@ -171,3 +171,17 @@ fn sftp_end_to_end() {
     assert_eq!(a.digest().unwrap(), b.digest().unwrap());
     assert_eq!(a.list::<Folder>().unwrap().len(), 2);
 }
+
+#[test]
+fn a_password_change_goes_through_a_local_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = LocalPathBackend::new(dir.path().join("vault.rmxdb"));
+    let new = rmx_vault::Credentials::new("rotated password");
+    let mut a = Vault::create(&dir.path().join("a.rmxdb"), &creds(), fast_kdf()).unwrap();
+    a.sync(&backend).unwrap();
+    a.change_credentials(&new, fast_kdf()).unwrap();
+    a.push_new_credentials(&backend, &creds()).unwrap();
+    a.sync(&backend).unwrap();
+    drop(a);
+    Vault::join(&dir.path().join("b.rmxdb"), &new, &backend).unwrap();
+}

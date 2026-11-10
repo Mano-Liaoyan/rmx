@@ -1,6 +1,6 @@
 //! A file in a local directory, typically one watched by Syncthing or similar.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -92,7 +92,10 @@ impl SyncBackend for LocalPathBackend {
             drop(file);
             self.check(expected)?;
             fs::rename(&tmp, &self.path)?;
-            File::open(self.parent())?.sync_all()?;
+            // Make the rename durable. Windows cannot open a directory as a file (os error 5)
+            // and journals the rename itself.
+            #[cfg(unix)]
+            fs::File::open(self.parent())?.sync_all()?;
             Ok(())
         })();
         if result.is_err() {
