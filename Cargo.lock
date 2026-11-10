@@ -4222,7 +4222,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "alacritty_terminal",
  "async-trait",
@@ -4257,18 +4257,18 @@ dependencies = [
 
 [[package]]
 name = "rmx-display"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "rmx-layout"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "rmx-rdp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ironrdp-cliprdr",
  "ironrdp-connector",
@@ -4293,7 +4293,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-render"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ahash",
  "alacritty_terminal",
@@ -4309,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-serial"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytes",
  "libc",
@@ -4322,7 +4322,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-ssh"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4339,7 +4339,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-terminal"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "alacritty_terminal",
  "bitflags 2.13.2",
@@ -4356,7 +4356,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-transfer"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4376,7 +4376,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-ui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "egui",
  "egui_glow",
@@ -4391,7 +4391,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-vault"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -4411,7 +4411,7 @@ dependencies = [
 
 [[package]]
 name = "rmx-vnc"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "log",
  "rmx-display",
@@ -6545,7 +6545,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "yaml-rust"
