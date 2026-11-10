@@ -67,6 +67,11 @@ jobs:
         working-directory: dist
         run: |
           sha256sum * > SHA256SUMS
+          # A tag with a suffix, such as v0.2.0-rc1, is a pre-release; any other is the latest.
+          case "$TAG" in
+            *-*) kind=--prerelease ;;
+            *) kind=--latest ;;
+          esac
           gh release view "$TAG" > /dev/null 2>&1 \
-            || gh release create "$TAG" --title "rmx ${TAG#v}" --generate-notes --prerelease --verify-tag
+            || gh release create "$TAG" --title "rmx ${TAG#v}" --generate-notes "$kind" --verify-tag
           gh release upload "$TAG" * --clobber
