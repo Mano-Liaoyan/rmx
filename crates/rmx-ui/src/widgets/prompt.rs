@@ -28,10 +28,20 @@ pub struct PromptState {
     /// None at all makes it a confirmation.
     pub fields: Vec<PromptField>,
     pub submit: String,
+    /// Only telling something: no fields, no Cancel, and the title in red if it is bad news.
+    pub notice: Option<bool>,
     focused: bool,
 }
 
 impl PromptState {
+    /// A dialog telling the outcome of something, dismissed with OK.
+    pub fn notice(title: impl Into<String>, detail: impl Into<String>, bad: bool) -> Self {
+        let mut state = Self::new(title, detail, Vec::new());
+        state.submit = "OK".to_owned();
+        state.notice = Some(bad);
+        state
+    }
+
     /// A dialog with these contents.
     pub fn new(title: impl Into<String>, detail: impl Into<String>, fields: Vec<PromptField>) -> Self {
         Self {
@@ -39,6 +49,7 @@ impl PromptState {
             detail: detail.into(),
             fields,
             submit: "Continue".to_owned(),
+            notice: None,
             focused: false,
         }
     }
@@ -61,7 +72,8 @@ fn prompt_body(ui: &mut Ui, id: Id, state: &mut PromptState) -> Option<UiAction>
     ui.spacing_mut().item_spacing.y = 0.;
     egui::Frame::new().inner_margin(16).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 8.;
-        ui.label(RichText::new(&state.title).font(fonts::medium(TEXT_LG)).color(p.foreground));
+        let title = if state.notice == Some(true) { p.danger } else { p.foreground };
+        ui.label(RichText::new(&state.title).font(fonts::medium(TEXT_LG)).color(title));
         if !state.detail.is_empty() {
             ui.label(RichText::new(&state.detail).color(p.muted_fg).size(TEXT_SM));
         }
@@ -89,7 +101,7 @@ fn prompt_body(ui: &mut Ui, id: Id, state: &mut PromptState) -> Option<UiAction>
             if submit.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 action = Some(UiAction::PromptSubmit(state.take_answers()));
             }
-            if button(ui, "Cancel", ButtonKind::Secondary).clicked() {
+            if state.notice.is_none() && button(ui, "Cancel", ButtonKind::Secondary).clicked() {
                 action = Some(UiAction::PromptCancel);
             }
         });

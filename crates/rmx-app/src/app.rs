@@ -205,6 +205,8 @@ enum Reply {
     VaultPassword,
     /// The synced copy's new master password and key file.
     VaultRemotePassword,
+    /// Nothing to do: the dialog only told something.
+    Acknowledge,
 }
 
 /// What `key` does in a file pane, and whether Shift is adding to the selection.
@@ -1555,6 +1557,16 @@ impl At<'_> {
         }
     }
 
+    /// Tell the user how something went, in a dialog; on the sidebar's foot if one is up already.
+    fn tell(&mut self, title: &str, detail: &str, bad: bool) {
+        if self.core.answer.is_some() {
+            self.core.ui.status_note = Some((format!("{title}: {detail}"), bad));
+            self.core.broadcast = true;
+            return;
+        }
+        self.ask_here(PromptState::notice(title, detail, bad), Reply::Acknowledge);
+    }
+
     /// The synced copy's master password was changed on another device: ask for the new one.
     fn ask_remote_password(&mut self) {
         let fields = vec![
@@ -1682,7 +1694,7 @@ impl At<'_> {
             Reply::VaultPassword => {
                 if let Some([current, new, repeat, key_file]) = fields.as_deref() {
                     if new.expose() != repeat.expose() {
-                        self.core.ui.status_note = Some(("The new passwords do not match".to_owned(), true));
+                        self.tell("Master password not changed", "The new passwords do not match", true);
                     } else {
                         self.core.ui.status_note = Some(("Changing the master password\u{2026}".to_owned(), false));
                         self.core.vault.send(Request::ChangePassword {
@@ -1701,6 +1713,7 @@ impl At<'_> {
                     });
                 }
             },
+            Reply::Acknowledge => {},
             Reply::DeleteConnection(node) => {
                 if fields.is_some() {
                     self.core.vault.send(Request::DeleteConnection(node));
@@ -2582,6 +2595,7 @@ impl At<'_> {
                 self.link_changed(pane);
             },
             UiAction::OpenSettings => self.perform(Action::OpenSettings),
+            UiAction::ToggleTheme => self.perform(Action::ToggleTheme),
             UiAction::SettingsSave(draft) => {
                 self.core.ops.push(Op::SetTheme(draft.theme));
                 self.core.vault.send(Request::SaveSettings(draft));

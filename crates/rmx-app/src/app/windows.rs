@@ -332,6 +332,12 @@ impl Running {
                 self.core.ui.vault_others = others.iter().map(|path| path.display().to_string()).collect();
             },
             VaultEvent::Notice(text, bad) => self.core.ui.status_note = Some((text, bad)),
+            VaultEvent::PasswordOutcome(title, detail, bad) => {
+                self.core.ui.status_note = None;
+                if let Some(mut at) = self.at_active() {
+                    at.tell(&title, &detail, bad);
+                }
+            },
             VaultEvent::RemoteKeyChanged => {
                 if let Some(mut at) = self.at_active() {
                     at.ask_remote_password();

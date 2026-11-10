@@ -59,6 +59,41 @@ pub(crate) fn lock_open(painter: &Painter, center: Pos2, size: f32, color: Color
     painter.add(Shape::line(shackle, stroke));
 }
 
+/// Lucide's `sun`, which is not in the font subset, drawn from the same geometry.
+pub(crate) fn sun(painter: &Painter, center: Pos2, size: f32, color: Color32) {
+    let unit = size / 24.;
+    let stroke = Stroke::new(2. * unit, color);
+    painter.circle_stroke(center, 4. * unit, stroke);
+    for step in 0..8u8 {
+        let angle = std::f32::consts::FRAC_PI_4 * f32::from(step);
+        let along = vec2(angle.cos(), angle.sin());
+        // The diagonal rays are a little shorter, as in Lucide.
+        let (inner, outer) = if step % 2 == 0 { (8., 10.) } else { (7.4, 8.8) };
+        painter.line_segment([center + along * inner * unit, center + along * outer * unit], stroke);
+    }
+}
+
+/// Lucide's `moon`, which is not in the font subset: a crescent opening to the upper right.
+pub(crate) fn moon(painter: &Painter, center: Pos2, size: f32, color: Color32) {
+    let unit = size / 24.;
+    let stroke = Stroke::new(2. * unit, color);
+    let radius = 9. * unit;
+    // The rim of a circle, less what a second one up and to the right bites off.
+    let bite = center + vec2(5., -5.) * unit;
+    let bite_radius = 7. * unit;
+    const STEPS: u16 = 32;
+    let around = |middle: Pos2, r: f32, step: u16| {
+        let angle = std::f32::consts::TAU * f32::from(step) / f32::from(STEPS);
+        middle + vec2(angle.cos(), angle.sin()) * r
+    };
+    let mut points: Vec<Pos2> =
+        (0..=STEPS).map(|step| around(center, radius, step)).filter(|at| at.distance(bite) >= bite_radius).collect();
+    points.extend(
+        (0..=STEPS).rev().map(|step| around(bite, bite_radius, step)).filter(|at| at.distance(center) <= radius),
+    );
+    painter.add(Shape::closed_line(points, stroke));
+}
+
 /// Lucide's `file`, which is not in the font subset, drawn from the same geometry.
 pub(crate) fn file_icon(painter: &Painter, center: Pos2, size: f32, color: Color32) {
     let unit = size / 24.;

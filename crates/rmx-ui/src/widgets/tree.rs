@@ -501,6 +501,20 @@ pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Op
     if button(ui, cell(), "settings", icons::SETTINGS, true) {
         action = Some(UiAction::OpenSettings);
     }
+    let at = cell();
+    let response = ui.interact(at, id.with("theme"), Sense::click());
+    paint_icon_button(ui, at, ' ', 13., &response);
+    let dark = ui.visuals().dark_mode;
+    let color = if response.hovered() { p.foreground } else { p.muted_fg };
+    if dark {
+        crate::draw::sun(ui.painter(), at.center(), 13., color);
+    } else {
+        crate::draw::moon(ui.painter(), at.center(), 13., color);
+    }
+    let hint = if dark { "Switch to the light theme" } else { "Switch to the dark theme" };
+    if response.on_hover_text(hint).clicked() {
+        action = Some(UiAction::ToggleTheme);
+    }
     if button(ui, cell(), "sync", icons::FOLDER_SYNC, status.can_sync && !status.busy) {
         action = Some(UiAction::SyncNow);
     }

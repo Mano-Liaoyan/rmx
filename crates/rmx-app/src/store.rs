@@ -173,6 +173,8 @@ pub enum VaultEvent {
     Sync(SyncState),
     /// Something to tell the user, with whether it is bad news.
     Notice(String, bool),
+    /// How a master password change went, to be shown in a dialog: title, detail, bad news.
+    PasswordOutcome(String, String, bool),
     Settings(Box<SettingsDraft>),
     Draft(Box<ConnectionDraft>),
     /// The connection was saved from "save and connect".
@@ -385,6 +387,14 @@ impl Actor {
         self.send(VaultEvent::Notice(text.into(), bad));
     }
 
+    fn password_outcome(&self, done: &str, failed: &str, outcome: Result<String, String>) {
+        let event = match outcome {
+            Ok(message) => VaultEvent::PasswordOutcome(done.to_owned(), message, false),
+            Err(err) => VaultEvent::PasswordOutcome(failed.to_owned(), err, true),
+        };
+        self.send(event);
+    }
+
     fn save_session(&self, session: &str) {
         if let Some(state) = &self.state {
             state.save_session(session);
@@ -546,14 +556,12 @@ impl Actor {
                 self.join(password, key_file, *sync, plain_ok);
             },
             Request::ChangePassword { current, new, key_file } => {
-                match self.change_password(current, new, key_file) {
-                    Ok(message) => self.notice(message, false),
-                    Err(err) => self.notice(err, true),
-                }
+                let outcome = self.change_password(current, new, key_file);
+                self.password_outcome("Master password changed", "Master password not changed", outcome);
             },
-            Request::AdoptPassword { password, key_file } => match self.adopt_password(password, key_file) {
-                Ok(message) => self.notice(message, false),
-                Err(err) => self.notice(err, true),
+            Request::AdoptPassword { password, key_file } => {
+                let outcome = self.adopt_password(password, key_file);
+                self.password_outcome("New master password in use", "New master password not used", outcome);
             },
             Request::Lock => self.lock(),
             Request::Switch(path) => self.switch(&path),
