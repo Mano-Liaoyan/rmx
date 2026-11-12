@@ -1,7 +1,7 @@
 //! Embedded fonts, and the system CJK fallback.
 //!
 //! Geist (OFL) and Lucide (ISC) are subset and embedded; their licenses sit next to them in
-//! `assets/`. No CJK font is embedded: [`CjkFallback`] finds one on a background thread and maps
+//! `assets/`. The icon font also carries RustDesk's mark from Simple Icons, which is CC0. No CJK font is embedded: [`CjkFallback`] finds one on a background thread and maps
 //! it, and egui picks it up on a later frame, so the interface draws from the first frame on and
 //! the UI thread never touches the disk.
 

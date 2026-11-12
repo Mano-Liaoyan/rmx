@@ -169,7 +169,7 @@ impl Protocol {
             Protocol::Ftp => icons::HARD_DRIVE_UPLOAD,
             Protocol::Vnc => icons::MONITOR,
             Protocol::Rdp => icons::MONITOR_COG,
-            Protocol::RustDesk => icons::MONITOR,
+            Protocol::RustDesk => icons::RUSTDESK,
             Protocol::Telnet => icons::TERMINAL,
             Protocol::Serial => icons::CABLE,
         }
