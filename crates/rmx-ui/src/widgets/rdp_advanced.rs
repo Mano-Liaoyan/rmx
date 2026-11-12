@@ -224,7 +224,13 @@ fn heading(ui: &mut Ui, text: &str) {
 }
 
 /// A choice of `options` in a labeled row, `Some` with the new index once it changes.
-fn choice(ui: &mut Ui, label: &str, salt: &'static str, options: &[&str], at: usize) -> Option<usize> {
+fn choice(
+    ui: &mut Ui,
+    label: &str,
+    salt: &'static str,
+    options: &[&str],
+    at: usize,
+) -> Option<usize> {
     let mut picked = None;
     row(ui, label, |ui| {
         let mut selected = at;
@@ -281,7 +287,9 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
     let mut picture = draft.rdp_quality.preset().unwrap_or(draft.rdp.picture);
     let mut changed = false;
     let depth = RdpColorDepth::ALL.iter().position(|&d| d == picture.color_depth).unwrap_or(0);
-    if let Some(picked) = choice(ui, "Colors", "ra-depth", &["32-bit", "24-bit", "16-bit", "15-bit"], depth) {
+    if let Some(picked) =
+        choice(ui, "Colors", "ra-depth", &["32-bit", "24-bit", "16-bit", "15-bit"], depth)
+    {
         picture.color_depth = RdpColorDepth::ALL[picked];
         changed = true;
     }
@@ -301,11 +309,15 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
     section(ui);
     heading(ui, "Graphics");
     let rdp = &mut draft.rdp;
-    ticks(ui, "ra-graphics", &mut [
-        (&mut rdp.graphics_pipeline, "Graphics pipeline"),
-        (&mut rdp.remotefx, "RemoteFX"),
-        (&mut rdp.lossy, "Lossy bitmaps"),
-    ]);
+    ticks(
+        ui,
+        "ra-graphics",
+        &mut [
+            (&mut rdp.graphics_pipeline, "Graphics pipeline"),
+            (&mut rdp.remotefx, "RemoteFX"),
+            (&mut rdp.lossy, "Lossy bitmaps"),
+        ],
+    );
     let at = RdpCompression::ALL.iter().position(|&c| c == rdp.compression).unwrap_or(0);
     let options = ["None", "8K", "64K", "RDP 6", "RDP 6.1"];
     if let Some(picked) = choice(ui, "Compression", "ra-compression", &options, at) {
@@ -321,7 +333,9 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
         rdp.scale = RDP_SCALES[picked];
     }
     let at = usize::from(!rdp.local_cursor);
-    if let Some(picked) = choice(ui, "Pointer", "ra-pointer", &["Local cursor", "In the picture"], at) {
+    if let Some(picked) =
+        choice(ui, "Pointer", "ra-pointer", &["Local cursor", "In the picture"], at)
+    {
         rdp.local_cursor = picked == 0;
     }
 

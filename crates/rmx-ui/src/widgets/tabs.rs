@@ -193,7 +193,9 @@ pub fn tab_strip(
     }
 
     state.rects.clear();
-    state.rects.extend(drawn.iter().map(|&(_, tab, rect): &(usize, &TabView<'_>, Rect)| (tab.id, rect)));
+    state
+        .rects
+        .extend(drawn.iter().map(|&(_, tab, rect): &(usize, &TabView<'_>, Rect)| (tab.id, rect)));
 
     // The held tab goes last so that it passes over the others.
     if let Some(drag) = &state.drag {
@@ -334,16 +336,22 @@ fn rename_field(ui: &mut Ui, id: Id, state: &mut TabStripState) -> Option<UiActi
     );
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with("rename")).max_rect(field));
     let (_, text) = state.renaming.as_mut()?;
-    let input = text_input(&mut child, id.with("rename-field"), text, InputOptions {
-        width: Some(field.width()),
-        height: Some(field.height()),
-        ..Default::default()
-    });
+    let input = text_input(
+        &mut child,
+        id.with("rename-field"),
+        text,
+        InputOptions {
+            width: Some(field.width()),
+            height: Some(field.height()),
+            ..Default::default()
+        },
+    );
     if !std::mem::replace(&mut state.rename_focused, true) {
         input.request_focus();
         // Typing replaces the old name.
         if let Some(mut edit) = egui::TextEdit::load_state(ui.ctx(), input.id) {
-            let (start, end) = (egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+            let (start, end) =
+                (egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
             edit.cursor.set_char_range(Some(egui::text::CCursorRange::two(start, end)));
             edit.store(ui.ctx(), input.id);
         }

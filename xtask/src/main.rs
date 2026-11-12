@@ -52,7 +52,9 @@ fn main() -> ExitCode {
     // For machines without libopenssl-devel.
     let vendored = args.iter().any(|arg| arg == "--vendored-openssl");
     match args.first().map(String::as_str) {
-        Some("bench") if args.iter().any(|arg| arg == "--real-display") => real_display(&args, vendored),
+        Some("bench") if args.iter().any(|arg| arg == "--real-display") => {
+            real_display(&args, vendored)
+        },
         Some("bench") => bench(vendored),
         Some("e2e") => end_to_end(vendored, args.get(1).filter(|arg| !arg.starts_with("--"))),
         Some("package") => match package::package() {
@@ -63,7 +65,9 @@ fn main() -> ExitCode {
             },
         },
         _ => {
-            eprintln!("usage: cargo run -p xtask -- <bench | e2e [shots dir] | package> [--vendored-openssl]");
+            eprintln!(
+                "usage: cargo run -p xtask -- <bench | e2e [shots dir] | package> [--vendored-openssl]"
+            );
             eprintln!(
                 "       cargo run -p xtask -- bench --real-display --output <name> [--expect-hz <hz>] \\\n         \
                  [--wayland-display <socket>] [--kwin-pid <pid>] [--keep <dir>] [--max-seconds <s>] [--no-build]"
@@ -106,8 +110,11 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("last-tab", Box::new(|| e2e::last_tab(&bench_target, &shots))),
         ("panes", Box::new(|| e2e::panes(&bench_target, &shots))),
     ];
-    let results: Vec<(&str, Result<(), String>)> =
-        tests.into_iter().filter(|(name, _)| wanted(name)).map(|(name, test)| (name, test())).collect();
+    let results: Vec<(&str, Result<(), String>)> = tests
+        .into_iter()
+        .filter(|(name, _)| wanted(name))
+        .map(|(name, test)| (name, test()))
+        .collect();
     let mut passed = true;
     for (name, result) in results {
         match result {
@@ -190,7 +197,9 @@ fn parse_report(text: String) -> Report {
 fn keep_report(report: &Path) {
     let Ok(keep) = std::env::var("RMX_BENCH_KEEP") else { return };
     let _ = fs::create_dir_all(&keep);
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
     let _ = fs::copy(report, Path::new(&keep).join(format!("report-{stamp}.txt")));
     // The frame-by-frame table, if the run wrote one: `RMX_BENCH_FRAMES`.
     if let Ok(frames) = std::env::var("RMX_BENCH_FRAMES") {
@@ -234,7 +243,9 @@ impl RealDisplay {
         shell: &str,
     ) -> Option<Report> {
         let scene = self.scene.lock().ok()?.clone();
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
         let label = format!("{scene}-{stamp}");
         let present = self.keep.join(format!("present-{label}.csv"));
         let gpu_file = self.keep.join(format!("gpu-{label}.csv"));
@@ -268,13 +279,19 @@ impl RealDisplay {
         let load_before = load();
         let busy_before = busiest();
         if self.live {
-            let info = Command::new("qdbus6").args(["org.kde.KWin", "/KWin", "org.kde.KWin.supportInformation"]).output();
+            let info = Command::new("qdbus6")
+                .args(["org.kde.KWin", "/KWin", "org.kde.KWin.supportInformation"])
+                .output();
             if let Ok(info) = info {
                 let _ = fs::write(self.keep.join(format!("kwin-info-{label}.txt")), info.stdout);
             }
         }
-        let wall_start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let kwin = self.kwin.map(|pid| KwinSampler::start(pid, self.keep.join(format!("kwin-{label}.csv"))));
+        let wall_start = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let kwin = self
+            .kwin
+            .map(|pid| KwinSampler::start(pid, self.keep.join(format!("kwin-{label}.csv"))));
         let sampler = sample_gpu(&gpu_file);
         let started = Instant::now();
         let finished = run_limited(&mut app, self.limit);
@@ -287,7 +304,11 @@ impl RealDisplay {
         let busy_after = busiest();
         let _ = fs::remove_dir_all(&private);
         let kwin = kwin.map_or_else(|| "not sampled".to_owned(), KwinSampler::stop);
-        let journal = if self.live { kwin_journal(wall_start, &self.keep.join(format!("kwin-journal-{label}.log"))) } else { 0 };
+        let journal = if self.live {
+            kwin_journal(wall_start, &self.keep.join(format!("kwin-journal-{label}.log")))
+        } else {
+            0
+        };
 
         let gpu = summarize_gpu(&gpu_file);
         let summary = format!(
@@ -301,8 +322,11 @@ impl RealDisplay {
         let _ = fs::write(self.keep.join(format!("summary-{label}.txt")), &summary);
         println!("{summary}");
         for line in text.lines().filter(|line| {
-            line.starts_with("present_") || line.starts_with("frame_") || line.starts_with("frames=")
-                || line.starts_with("gl=") || line.starts_with("script_")
+            line.starts_with("present_")
+                || line.starts_with("frame_")
+                || line.starts_with("frames=")
+                || line.starts_with("gl=")
+                || line.starts_with("script_")
         }) {
             println!("{line}");
         }
@@ -329,7 +353,9 @@ fn run_limited(command: &mut Command, limit: Duration) -> Finished {
     let deadline = Instant::now() + limit;
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return if status.success() { Finished::Clean } else { Finished::Failed },
+            Ok(Some(status)) => {
+                return if status.success() { Finished::Clean } else { Finished::Failed };
+            },
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
                 let _ = child.kill();
@@ -347,7 +373,9 @@ fn load() -> String {
 /// The processes using the most CPU, to say what else was running.
 fn busiest() -> String {
     let output = Command::new("ps").args(["-eo", "pcpu,pid,ni,comm", "--sort=-pcpu"]).output();
-    let text = output.map(|output| String::from_utf8_lossy(&output.stdout).into_owned()).unwrap_or_default();
+    let text = output
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
     text.lines().take(9).collect::<Vec<_>>().join("\n")
 }
 
@@ -420,7 +448,12 @@ fn live_kwin() -> Option<u32> {
 fn sample_gpu(file: &Path) -> Option<std::process::Child> {
     let out = fs::File::create(file).ok()?;
     Command::new("nvidia-smi")
-        .args(["--query-gpu=timestamp,pstate,clocks.gr,utilization.gpu", "--format=csv,noheader,nounits", "-l", "1"])
+        .args([
+            "--query-gpu=timestamp,pstate,clocks.gr,utilization.gpu",
+            "--format=csv,noheader,nounits",
+            "-l",
+            "1",
+        ])
         .stdout(out)
         .stderr(Stdio::null())
         .spawn()
@@ -470,7 +503,9 @@ fn own_nice() -> Option<i32> {
 /// `xtask bench --real-display --output <name>`: the local and standard scenes on a real output,
 /// with the frames' presentation recorded. Runs on the live session, so only when that is wanted.
 fn real_display(args: &[String], vendored: bool) -> ExitCode {
-    let value = |flag: &str| args.iter().position(|arg| arg == flag).and_then(|at| args.get(at + 1)).cloned();
+    let value = |flag: &str| {
+        args.iter().position(|arg| arg == flag).and_then(|at| args.get(at + 1)).cloned()
+    };
     let Some(output) = value("--output") else {
         eprintln!("--real-display needs --output <name>");
         return ExitCode::from(2);
@@ -483,7 +518,9 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
     match own_nice() {
         Some(0) => (),
         nice => {
-            eprintln!("refusing to measure at nice {nice:?}: run the built xtask directly, not under nice");
+            eprintln!(
+                "refusing to measure at nice {nice:?}: run the built xtask directly, not under nice"
+            );
             return ExitCode::FAILURE;
         },
     }
@@ -510,12 +547,26 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
     let scene = Mutex::new(String::new());
     // A socket given by path is a private compositor, for rehearsing.
     let live = !socket.contains('/');
-    let kwin = value("--kwin-pid").and_then(|pid| pid.parse().ok()).or_else(|| live.then(live_kwin).flatten());
-    let real = RealDisplay { output, socket, expect_ns, keep, limit: Duration::from_secs(limit), scene, kwin, live };
+    let kwin = value("--kwin-pid")
+        .and_then(|pid| pid.parse().ok())
+        .or_else(|| live.then(live_kwin).flatten());
+    let real = RealDisplay {
+        output,
+        socket,
+        expect_ns,
+        keep,
+        limit: Duration::from_secs(limit),
+        scene,
+        kwin,
+        live,
+    };
     let real = REAL.get_or_init(|| real);
 
     let corpus = corpus(&bench_target);
-    let cycles = std::env::var("RMX_BENCH_CYCLES").ok().and_then(|cycles| cycles.parse().ok()).unwrap_or(SCENE_CYCLES);
+    let cycles = std::env::var("RMX_BENCH_CYCLES")
+        .ok()
+        .and_then(|cycles| cycles.parse().ok())
+        .unwrap_or(SCENE_CYCLES);
     let only = std::env::var("RMX_BENCH_ONLY").unwrap_or_default();
     let wanted = |name: &str| only.is_empty() || only.split(',').any(|part| part == name);
     let mut passed = true;
@@ -525,7 +576,10 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
         }
     };
 
-    let control_seconds = std::env::var("RMX_BENCH_CONTROL_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(CONTROL_SECONDS);
+    let control_seconds = std::env::var("RMX_BENCH_CONTROL_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(CONTROL_SECONDS);
     for (name, damage) in [("control", "tiny"), ("control-full", "full")] {
         // Only when asked for by name: a plain run stays the two scenes it has always been.
         if !only.split(',').any(|part| part == name) {
@@ -539,7 +593,8 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
             ("RMX_BENCH_SCRIPT", script.as_str()),
             ("RMX_BENCH_STEP_MS", "1000"),
         ];
-        passed &= real_result(name, measure(&bench_target, Some(SCENE_SIZE), &env, "exec sleep 100000"));
+        passed &=
+            real_result(name, measure(&bench_target, Some(SCENE_SIZE), &env, "exec sleep 100000"));
     }
 
     if passed && wanted("local") {
@@ -555,9 +610,14 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
     }
     if passed && wanted("standard") {
         set_scene("standard");
-        passed &= real_result("standard", e2e::standard_scene(&bench_target, cycles).map_err(|err| eprintln!("{err}")).ok());
+        passed &= real_result(
+            "standard",
+            e2e::standard_scene(&bench_target, cycles).map_err(|err| eprintln!("{err}")).ok(),
+        );
     }
-    let leftover = Command::new("pgrep").args(["-f", "-a", &bench_target.join("release/rmx").display().to_string()]).output();
+    let leftover = Command::new("pgrep")
+        .args(["-f", "-a", &bench_target.join("release/rmx").display().to_string()])
+        .output();
     match leftover.map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned()) {
         Ok(left) if left.is_empty() => println!("rmx processes left: none"),
         Ok(left) => {
@@ -607,7 +667,8 @@ fn bench(vendored: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let size = fs::metadata(target.join("release/rmx")).map_or(u64::MAX, |meta| meta.len());
-    let openssl = if vendored { "vendored OpenSSL built in" } else { "system OpenSSL, dynamically linked" };
+    let openssl =
+        if vendored { "vendored OpenSSL built in" } else { "system OpenSSL, dynamically linked" };
     check(&format!("binary size ({openssl})"), size, MAX_BINARY, "bytes");
 
     let Some(bench_target) = build_bench(vendored) else { return ExitCode::FAILURE };
@@ -697,17 +758,49 @@ fn bench(vendored: bool) -> ExitCode {
                     report.value("partial_frames"),
                     report.value("remote_frames"),
                 );
-                for key in ["phase_p50", "worst_phases", "slowest_phases", "on_cpu_p99_us", "on_cpu_max_us", "slow_frames"] {
+                for key in [
+                    "phase_p50",
+                    "worst_phases",
+                    "slowest_phases",
+                    "on_cpu_p99_us",
+                    "on_cpu_max_us",
+                    "slow_frames",
+                ] {
                     let line = report.text.lines().find(|line| line.starts_with(key));
                     println!("info standard scene {}", line.unwrap_or("?"));
                 }
-                check("standard scene frame p99", report.value("frame_p99_us"), MAX_FRAME_P99, "us");
+                check(
+                    "standard scene frame p99",
+                    report.value("frame_p99_us"),
+                    MAX_FRAME_P99,
+                    "us",
+                );
                 check("standard scene frame max", report.value("frame_max_us"), MAX_FRAME, "us");
                 check("standard scene action max", report.value("action_max_us"), MAX_ACTION, "us");
-                check("standard scene allocations", report.value("draw_allocations"), MAX_DRAW_ALLOCATIONS, "allocations");
-                check("remote frame p99 on main", report.value("remote_p99_us"), MAX_REMOTE_FRAME, "us");
-                check("remote frame max on main", report.value("remote_max_us"), MAX_REMOTE_FRAME, "us");
-                check("connects on the main thread", report.value("on_main_violations"), MAX_ON_MAIN, "runs");
+                check(
+                    "standard scene allocations",
+                    report.value("draw_allocations"),
+                    MAX_DRAW_ALLOCATIONS,
+                    "allocations",
+                );
+                check(
+                    "remote frame p99 on main",
+                    report.value("remote_p99_us"),
+                    MAX_REMOTE_FRAME,
+                    "us",
+                );
+                check(
+                    "remote frame max on main",
+                    report.value("remote_max_us"),
+                    MAX_REMOTE_FRAME,
+                    "us",
+                );
+                check(
+                    "connects on the main thread",
+                    report.value("on_main_violations"),
+                    MAX_ON_MAIN,
+                    "runs",
+                );
             },
             Err(err) => {
                 println!("FAIL standard scene: {err}");
@@ -720,7 +813,12 @@ fn bench(vendored: bool) -> ExitCode {
         match e2e::idle_remote_pane(&bench_target) {
             Ok(report) => {
                 check("idle remote pane frames", report.value("idle_frames"), MAX_IDLE, "frames");
-                check("idle remote pane wakeups", report.value("idle_wakeups"), MAX_IDLE, "wakeups");
+                check(
+                    "idle remote pane wakeups",
+                    report.value("idle_wakeups"),
+                    MAX_IDLE,
+                    "wakeups",
+                );
             },
             Err(err) => {
                 println!("FAIL idle remote pane: {err}");
@@ -771,7 +869,11 @@ fn bench(vendored: bool) -> ExitCode {
                 println!(
                     "info ssh pane: {} us slowest action ({}), frame max {} us",
                     report.value("action_max_us"),
-                    report.text.lines().find_map(|l| l.strip_prefix("action_slowest=")).unwrap_or("?"),
+                    report
+                        .text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("action_slowest="))
+                        .unwrap_or("?"),
                     report.value("frame_max_us"),
                 );
                 check("idle ssh pane frames", report.value("idle_frames"), MAX_IDLE, "frames");

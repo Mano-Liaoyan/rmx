@@ -326,13 +326,15 @@ impl Display {
         for (evdev, keysym) in std::mem::take(&mut self.held) {
             self.send(InputEvent::Key { key: RemoteKey { evdev, keysym }, pressed: false });
         }
-        for key in [(KEY_LEFTCTRL, XK_CONTROL_L), (KEY_LEFTALT, XK_ALT_L), (KEY_DELETE, XK_DELETE)] {
+        for key in [(KEY_LEFTCTRL, XK_CONTROL_L), (KEY_LEFTALT, XK_ALT_L), (KEY_DELETE, XK_DELETE)]
+        {
             self.send(InputEvent::Key {
                 key: RemoteKey { evdev: key.0, keysym: Some(key.1) },
                 pressed: true,
             });
         }
-        for key in [(KEY_DELETE, XK_DELETE), (KEY_LEFTALT, XK_ALT_L), (KEY_LEFTCTRL, XK_CONTROL_L)] {
+        for key in [(KEY_DELETE, XK_DELETE), (KEY_LEFTALT, XK_ALT_L), (KEY_LEFTCTRL, XK_CONTROL_L)]
+        {
             self.send(InputEvent::Key {
                 key: RemoteKey { evdev: key.0, keysym: Some(key.1) },
                 pressed: false,
@@ -597,7 +599,11 @@ fn keysym(logical: &Key, location: KeyLocation) -> Option<u32> {
 }
 
 /// A key as a session wants it, or none for a key with no physical code.
-pub fn remote_key(physical: PhysicalKey, logical: &Key, location: KeyLocation) -> Option<RemoteKey> {
+pub fn remote_key(
+    physical: PhysicalKey,
+    logical: &Key,
+    location: KeyLocation,
+) -> Option<RemoteKey> {
     Some(RemoteKey { evdev: physical.to_scancode()?, keysym: keysym(logical, location) })
 }
 
@@ -612,11 +618,32 @@ pub fn typed_key(character: char) -> Option<(KeyCode, Key)> {
     let code = match character {
         'a'..='z' => {
             let letters = [
-                KeyCode::KeyA, KeyCode::KeyB, KeyCode::KeyC, KeyCode::KeyD, KeyCode::KeyE, KeyCode::KeyF,
-                KeyCode::KeyG, KeyCode::KeyH, KeyCode::KeyI, KeyCode::KeyJ, KeyCode::KeyK, KeyCode::KeyL,
-                KeyCode::KeyM, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyQ, KeyCode::KeyR,
-                KeyCode::KeyS, KeyCode::KeyT, KeyCode::KeyU, KeyCode::KeyV, KeyCode::KeyW, KeyCode::KeyX,
-                KeyCode::KeyY, KeyCode::KeyZ,
+                KeyCode::KeyA,
+                KeyCode::KeyB,
+                KeyCode::KeyC,
+                KeyCode::KeyD,
+                KeyCode::KeyE,
+                KeyCode::KeyF,
+                KeyCode::KeyG,
+                KeyCode::KeyH,
+                KeyCode::KeyI,
+                KeyCode::KeyJ,
+                KeyCode::KeyK,
+                KeyCode::KeyL,
+                KeyCode::KeyM,
+                KeyCode::KeyN,
+                KeyCode::KeyO,
+                KeyCode::KeyP,
+                KeyCode::KeyQ,
+                KeyCode::KeyR,
+                KeyCode::KeyS,
+                KeyCode::KeyT,
+                KeyCode::KeyU,
+                KeyCode::KeyV,
+                KeyCode::KeyW,
+                KeyCode::KeyX,
+                KeyCode::KeyY,
+                KeyCode::KeyZ,
             ];
             letters[(character as u8 - b'a') as usize]
         },
@@ -702,10 +729,13 @@ mod tests {
         display.key(upper, true, false);
         display.key(lower, false, false);
         let seen = drain(&mut events);
-        assert_eq!(seen, [
-            InputEvent::Key { key: upper, pressed: true },
-            InputEvent::Key { key: upper, pressed: false },
-        ]);
+        assert_eq!(
+            seen,
+            [
+                InputEvent::Key { key: upper, pressed: true },
+                InputEvent::Key { key: upper, pressed: false },
+            ]
+        );
     }
 
     #[test]
@@ -716,10 +746,13 @@ mod tests {
         display.button(5, 6, buttons::LEFT, true);
         let _ = drain(&mut events);
         display.release_all();
-        assert_eq!(drain(&mut events), [
-            InputEvent::Key { key, pressed: false },
-            InputEvent::Pointer { x: 5, y: 6, buttons: 0 },
-        ]);
+        assert_eq!(
+            drain(&mut events),
+            [
+                InputEvent::Key { key, pressed: false },
+                InputEvent::Pointer { x: 5, y: 6, buttons: 0 },
+            ]
+        );
     }
 
     #[test]
@@ -746,7 +779,10 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(codes, [(29, true), (56, true), (111, true), (111, false), (56, false), (29, false)]);
+        assert_eq!(
+            codes,
+            [(29, true), (56, true), (111, true), (111, false), (56, false), (29, false)]
+        );
     }
 
     #[test]
@@ -778,7 +814,13 @@ mod tests {
     fn a_keep_size_display_never_asks() {
         let (input, mut events) = mpsc::channel(4);
         let inbox = Arc::new(Inbox::default());
-        let link = DisplayLink { kind: DisplayKind::Vnc, input, inbox, scale: ScaleChoice::Fit, follow_size: false };
+        let link = DisplayLink {
+            kind: DisplayKind::Vnc,
+            input,
+            inbox,
+            scale: ScaleChoice::Fit,
+            follow_size: false,
+        };
         let mut display = Display::new(link);
         let now = Instant::now();
         display.pane_resized(1000, 800, now);
@@ -814,7 +856,10 @@ mod tests {
         display.wheel(WheelDelta::Pixels([0., 30.]), 1, 2);
         assert!(drain(&mut events).is_empty());
         display.wheel(WheelDelta::Pixels([0., 30.]), 1, 2);
-        assert_eq!(drain(&mut events), [InputEvent::Wheel { x: 1, y: 2, vertical: 1, horizontal: 0 }]);
+        assert_eq!(
+            drain(&mut events),
+            [InputEvent::Wheel { x: 1, y: 2, vertical: 1, horizontal: 0 }]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

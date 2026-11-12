@@ -112,7 +112,8 @@ pub(crate) struct Resizable<'a> {
 impl Resizable<'_> {
     /// The size to draw at, inside the window.
     pub fn current(&self, screen: egui::Rect) -> [f32; 2] {
-        let most = [(screen.width() - 32.).max(self.min[0]), (screen.height() - 32.).max(self.min[1])];
+        let most =
+            [(screen.width() - 32.).max(self.min[0]), (screen.height() - 32.).max(self.min[1])];
         [0, 1].map(|i| {
             let size = if self.size[i] > 0. { self.size[i] } else { self.default[i] };
             size.clamp(self.min[i], most[i])

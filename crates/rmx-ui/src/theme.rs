@@ -274,7 +274,8 @@ fn style(mode: ThemeMode) -> Style {
         active: widget(p.accent, p.border, p.foreground),
         open: widget(p.accent, p.border, p.foreground),
     };
-    visuals.selection = Selection { bg_fill: p.brand.gamma_multiply(0.45), stroke: Stroke::new(1., p.foreground) };
+    visuals.selection =
+        Selection { bg_fill: p.brand.gamma_multiply(0.45), stroke: Stroke::new(1., p.foreground) };
     visuals.text_cursor = TextCursorStyle {
         stroke: Stroke::new(1.5, p.foreground),
         blink: false,

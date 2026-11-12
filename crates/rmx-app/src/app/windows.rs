@@ -273,7 +273,9 @@ impl Running {
                 self.core.ui.gate = Gate::from(&phase);
                 if let store::Phase::Unlocked { unencrypted, key_file } = &phase {
                     self.core.ui.unencrypted = *unencrypted;
-                    self.core.ui.vault_key_file = key_file.as_ref().map_or_else(String::new, |path| path.display().to_string());
+                    self.core.ui.vault_key_file = key_file
+                        .as_ref()
+                        .map_or_else(String::new, |path| path.display().to_string());
                 }
                 self.core.ui.asking_hidden =
                     self.core.ui.locked() && matches!(self.core.answer, Some((_, Some(_))));
@@ -329,7 +331,8 @@ impl Running {
             },
             VaultEvent::Vaults { current, others } => {
                 self.core.ui.vault_path = current.display().to_string();
-                self.core.ui.vault_others = others.iter().map(|path| path.display().to_string()).collect();
+                self.core.ui.vault_others =
+                    others.iter().map(|path| path.display().to_string()).collect();
             },
             VaultEvent::Notice(text, bad) => self.core.ui.status_note = Some((text, bad)),
             VaultEvent::PasswordOutcome(title, detail, bad) => {

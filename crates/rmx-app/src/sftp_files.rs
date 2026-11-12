@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use rmx_ssh::{
-    AuthMethod, ConnectConfig, ConnectOptions, HostConfig, HostKeyVerifier, NoPrompter, SecretString,
-    SshClient,
+    AuthMethod, ConnectConfig, ConnectOptions, HostConfig, HostKeyVerifier, NoPrompter,
+    SecretString, SshClient,
 };
 use rmx_transfer::{Error as FsError, RemoteFs, SftpFs, SftpOptions, WriteStart, read_all};
 use rmx_vault::{BackendError, RemoteFiles};

@@ -529,10 +529,10 @@ fn a_clean_close_parses_everything_and_stays_readable() {
 
     let directory = WorkingDirectory { host: Some("box".into()), path: "/srv/www".into() };
     assert_eq!(session.terminal.working_directory().as_ref(), Some(&directory));
-    assert_eq!(*session.sink.session.lock(), [
-        SessionEvent::WorkingDirectory(directory),
-        SessionEvent::Closed(reason)
-    ],);
+    assert_eq!(
+        *session.sink.session.lock(),
+        [SessionEvent::WorkingDirectory(directory), SessionEvent::Closed(reason)],
+    );
 
     assert_eq!(line_text(&session.terminal.term(), 0), "last words of the shell");
     assert!(session.sink.events.lock().iter().all(|event| !matches!(event, Event::Exit)));

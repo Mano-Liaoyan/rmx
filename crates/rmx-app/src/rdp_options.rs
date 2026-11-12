@@ -257,7 +257,11 @@ mod tests {
             picture: RdpPicture {
                 color_depth: RdpColorDepth::Bits24,
                 connection: RdpConnection::Wan,
-                effects: RdpEffects { wallpaper: false, cursor_shadow: false, ..RdpEffects::ALL_ON },
+                effects: RdpEffects {
+                    wallpaper: false,
+                    cursor_shadow: false,
+                    ..RdpEffects::ALL_ON
+                },
             },
             graphics_pipeline: false,
             remotefx: false,

@@ -69,8 +69,8 @@ use rmx_ui::egui;
 use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceId, ElementState, Ime, MouseButton, WindowEvent};
 
-use rmx_ui::widgets::{FilesKey, AuthKind, ConnectionDraft, SettingsDraft, SyncDraft, SyncKind};
 use rmx_render::probe::{PHASE_NAMES, PHASES, Spent};
+use rmx_ui::widgets::{AuthKind, ConnectionDraft, FilesKey, SettingsDraft, SyncDraft, SyncKind};
 use rmx_ui::{FileSide, FilesAction, Protocol, Sensitive, ThemeMode, UiAction};
 
 use crate::app::Action;
@@ -509,7 +509,11 @@ fn parse_point(step: &str) -> Option<Point> {
     }
     if let Some(rest) = step.strip_prefix("pane-at:") {
         let mut parts = rest.split(':');
-        return Some(Point::Pane(parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?));
+        return Some(Point::Pane(
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        ));
     }
     if let Some(index) = step.strip_prefix("bar:") {
         return Some(Point::Bar(index.parse().ok()?));
@@ -574,7 +578,8 @@ fn parse(step: &str) -> Option<Step> {
     }
     if let Some(rest) = step.strip_prefix("snippet-new:") {
         let (name, body) = rest.split_once('|')?;
-        let action = UiAction::SnippetSave { id: None, name: name.into(), body: body.replace('~', "\n") };
+        let action =
+            UiAction::SnippetSave { id: None, name: name.into(), body: body.replace('~', "\n") };
         return Some(Step::Ui("snippet-save", action));
     }
     if let Some(label) = step.strip_prefix("form:") {
@@ -610,8 +615,12 @@ fn parse(step: &str) -> Option<Step> {
         "quit" => return Some(Step::Quit),
         "press-right" => return Some(Step::Input(right_event(ElementState::Pressed))),
         "release-right" => return Some(Step::Input(right_event(ElementState::Released))),
-        "shift-down" => return Some(Step::Input(modifiers_event(winit::keyboard::ModifiersState::SHIFT))),
-        "shift-up" => return Some(Step::Input(modifiers_event(winit::keyboard::ModifiersState::empty()))),
+        "shift-down" => {
+            return Some(Step::Input(modifiers_event(winit::keyboard::ModifiersState::SHIFT)));
+        },
+        "shift-up" => {
+            return Some(Step::Input(modifiers_event(winit::keyboard::ModifiersState::empty())));
+        },
         "split-right-local" => Action::SplitLocal(Axis::Row),
         "split-right" => Action::Split(Axis::Row),
         "split-down" => Action::Split(Axis::Column),
@@ -785,18 +794,31 @@ fn sync_draft(fields: &[&str]) -> Option<SyncDraft> {
 fn parse_interface_step(step: &str) -> Option<Step> {
     let password = |text: &str| Sensitive::new(text);
     if step == "vault-create-plain" {
-        let action = UiAction::VaultCreate { password: password(""), key_file: String::new(), plain_ok: true };
+        let action = UiAction::VaultCreate {
+            password: password(""),
+            key_file: String::new(),
+            plain_ok: true,
+        };
         return Some(Step::Ui("vault-create", action));
     }
     if let Some(text) = step.strip_prefix("vault-create:") {
         let (text, key_file) = text.split_once('|').unwrap_or((text, ""));
-        let action = UiAction::VaultCreate { password: password(text), key_file: key_file.into(), plain_ok: false };
+        let action = UiAction::VaultCreate {
+            password: password(text),
+            key_file: key_file.into(),
+            plain_ok: false,
+        };
         return Some(Step::Ui("vault-create", action));
     }
     if let Some(text) = step.strip_prefix("join-plain:") {
         let fields: Vec<&str> = text.split('|').collect();
         let sync = Box::new(sync_draft(&fields)?);
-        let action = UiAction::VaultJoin { password: password(""), key_file: String::new(), sync, plain_ok: true };
+        let action = UiAction::VaultJoin {
+            password: password(""),
+            key_file: String::new(),
+            sync,
+            plain_ok: true,
+        };
         return Some(Step::Ui("vault-join", action));
     }
     if let Some(text) = step.strip_prefix("vault-unlock:") {
@@ -808,7 +830,12 @@ fn parse_interface_step(step: &str) -> Option<Step> {
         let fields: Vec<&str> = text.split('|').collect();
         let (&secret, rest) = fields.split_first()?;
         let sync = Box::new(sync_draft(rest)?);
-        let action = UiAction::VaultJoin { password: password(secret), key_file: String::new(), sync, plain_ok: false };
+        let action = UiAction::VaultJoin {
+            password: password(secret),
+            key_file: String::new(),
+            sync,
+            plain_ok: false,
+        };
         return Some(Step::Ui("vault-join", action));
     }
     if let Some(text) = step.strip_prefix("conn:") {
@@ -827,8 +854,11 @@ fn parse_interface_step(step: &str) -> Option<Step> {
     }
     if let Some(text) = step.strip_prefix("conn-as:") {
         let fields: Vec<&str> = text.split('|').collect();
-        let [protocol, name, host, port, user, secret, jump, options] = *fields else { return None };
-        let protocol = Protocol::ALL.into_iter().find(|p| p.label().eq_ignore_ascii_case(protocol))?;
+        let [protocol, name, host, port, user, secret, jump, options] = *fields else {
+            return None;
+        };
+        let protocol =
+            Protocol::ALL.into_iter().find(|p| p.label().eq_ignore_ascii_case(protocol))?;
         let mut draft = ConnectionDraft::new(protocol);
         draft.name = name.into();
         draft.host = host.into();
@@ -896,11 +926,17 @@ fn parse_interface_step(step: &str) -> Option<Step> {
     }
     if let Some(rest) = step.strip_prefix("files-open:") {
         let (side, name) = rest.split_once('|')?;
-        return Some(Step::FilesBody(FilesAction::Open { side: file_side(side)?, name: name.into() }));
+        return Some(Step::FilesBody(FilesAction::Open {
+            side: file_side(side)?,
+            name: name.into(),
+        }));
     }
     if let Some(rest) = step.strip_prefix("files-compare:") {
         let (local, remote) = rest.split_once('|')?;
-        return Some(Step::FilesBody(FilesAction::Compare { local: local.into(), remote: remote.into() }));
+        return Some(Step::FilesBody(FilesAction::Compare {
+            local: local.into(),
+            remote: remote.into(),
+        }));
     }
     if step == "files-close" {
         return Some(Step::FilesBody(FilesAction::CloseBody));
@@ -1106,7 +1142,8 @@ pub fn sched() -> Sched {
     }
 
     let mut buffer = [0u8; 96];
-    let read = SCHEDSTAT.with(|file| file.as_ref().map_or(0, |file| file.read_at(&mut buffer, 0).unwrap_or(0)));
+    let read = SCHEDSTAT
+        .with(|file| file.as_ref().map_or(0, |file| file.read_at(&mut buffer, 0).unwrap_or(0)));
     let text = std::str::from_utf8(&buffer[..read]).unwrap_or("");
     let run_wait_ns: u64 = text.split(' ').nth(1).and_then(|field| field.parse().ok()).unwrap_or(0);
 
@@ -1272,7 +1309,12 @@ impl Recorder {
         self.sched_totals.voluntary += sched.voluntary;
         self.sched_totals.involuntary += sched.involuntary;
         self.phase_walls.push(spent.map(|phase| phase.wall));
-        self.frame_rows.push((cpu.as_micros() as u32, on_cpu_us as u32, sched.run_wait_us as u32, spent));
+        self.frame_rows.push((
+            cpu.as_micros() as u32,
+            on_cpu_us as u32,
+            sched.run_wait_us as u32,
+            spent,
+        ));
         if self.idle_until.is_some_and(|end| Instant::now() < end) {
             self.idle_frames += 1;
         }
@@ -1332,7 +1374,8 @@ impl Recorder {
                 *worst = (*worst).max(phase);
             }
         }
-        let ui_times = ui.map_or((0, 0), |ui| (ui.layout.as_micros() as u32, ui.tessellate.as_micros() as u32));
+        let ui_times = ui
+            .map_or((0, 0), |ui| (ui.layout.as_micros() as u32, ui.tessellate.as_micros() as u32));
         self.slow_frames.push((micros, self.frames.len(), phases, ui_times));
         self.slow_frames.sort_unstable_by_key(|frame| std::cmp::Reverse(frame.0));
         self.slow_frames.truncate(6);
@@ -1461,15 +1504,22 @@ impl Recorder {
         );
         let phase_stats = (0..PHASES)
             .map(|phase| {
-                let mut times: Vec<u32> = self.phase_walls.iter().map(|walls| walls[phase]).collect();
+                let mut times: Vec<u32> =
+                    self.phase_walls.iter().map(|walls| walls[phase]).collect();
                 times.sort_unstable();
-                let at = |q: f64| times.get(((times.len().max(1) - 1) as f64 * q).round() as usize).copied().unwrap_or(0);
+                let at = |q: f64| {
+                    times
+                        .get(((times.len().max(1) - 1) as f64 * q).round() as usize)
+                        .copied()
+                        .unwrap_or(0)
+                };
                 format!("{}:{}/{}/{}", PHASE_NAMES[phase], at(0.5), at(0.99), at(1.))
             })
             .collect::<Vec<_>>()
             .join(" ");
         let over = |limit: u32| self.frames.iter().filter(|&&micros| micros > limit).count();
-        let traces: String = self.traces.iter().map(|trace| format!("trace={}\n", trace.line())).collect();
+        let traces: String =
+            self.traces.iter().map(|trace| format!("trace={}\n", trace.line())).collect();
         let report = format!(
             "{report}phase_stats={phase_stats}\nover_3000={}\nover_4000={}\nsched_totals={:?}\n{traces}",
             over(3000),
@@ -1478,10 +1528,12 @@ impl Recorder {
         );
         let report = format!("{report}{}", present::report(&self.frames, self.warmup));
         if let Ok(rows) = std::env::var("RMX_BENCH_FRAMES") {
-            let header: Vec<String> = PHASE_NAMES.iter().flat_map(|n| [format!("{n}_w"), format!("{n}_c")]).collect();
+            let header: Vec<String> =
+                PHASE_NAMES.iter().flat_map(|n| [format!("{n}_w"), format!("{n}_c")]).collect();
             let mut text = format!("wall,cpu,run_wait,{}\n", header.join(","));
             for (wall, cpu, wait, spent) in &self.frame_rows {
-                let phases: Vec<String> = spent.iter().flat_map(|s| [s.wall.to_string(), s.cpu.to_string()]).collect();
+                let phases: Vec<String> =
+                    spent.iter().flat_map(|s| [s.wall.to_string(), s.cpu.to_string()]).collect();
                 text.push_str(&format!("{wall},{cpu},{wait},{}\n", phases.join(",")));
             }
             let _ = std::fs::write(rows, text);

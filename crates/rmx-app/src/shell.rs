@@ -15,15 +15,19 @@ use rmx_layout::{PaneId, Rect};
 use rmx_ui::egui::{
     self, Color32, Context, CornerRadius, Id, LayerId, Order, Stroke, StrokeKind, Ui, pos2, vec2,
 };
-use rmx_ui::theme::{self, PANE_BAR_HEIGHT, Palette, RADIUS, RADIUS_SM, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH, STRIP_HEIGHT};
+use rmx_ui::theme::{
+    self, PANE_BAR_HEIGHT, Palette, RADIUS, RADIUS_SM, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH,
+    STRIP_HEIGHT,
+};
 use rmx_ui::widgets::{
-    ContextMenu, FilesKey, FilesState, HostKeyView, MenuItem, NewConnectionState, NodeKind, PaneBarView,
-    Panels, PromptState, QuickItem, QuickOpenState, Reveal, SIDEBAR_STATUS_HEIGHT, SessionDot, SettingsState,
-    SettingsView, SidebarStatus, SnippetRow, SnippetsState, TabStripState, TabView, TitleBarView, TreeModel,
-    TreeState, VaultSetupState, VaultSetupView, VaultState, VaultView, context_menu, empty_state, files_pane,
-    host_key_dialog, new_connection_dialog, paint_pill, pane_bar, pane_notice, pane_overlay, prompt_dialog,
-    quick_open, resize_handle, settings_dialog, sidebar, sidebar_status, snippets_dialog, title_bar, vault_setup,
-    vault_unlock,
+    ContextMenu, FilesKey, FilesState, HostKeyView, MenuItem, NewConnectionState, NodeKind,
+    PaneBarView, Panels, PromptState, QuickItem, QuickOpenState, Reveal, SIDEBAR_STATUS_HEIGHT,
+    SessionDot, SettingsState, SettingsView, SidebarStatus, SnippetRow, SnippetsState,
+    TabStripState, TabView, TitleBarView, TreeModel, TreeState, VaultSetupState, VaultSetupView,
+    VaultState, VaultView, context_menu, empty_state, files_pane, host_key_dialog,
+    new_connection_dialog, paint_pill, pane_bar, pane_notice, pane_overlay, prompt_dialog,
+    quick_open, resize_handle, settings_dialog, sidebar, sidebar_status, snippets_dialog,
+    title_bar, vault_setup, vault_unlock,
 };
 use rmx_ui::{FileSide, NodeId, Protocol, TabId, UiAction, fonts, icons};
 use std::collections::HashMap;
@@ -119,7 +123,8 @@ impl Preview {
             return;
         }
         let rect = points(frame.get(now), scale);
-        let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::unique("drop-preview")));
+        let painter =
+            ctx.layer_painter(LayerId::new(Order::Foreground, Id::unique("drop-preview")));
         let radius = CornerRadius::same(RADIUS);
         painter.rect_filled(rect, radius, palette.foreground.gamma_multiply(0.10 * alpha));
         let stroke = Stroke::new(1.5, palette.foreground.gamma_multiply(0.4 * alpha));
@@ -302,7 +307,12 @@ impl Common {
     }
 
     /// What is selected in a column of file pane `pane`, or else `name`.
-    pub fn files_selected_or(&self, pane: PaneId, side: FileSide, name: &Arc<str>) -> Vec<Arc<str>> {
+    pub fn files_selected_or(
+        &self,
+        pane: PaneId,
+        side: FileSide,
+        name: &Arc<str>,
+    ) -> Vec<Arc<str>> {
         let selected = self.files.get(&pane).map_or_else(Vec::new, |files| files.selected(side));
         if selected.is_empty() || !selected.contains(name) { vec![name.clone()] } else { selected }
     }
@@ -357,7 +367,12 @@ impl Common {
 /// How the sessions to `node` are doing, the best of them.
 pub fn session_dot(panes: &[Pane], node: u64) -> SessionDot {
     use crate::pane::Link;
-    let links = || panes.iter().filter(|pane| pane.remote.as_ref().is_some_and(|r| r.node == node)).map(|pane| &pane.link);
+    let links = || {
+        panes
+            .iter()
+            .filter(|pane| pane.remote.as_ref().is_some_and(|r| r.node == node))
+            .map(|pane| &pane.link)
+    };
     if links().any(|link| *link == Link::Live) {
         SessionDot::Live
     } else if links().any(|link| matches!(link, Link::Connecting { .. })) {
@@ -457,7 +472,11 @@ fn tab_protocol(panes: &[Pane], common: &Common, tab: &Tab) -> Option<Protocol> 
         NodeKind::Folder => None,
     })?;
     // Files opened from a shell are not a shell.
-    Some(if protocol == Protocol::Ssh && matches!(remote.goal, Goal::Files { .. }) { Protocol::Sftp } else { protocol })
+    Some(if protocol == Protocol::Ssh && matches!(remote.goal, Goal::Files { .. }) {
+        Protocol::Sftp
+    } else {
+        protocol
+    })
 }
 
 fn tab_glyph(panes: &[Pane], common: &Common, tab: &Tab) -> char {
@@ -490,7 +509,11 @@ impl Shell {
             command("Split right", icons::COLUMNS_2, Pick::Run(Action::Split(Axis::Row))),
             command("Split down", icons::ROWS_2, Pick::Run(Action::Split(Axis::Column))),
             command("Local shell right", icons::TERMINAL, Pick::Run(Action::SplitLocal(Axis::Row))),
-            command("Local shell below", icons::TERMINAL, Pick::Run(Action::SplitLocal(Axis::Column))),
+            command(
+                "Local shell below",
+                icons::TERMINAL,
+                Pick::Run(Action::SplitLocal(Axis::Column)),
+            ),
             command("Zoom pane", icons::SQUARE, Pick::Run(Action::Zoom)),
             command("Close pane", icons::X, Pick::Run(Action::ClosePane)),
             command("Next tab", icons::CHEVRON_RIGHT, Pick::Run(Action::CycleTab(1))),
@@ -580,7 +603,12 @@ impl Shell {
 
     /// Show the pill on a divider's band at `place`, or hide it, in points. Returns whether what
     /// shows changed.
-    pub fn hover_divider(&mut self, place: Option<(egui::Rect, bool, f32)>, dragged: bool, now: Instant) -> bool {
+    pub fn hover_divider(
+        &mut self,
+        place: Option<(egui::Rect, bool, f32)>,
+        dragged: bool,
+        now: Instant,
+    ) -> bool {
         let target = match (&place, dragged) {
             (_, true) => 2.,
             (Some(_), false) => 1.,
@@ -705,7 +733,8 @@ impl Shell {
         if common.locked() {
             let rect = egui::Rect::from_min_max(pos2(0., STRIP_HEIGHT), screen.max);
             self.show_gate(ui, rect, common);
-            let action = context_menu(&ctx, Id::unique("shell-menu"), &mut self.menu, &self.menu_items);
+            let action =
+                context_menu(&ctx, Id::unique("shell-menu"), &mut self.menu, &self.menu_items);
             self.actions.extend(action);
             if !common.asking_hidden {
                 self.show_asking(&ctx, view, common);
@@ -719,7 +748,10 @@ impl Shell {
                 pos2(0., STRIP_HEIGHT),
                 pos2(self.sidebar_width, screen.bottom() - status),
             );
-            let vault = std::path::Path::new(&common.vault_path).file_stem().and_then(|name| name.to_str()).unwrap_or("");
+            let vault = std::path::Path::new(&common.vault_path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
             let action = sidebar(ui, side, vault, &mut common.tree, &mut common.tree_state);
             self.actions.extend(action);
             let foot = egui::Rect::from_min_max(
@@ -731,7 +763,10 @@ impl Shell {
             self.actions.extend(action);
 
             let edge = self.sidebar_width;
-            let band = egui::Rect::from_min_max(pos2(edge - 3., STRIP_HEIGHT), pos2(edge + 4., screen.bottom()));
+            let band = egui::Rect::from_min_max(
+                pos2(edge - 3., STRIP_HEIGHT),
+                pos2(edge + 4., screen.bottom()),
+            );
             let handle = resize_handle(ui, band, Id::unique("sidebar-edge"), true, edge);
             if let Some(x) = handle.to {
                 let most = SIDEBAR_MAX.min((screen.width() - PANES_MIN).max(SIDEBAR_MIN));
@@ -760,7 +795,8 @@ impl Shell {
         let action = new_connection_dialog(&ctx, &mut self.dialog);
         self.actions.extend(action);
 
-        let action = snippets_dialog(&ctx, &mut self.snippets, &common.snippets, &mut common.panels);
+        let action =
+            snippets_dialog(&ctx, &mut self.snippets, &common.snippets, &mut common.panels);
         self.actions.extend(action);
 
         let syncing = matches!(common.sync, SyncState::Running);
@@ -817,14 +853,17 @@ impl Shell {
             return;
         }
         let action = match &mut common.asking {
-            Some(Asking::HostKey(prompt)) => host_key_dialog(ctx, &HostKeyView {
-                status: prompt.status,
-                host: &prompt.host,
-                port: prompt.port,
-                algorithm: &prompt.algorithm,
-                fingerprint: &prompt.fingerprint,
-                previous: prompt.previous.as_deref(),
-            }),
+            Some(Asking::HostKey(prompt)) => host_key_dialog(
+                ctx,
+                &HostKeyView {
+                    status: prompt.status,
+                    host: &prompt.host,
+                    port: prompt.port,
+                    algorithm: &prompt.algorithm,
+                    fingerprint: &prompt.fingerprint,
+                    previous: prompt.previous.as_deref(),
+                },
+            ),
             Some(Asking::Fields(state)) => prompt_dialog(ctx, state),
             None => None,
         };
@@ -832,7 +871,13 @@ impl Shell {
     }
 
     /// The bar and the rounded outline of each pane.
-    fn show_panes(&mut self, ui: &mut Ui, palette: &Palette, view: &ShellView<'_>, common: &mut Common) {
+    fn show_panes(
+        &mut self,
+        ui: &mut Ui,
+        palette: &Palette,
+        view: &ShellView<'_>,
+        common: &mut Common,
+    ) {
         let scale = ui.ctx().pixels_per_point();
         let tab = view.workspace.active();
         let grouped = tab.is_some_and(|tab| tab.layout.panes().len() > 1);
@@ -841,19 +886,25 @@ impl Shell {
             let panel = view.motion.frame(id, view.now).unwrap_or(rest);
             let top = bar_rect(panel, scale);
             let Some(pane) = view.panes.iter().find(|pane| pane.id == id) else { continue };
-            let forwards = pane
-                .remote
-                .as_ref()
-                .filter(|remote| remote.forwards > 0)
-                .map(|remote| match remote.forwards {
+            let forwards = pane.remote.as_ref().filter(|remote| remote.forwards > 0).map(
+                |remote| match remote.forwards {
                     1 => "1 forward".to_owned(),
                     count => format!("{count} forwards"),
-                });
-            let target = pane.remote.as_ref().map(|remote| remote.target.clone()).filter(|target| target != pane.label());
-            let tooltip: Vec<String> = target.into_iter().chain(pane.content.size_fact()).chain(forwards).collect();
+                },
+            );
+            let target = pane
+                .remote
+                .as_ref()
+                .map(|remote| remote.target.clone())
+                .filter(|target| target != pane.label());
+            let tooltip: Vec<String> =
+                target.into_iter().chain(pane.content.size_fact()).chain(forwards).collect();
             let tooltip = tooltip.join("  ");
             let ssh = pane.remote.as_ref().is_some_and(|remote| {
-                common.nodes.get(&remote.node).is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
+                common
+                    .nodes
+                    .get(&remote.node)
+                    .is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
             });
             let bar = PaneBarView {
                 pane: rmx_ui::PaneId(id),
@@ -863,7 +914,9 @@ impl Shell {
                 focused: view.workspace.focused() == Some(id),
                 grouped,
                 zoomed,
-                files: ssh && pane.content.terminal().is_some() && pane.link == crate::pane::Link::Live,
+                files: ssh
+                    && pane.content.terminal().is_some()
+                    && pane.link == crate::pane::Link::Live,
             };
             let reveal = self.bars.entry(id).or_default();
             if self.drag.is_some() {
@@ -877,7 +930,15 @@ impl Shell {
                 let files_view = files.view(rmx_ui::PaneId(id));
                 let state = common.files.entry(id).or_default();
                 let focused = view.workspace.focused() == Some(id);
-                files_pane(ui, area, &files_view, focused, state, &mut common.panels, &mut self.actions);
+                files_pane(
+                    ui,
+                    area,
+                    &files_view,
+                    focused,
+                    state,
+                    &mut common.panels,
+                    &mut self.actions,
+                );
             }
             if let Some(overlay) = pane.overlay() {
                 let action = pane_overlay(ui, area, rmx_ui::PaneId(id), &overlay);
@@ -895,7 +956,11 @@ impl Shell {
             && let Some(&(_, rest)) = view.rects.iter().find(|(id, _)| *id == drag.pane)
         {
             let panel = points(view.motion.frame(drag.pane, view.now).unwrap_or(rest), scale);
-            ui.painter_at(panel).rect_filled(panel, CornerRadius::same(RADIUS), palette.chrome.gamma_multiply(VEIL));
+            ui.painter_at(panel).rect_filled(
+                panel,
+                CornerRadius::same(RADIUS),
+                palette.chrome.gamma_multiply(VEIL),
+            );
         }
 
         let level = self.pill.level.get(view.now);
@@ -939,8 +1004,15 @@ impl Shell {
             .filter_map(|&(id, rect)| Some((view.workspace.tab_index(id.0)?, pixels(rect, scale))))
             .collect();
         let bar = STRIP_HEIGHT * scale;
-        let mut scene =
-            Scene::new(view.workspace, bar, view.area, tabs, drag.source, view.min_pane, view.spacing);
+        let mut scene = Scene::new(
+            view.workspace,
+            bar,
+            view.area,
+            tabs,
+            drag.source,
+            view.min_pane,
+            view.spacing,
+        );
         let screen = ctx.content_rect();
         scene.window = Some(Rect::new(0., 0., screen.width() * scale, screen.height() * scale));
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -951,11 +1023,8 @@ impl Shell {
 
         if !down {
             let drag = self.drag.take().expect("a pane is held");
-            self.dropped = target.map(|target| PaneDrop {
-                pane: drag.pane,
-                source: drag.source,
-                target,
-            });
+            self.dropped =
+                target.map(|target| PaneDrop { pane: drag.pane, source: drag.source, target });
             self.preview.show(None, view.now);
         }
     }
@@ -1025,7 +1094,10 @@ mod tests {
         shell.open_palette(&workspace, &[], &Common::default());
         assert!(shell.quick.is_open());
         assert!(shell.palette.iter().any(|entry| entry.label == "Split right"));
-        assert_eq!(shell.palette.iter().filter(|entry| entry.label.starts_with("Go to tab")).count(), 2);
+        assert_eq!(
+            shell.palette.iter().filter(|entry| entry.label.starts_with("Go to tab")).count(),
+            2
+        );
         assert!(matches!(shell.picked(0), Some(Picked::Run(Action::NewTab))));
     }
 

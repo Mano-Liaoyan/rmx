@@ -291,7 +291,10 @@ mod tests {
         outbox.cursor(RemoteCursor::Hidden);
         outbox.cursor(RemoteCursor::Default);
         let data = vec![0u8; (W * H * 4) as usize];
-        assert_eq!(outbox.next_event(frame(&data)), Some(DisplayEvent::Cursor(RemoteCursor::Default)));
+        assert_eq!(
+            outbox.next_event(frame(&data)),
+            Some(DisplayEvent::Cursor(RemoteCursor::Default))
+        );
         assert_eq!(outbox.next_event(frame(&data)), None);
     }
 

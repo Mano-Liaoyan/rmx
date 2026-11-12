@@ -176,7 +176,10 @@ type Bytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
 /// The first of `candidates` that `map` can read and that is a font: egui aborts on a file it
 /// cannot parse, and doing without CJK glyphs is never worth that.
-fn first_usable(candidates: &[(String, u32)], map: impl Fn(&str) -> Option<Bytes>) -> Option<(Bytes, u32)> {
+fn first_usable(
+    candidates: &[(String, u32)],
+    map: impl Fn(&str) -> Option<Bytes>,
+) -> Option<(Bytes, u32)> {
     candidates.iter().find_map(|(path, index)| {
         let blob = map(path)?;
         if !is_font((*blob).as_ref(), *index) {
@@ -207,7 +210,8 @@ fn ask_fontconfig() -> Vec<(String, u32)> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
-    output.map_or_else(|_| Vec::new(), |output| pick_faces(&String::from_utf8_lossy(&output.stdout)))
+    output
+        .map_or_else(|_| Vec::new(), |output| pick_faces(&String::from_utf8_lossy(&output.stdout)))
 }
 
 /// The usable faces of `fc-list` output, best first.

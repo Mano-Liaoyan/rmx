@@ -7,7 +7,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use egui::{Align2, Color32, CornerRadius, Id, LayerId, Order, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{
+    Align2, Color32, CornerRadius, Id, LayerId, Order, Rect, Sense, Stroke, StrokeKind, Ui, pos2,
+    vec2,
+};
 
 use crate::action::{FileSide, FilesAction, PaneId, UiAction};
 use crate::draw::{elided_at, file_icon, hline, icon, palette, vline};
@@ -63,7 +66,12 @@ pub struct FileRow {
 
 impl FileRow {
     /// A row for `name`.
-    pub fn new(name: &str, kind: FileKind, size: Option<u64>, modified: Option<SystemTime>) -> Self {
+    pub fn new(
+        name: &str,
+        kind: FileKind,
+        size: Option<u64>,
+        modified: Option<SystemTime>,
+    ) -> Self {
         Self { name: name.into(), sort: name.to_lowercase().into(), kind, size, modified }
     }
 
@@ -189,7 +197,12 @@ impl FilesState {
 
     /// Act on a key. However long the listing, this takes the same few steps and allocates
     /// nothing, except for copying, which lists what to copy. `extend` keeps what is selected.
-    pub fn key(&mut self, key: FilesKey, extend: bool, view: &FilesView<'_>) -> Option<FilesAction> {
+    pub fn key(
+        &mut self,
+        key: FilesKey,
+        extend: bool,
+        view: &FilesView<'_>,
+    ) -> Option<FilesAction> {
         if !matches!(view.body, FilesBody::Columns) {
             return self.body.key(key, &view.body);
         }
@@ -279,7 +292,11 @@ impl FilesState {
             names.next().filter(|_| names.next().is_none()).cloned()
         };
         let file = |side: FileSide, name: &Arc<str>| {
-            view.columns[side.index()].rows.iter().find(|row| row.name == *name && row.comparable()).map(|row| row.name.clone())
+            view.columns[side.index()]
+                .rows
+                .iter()
+                .find(|row| row.name == *name && row.comparable())
+                .map(|row| row.name.clone())
         };
         let (side, name) = match at {
             Some((side, name)) => (side, name.clone()),
@@ -292,7 +309,9 @@ impl FilesState {
             },
         };
         let here = file(side, &name)?;
-        let there = sole(side.other()).and_then(|other| file(side.other(), &other)).or_else(|| file(side.other(), &name))?;
+        let there = sole(side.other())
+            .and_then(|other| file(side.other(), &other))
+            .or_else(|| file(side.other(), &name))?;
         Some(if side == FileSide::Local { (here, there) } else { (there, here) })
     }
 
@@ -415,11 +434,21 @@ fn show_column(
     let title_room = (bar.width() * 0.35).min(TITLE_MAX);
     let active = focused && state.active_side() == side;
     let title_color = if active { p.foreground } else { p.muted_fg };
-    let title_width =
-        elided_at(ui.painter(), bar.left() + 10., bar.center().y, view.title, fonts::medium(TEXT_SM), title_color, title_room);
+    let title_width = elided_at(
+        ui.painter(),
+        bar.left() + 10.,
+        bar.center().y,
+        view.title,
+        fonts::medium(TEXT_SM),
+        title_color,
+        title_room,
+    );
     let title_rect = Rect::from_min_size(bar.min, vec2(title_width + 10., BAR));
     ui.interact(title_rect, id.with("title"), Sense::hover()).on_hover_text(view.title);
-    let up = Rect::from_center_size(pos2(bar.left() + 10. + title_width + 20., bar.center().y), vec2(26., 26.));
+    let up = Rect::from_center_size(
+        pos2(bar.left() + 10. + title_width + 20., bar.center().y),
+        vec2(26., 26.),
+    );
     let response = ui.interact(up, id.with("up"), Sense::click());
     paint_icon_button(ui, up, icons::CHEVRON_UP, 13., &response);
     if response.clicked() {
@@ -437,12 +466,17 @@ fn show_column(
     );
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(input));
     let side_state = &mut state.sides[side.index()];
-    let path_input = text_input(&mut child, id.with("path"), &mut side_state.typed, InputOptions {
-        mono: true,
-        width: Some(input.width()),
-        height: Some(input.height()),
-        ..Default::default()
-    });
+    let path_input = text_input(
+        &mut child,
+        id.with("path"),
+        &mut side_state.typed,
+        InputOptions {
+            mono: true,
+            width: Some(input.width()),
+            height: Some(input.height()),
+            ..Default::default()
+        },
+    );
     if submitted(ui, &path_input) {
         let path = side_state.typed.trim().to_owned();
         if !path.is_empty() {
@@ -468,7 +502,8 @@ fn show_column(
     hline(ui.painter(), head.left(), head.right(), head.bottom() - 1., p.border);
 
     // The edges between the heads move the columns; they are the same in both columns.
-    let band = |x: f32| Rect::from_min_max(pos2(x - 3., head.top()), pos2(x + 3., head.bottom() - 1.));
+    let band =
+        |x: f32| Rect::from_min_max(pos2(x - 3., head.top()), pos2(x + 3., head.bottom() - 1.));
     let date_edge = date_x - 5.;
     let date = resize_handle(ui, band(date_edge), id.with("edge-date"), true, date_edge);
     if let Some(x) = date.to {
@@ -513,7 +548,8 @@ fn show_column(
     for index in visible.first..visible.end {
         let row = &view.rows[index];
         let y = rows.top() + visible.top + (index - visible.first) as f32 * ROW;
-        let row_rect = Rect::from_min_size(pos2(rows.left() + 4., y), vec2(rows.width() - 12., ROW));
+        let row_rect =
+            Rect::from_min_size(pos2(rows.left() + 4., y), vec2(rows.width() - 12., ROW));
         let response = ui.interact(
             row_rect.intersect(rows),
             id.with(("row", row.name.as_ref())),
@@ -543,11 +579,23 @@ fn show_column(
         elided_at(&painter, name_x, center, &row.name, font.clone(), p.foreground, name_room);
         if let Some(size) = row.size.filter(|_| row.kind == FileKind::File) {
             let at = pos2(size_right, center);
-            painter.text(at, Align2::RIGHT_CENTER, format_size(size), fonts::regular(TEXT_XS), p.muted_fg);
+            painter.text(
+                at,
+                Align2::RIGHT_CENTER,
+                format_size(size),
+                fonts::regular(TEXT_XS),
+                p.muted_fg,
+            );
         }
         if let Some(modified) = row.modified {
             let at = pos2(date_x, center);
-            painter.text(at, Align2::LEFT_CENTER, format_time(modified), fonts::regular(TEXT_XS), p.muted_fg);
+            painter.text(
+                at,
+                Align2::LEFT_CENTER,
+                format_time(modified),
+                fonts::regular(TEXT_XS),
+                p.muted_fg,
+            );
         }
 
         if response.double_clicked() && row.openable() {
@@ -618,8 +666,11 @@ fn show_column(
         let (top, height) = thumb(side_state.scroll, len, ROW, viewport, THUMB_MIN);
         if bar.drag_started() {
             let pointer = bar.interact_pointer_pos().map_or(0., |pos| pos.y - rows.top());
-            side_state.thumb_grab =
-                Some(if (top..top + height).contains(&pointer) { pointer - top } else { height / 2. });
+            side_state.thumb_grab = Some(if (top..top + height).contains(&pointer) {
+                pointer - top
+            } else {
+                height / 2.
+            });
         }
         if let (true, Some(grab), Some(pos)) =
             (bar.dragged(), side_state.thumb_grab, bar.interact_pointer_pos())
@@ -631,8 +682,10 @@ fn show_column(
             side_state.thumb_grab = None;
         }
         if hovered || bar.dragged() {
-            let thumb_rect =
-                Rect::from_min_size(pos2(track.left(), rows.top() + top), vec2(THUMB_WIDTH, height));
+            let thumb_rect = Rect::from_min_size(
+                pos2(track.left(), rows.top() + top),
+                vec2(THUMB_WIDTH, height),
+            );
             let color = if bar.dragged() { p.muted_fg } else { p.border };
             painter.rect_filled(thumb_rect, CornerRadius::same(3), color);
         }
@@ -648,7 +701,13 @@ fn show_column(
     if let Some(error) = view.error {
         note(error, p.danger);
     } else if view.busy && len == 0 {
-        icon(&painter, pos2(rows.left() + 22., rows.top() + 16.), icons::LOADER_CIRCLE, 13., p.muted_fg);
+        icon(
+            &painter,
+            pos2(rows.left() + 22., rows.top() + 16.),
+            icons::LOADER_CIRCLE,
+            13.,
+            p.muted_fg,
+        );
     }
 }
 
@@ -677,59 +736,95 @@ fn show_queue(
     );
     let label = CONFLICT_POLICIES[view.policy.min(CONFLICT_POLICIES.len() - 1)];
     let font = fonts::regular(TEXT_XS);
-    let text_width = bar_ui.painter().layout_no_wrap(label.to_owned(), font.clone(), p.muted_fg).size().x;
+    let text_width =
+        bar_ui.painter().layout_no_wrap(label.to_owned(), font.clone(), p.muted_fg).size().x;
     let width = text_width + 34.;
     let (cell, _) = bar_ui.allocate_exact_size(vec2(width, 26.), Sense::hover());
-    let response = bar_ui.interact(cell, id.with("policy"), Sense::click()).on_hover_text("When a file already exists");
+    let response = bar_ui
+        .interact(cell, id.with("policy"), Sense::click())
+        .on_hover_text("When a file already exists");
     if response.hovered() {
         bar_ui.painter().rect_filled(cell, CornerRadius::same(RADIUS_SM), p.hover);
     }
-    bar_ui.painter().text(pos2(cell.left() + 8., cell.center().y), Align2::LEFT_CENTER, label, font, p.foreground);
-    icon(bar_ui.painter(), pos2(cell.right() - 12., cell.center().y), icons::CHEVRON_DOWN, 12., p.muted_fg);
+    bar_ui.painter().text(
+        pos2(cell.left() + 8., cell.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        font,
+        p.foreground,
+    );
+    icon(
+        bar_ui.painter(),
+        pos2(cell.right() - 12., cell.center().y),
+        icons::CHEVRON_DOWN,
+        12.,
+        p.muted_fg,
+    );
     if response.clicked() {
         actions.push(UiAction::FilesPolicyMenu { pane, pos: cell.left_top() });
     }
     let upload: Vec<Arc<str>> = state.selected(FileSide::Local);
     let download: Vec<Arc<str>> = state.selected(FileSide::Remote);
     let any_finished = view.transfers.iter().any(|t| {
-        matches!(t.state, TransferRowState::Done | TransferRowState::Failed | TransferRowState::Cancelled)
+        matches!(
+            t.state,
+            TransferRowState::Done | TransferRowState::Failed | TransferRowState::Cancelled
+        )
     });
     let compare = state.compare_pair(view, None);
-    let tools_left = bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.set_min_height(CONTROL_HEIGHT);
-        let tool = |ui: &mut Ui, salt: &str, glyph: char, tip: &str, enabled: bool| {
-            let (cell, _) = ui.allocate_exact_size(vec2(26., 26.), Sense::hover());
-            let sense = if enabled { Sense::click() } else { Sense::hover() };
-            let response = ui.interact(cell, id.with(salt), sense).on_hover_text(tip);
-            paint_icon_button(ui, cell, glyph, 13., &response);
-            enabled && response.clicked()
-        };
-        let (glyph, tip) = if folded { (icons::CHEVRON_UP, "Show transfers") } else { (icons::CHEVRON_DOWN, "Hide transfers") };
-        if tool(ui, "fold", glyph, tip, true) {
-            panels.files_queue_folded = !folded;
-            actions.push(UiAction::PanelsChanged);
-        }
-        if tool(ui, "clear", icons::TRASH_2, "Clear finished", any_finished) {
-            actions.push(UiAction::Files(pane, FilesAction::ClearFinished));
-        }
-        if tool(ui, "download", icons::ARROW_LEFT, "Download", !download.is_empty()) {
-            let names = download.clone();
-            actions.push(UiAction::Files(pane, FilesAction::Transfer { from: FileSide::Remote, names }));
-        }
-        if tool(ui, "upload", icons::ARROW_RIGHT, "Upload", !upload.is_empty()) {
-            let names = upload.clone();
-            actions.push(UiAction::Files(pane, FilesAction::Transfer { from: FileSide::Local, names }));
-        }
-        if tool(ui, "compare", icons::COLUMNS_2, "Compare", compare.is_some())
-            && let Some((local, remote)) = compare.clone()
-        {
-            actions.push(UiAction::Files(pane, FilesAction::Compare { local, remote }));
-        }
-        ui.min_rect().left()
-    }).inner;
+    let tools_left = bar_ui
+        .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.set_min_height(CONTROL_HEIGHT);
+            let tool = |ui: &mut Ui, salt: &str, glyph: char, tip: &str, enabled: bool| {
+                let (cell, _) = ui.allocate_exact_size(vec2(26., 26.), Sense::hover());
+                let sense = if enabled { Sense::click() } else { Sense::hover() };
+                let response = ui.interact(cell, id.with(salt), sense).on_hover_text(tip);
+                paint_icon_button(ui, cell, glyph, 13., &response);
+                enabled && response.clicked()
+            };
+            let (glyph, tip) = if folded {
+                (icons::CHEVRON_UP, "Show transfers")
+            } else {
+                (icons::CHEVRON_DOWN, "Hide transfers")
+            };
+            if tool(ui, "fold", glyph, tip, true) {
+                panels.files_queue_folded = !folded;
+                actions.push(UiAction::PanelsChanged);
+            }
+            if tool(ui, "clear", icons::TRASH_2, "Clear finished", any_finished) {
+                actions.push(UiAction::Files(pane, FilesAction::ClearFinished));
+            }
+            if tool(ui, "download", icons::ARROW_LEFT, "Download", !download.is_empty()) {
+                let names = download.clone();
+                actions.push(UiAction::Files(
+                    pane,
+                    FilesAction::Transfer { from: FileSide::Remote, names },
+                ));
+            }
+            if tool(ui, "upload", icons::ARROW_RIGHT, "Upload", !upload.is_empty()) {
+                let names = upload.clone();
+                actions.push(UiAction::Files(
+                    pane,
+                    FilesAction::Transfer { from: FileSide::Local, names },
+                ));
+            }
+            if tool(ui, "compare", icons::COLUMNS_2, "Compare", compare.is_some())
+                && let Some((local, remote)) = compare.clone()
+            {
+                actions.push(UiAction::Files(pane, FilesAction::Compare { local, remote }));
+            }
+            ui.min_rect().left()
+        })
+        .inner;
 
     if folded {
-        paint_folded_queue(ui, bar, row_ui_rect.left() + width + 12., tools_left - 8., view.transfers);
+        paint_folded_queue(
+            ui,
+            bar,
+            row_ui_rect.left() + width + 12.,
+            tools_left - 8.,
+            view.transfers,
+        );
         return;
     }
 
@@ -749,7 +844,8 @@ fn show_queue(
     for index in visible.first..visible.end {
         let row = &view.transfers[index];
         let y = list.top() + visible.top + (index - visible.first) as f32 * ROW;
-        let row_rect = Rect::from_min_size(pos2(list.left() + PAD, y), vec2(list.width() - 2. * PAD, ROW));
+        let row_rect =
+            Rect::from_min_size(pos2(list.left() + PAD, y), vec2(list.width() - 2. * PAD, ROW));
         let center = row_rect.center().y;
 
         let (color, cancel, retry) = match row.state {
@@ -767,23 +863,42 @@ fn show_queue(
         let bar_left = bar_right - bar_width;
         let detail_right = bar_left - 8.;
         let label_room = ((detail_right - 170.) - (row_rect.left() + 14.)).max(40.);
-        elided_at(&painter, row_rect.left() + 14., center, &row.label, fonts::regular(TEXT_SM), p.foreground, label_room);
-        elided_at(&painter, detail_right - 160., center, &row.detail, fonts::regular(TEXT_XS), p.muted_fg, 160.);
+        elided_at(
+            &painter,
+            row_rect.left() + 14.,
+            center,
+            &row.label,
+            fonts::regular(TEXT_SM),
+            p.foreground,
+            label_room,
+        );
+        elided_at(
+            &painter,
+            detail_right - 160.,
+            center,
+            &row.detail,
+            fonts::regular(TEXT_XS),
+            p.muted_fg,
+            160.,
+        );
 
         let track = Rect::from_min_size(pos2(bar_left, center - 2.), vec2(bar_width, 4.));
         painter.rect_filled(track, CornerRadius::same(2), p.border);
         if let Some(fraction) = row.fraction {
-            let filled = Rect::from_min_size(track.min, vec2(bar_width * fraction.clamp(0., 1.), 4.));
+            let filled =
+                Rect::from_min_size(track.min, vec2(bar_width * fraction.clamp(0., 1.), 4.));
             painter.rect_filled(filled, CornerRadius::same(2), color);
         }
 
         let button = Rect::from_center_size(pos2(actions_x + 13., center), vec2(22., 22.));
         if cancel || retry {
             let glyph = if cancel { icons::X } else { icons::FOLDER_SYNC };
-            let response = list_ui.interact(button.intersect(list), id.with(("act", row.id)), Sense::click());
+            let response =
+                list_ui.interact(button.intersect(list), id.with(("act", row.id)), Sense::click());
             paint_icon_button(&list_ui, button, glyph, 12., &response);
             if response.clicked() {
-                let action = if cancel { FilesAction::Cancel(row.id) } else { FilesAction::Retry(row.id) };
+                let action =
+                    if cancel { FilesAction::Cancel(row.id) } else { FilesAction::Retry(row.id) };
                 actions.push(UiAction::Files(pane, action));
             }
         }
@@ -793,15 +908,21 @@ fn show_queue(
 /// What a folded queue still says: what is being copied, and how far along it all is.
 fn paint_folded_queue(ui: &Ui, bar: Rect, left: f32, right: f32, transfers: &[TransferRow]) {
     let p = palette(ui);
-    let active = || transfers.iter().filter(|t| matches!(t.state, TransferRowState::Queued | TransferRowState::Running));
+    let active = || {
+        transfers
+            .iter()
+            .filter(|t| matches!(t.state, TransferRowState::Queued | TransferRowState::Running))
+    };
     let failed = transfers.iter().filter(|t| t.state == TransferRowState::Failed).count();
-    let current = active().find(|t| t.state == TransferRowState::Running).or_else(|| active().next());
+    let current =
+        active().find(|t| t.state == TransferRowState::Running).or_else(|| active().next());
     let room = right - left;
     let font = fonts::regular(TEXT_SM);
     let y = bar.center().y;
     if let Some(current) = current {
         let more = active().count() - 1;
-        let text = if more > 0 { format!("{} +{more}", current.label) } else { current.label.clone() };
+        let text =
+            if more > 0 { format!("{} +{more}", current.label) } else { current.label.clone() };
         elided_at(ui.painter(), left, y, &text, font, p.muted_fg, room);
         let (mut done, mut count) = (0., 0.);
         for transfer in active() {
@@ -831,7 +952,9 @@ pub fn files_pane(
     ui.painter().rect_filled(area, 0., p.background);
     let base = ui.interact(area, id.with("base"), Sense::click());
     // A press anywhere in the pane gives it the keyboard, as a press in a terminal would.
-    if ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|at| area.contains(at))) {
+    if ui.input(|i| {
+        i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|at| area.contains(at))
+    }) {
         actions.push(UiAction::PaneFocus(view.pane));
     }
     let _ = base;
@@ -888,15 +1011,18 @@ pub fn files_pane(
 
     // A selection being dragged: it follows the pointer, and lands in the column it is let go on.
     if let Some(drag) = &state.drag {
-        let (pointer, released) =
-            ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released() || !i.pointer.any_down()));
+        let (pointer, released) = ui
+            .input(|i| (i.pointer.latest_pos(), i.pointer.any_released() || !i.pointer.any_down()));
         if let Some(pointer) = pointer {
             let target = column_rect(area, drag.from.other(), panels);
             let over = target.contains(pointer);
             if released {
                 if over {
                     let names = drag.names.clone();
-                    actions.push(UiAction::Files(view.pane, FilesAction::Transfer { from: drag.from, names }));
+                    actions.push(UiAction::Files(
+                        view.pane,
+                        FilesAction::Transfer { from: drag.from, names },
+                    ));
                 }
                 state.drag = None;
             } else {
@@ -904,7 +1030,12 @@ pub fn files_pane(
                 let painter = ui.ctx().layer_painter(layer);
                 if over {
                     painter.rect_filled(target, 0., p.foreground.gamma_multiply(0.06));
-                    painter.rect_stroke(target, 0., Stroke::new(1.5, p.foreground.gamma_multiply(0.4)), StrokeKind::Inside);
+                    painter.rect_stroke(
+                        target,
+                        0.,
+                        Stroke::new(1.5, p.foreground.gamma_multiply(0.4)),
+                        StrokeKind::Inside,
+                    );
                 }
                 let text = match drag.names.as_slice() {
                     [one] => one.to_string(),
@@ -914,7 +1045,13 @@ pub fn files_pane(
                 let galley = painter.layout(text, font, p.foreground, 240.);
                 let size = galley.size() + vec2(16., 8.);
                 let tag = Rect::from_min_size(pointer + vec2(12., 12.), size);
-                painter.rect(tag, CornerRadius::same(RADIUS_SM), p.background, Stroke::new(1., p.border), StrokeKind::Inside);
+                painter.rect(
+                    tag,
+                    CornerRadius::same(RADIUS_SM),
+                    p.background,
+                    Stroke::new(1., p.border),
+                    StrokeKind::Inside,
+                );
                 painter.galley(tag.min + vec2(8., 4.), galley, Color32::PLACEHOLDER);
                 ui.ctx().request_repaint();
             }
@@ -943,7 +1080,10 @@ mod tests {
         assert_eq!(row.sort.as_ref(), "foo.txt");
         assert!(row.openable());
         assert!(FileRow::new("d", FileKind::Dir, None, None).openable());
-        assert!(!FileRow::new("fifo", FileKind::Other, None, None).openable(), "reading one could block for ever");
+        assert!(
+            !FileRow::new("fifo", FileKind::Other, None, None).openable(),
+            "reading one could block for ever"
+        );
     }
 
     #[test]
@@ -961,7 +1101,14 @@ mod tests {
     }
 
     fn view<'a>(rows: &'a [FileRow], other: &'a [FileRow]) -> FilesView<'a> {
-        let column = |side, rows| FileColumnView { side, title: "", path: "/", rows, busy: false, error: None };
+        let column = |side, rows| FileColumnView {
+            side,
+            title: "",
+            path: "/",
+            rows,
+            busy: false,
+            error: None,
+        };
         FilesView {
             pane: PaneId(1),
             columns: [column(FileSide::Local, rows), column(FileSide::Remote, other)],
@@ -998,9 +1145,15 @@ mod tests {
         let view = view(&rows, &[]);
         let mut state = FilesState::default();
         let side = FileSide::Local;
-        assert_eq!(state.key(FilesKey::Open, false, &view), Some(FilesAction::Open { side, name: "f0".into() }));
+        assert_eq!(
+            state.key(FilesKey::Open, false, &view),
+            Some(FilesAction::Open { side, name: "f0".into() })
+        );
         state.key(FilesKey::Down, false, &view);
-        assert_eq!(state.key(FilesKey::Open, false, &view), Some(FilesAction::Open { side, name: "f1".into() }));
+        assert_eq!(
+            state.key(FilesKey::Open, false, &view),
+            Some(FilesAction::Open { side, name: "f1".into() })
+        );
         assert_eq!(state.key(FilesKey::Back, false, &view), Some(FilesAction::Up { side }));
     }
 
@@ -1074,7 +1227,10 @@ mod tests {
     #[test]
     fn what_to_compare_is_the_selection_or_the_file_of_the_same_name() {
         let rows = listing(3);
-        let other = vec![FileRow::new("f0", FileKind::File, None, None), FileRow::new("other", FileKind::File, None, None)];
+        let other = vec![
+            FileRow::new("f0", FileKind::File, None, None),
+            FileRow::new("other", FileKind::File, None, None),
+        ];
         let view = view(&rows, &other);
         let mut state = FilesState::default();
         assert_eq!(state.compare_pair(&view, None), None, "nothing is selected");
@@ -1094,7 +1250,10 @@ mod tests {
         let at: Arc<str> = "other".into();
         let mut state = FilesState::default();
         state.select(FileSide::Local, "f2");
-        assert_eq!(state.compare_pair(&view, Some((FileSide::Remote, &at))), Some(("f2".into(), "other".into())));
+        assert_eq!(
+            state.compare_pair(&view, Some((FileSide::Remote, &at))),
+            Some(("f2".into(), "other".into()))
+        );
     }
 
     #[test]

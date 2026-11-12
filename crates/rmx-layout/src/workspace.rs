@@ -266,7 +266,8 @@ impl Workspace {
     /// Make `pane` a tab of its own at index `at`, as long as it is not alone in its tab, and
     /// switch to it.
     pub fn detach(&mut self, pane: PaneId, at: usize) -> bool {
-        let alone = self.index_of(pane).is_none_or(|index| self.tabs[index].layout.panes().len() < 2);
+        let alone =
+            self.index_of(pane).is_none_or(|index| self.tabs[index].layout.panes().len() < 2);
         if alone {
             return false;
         }

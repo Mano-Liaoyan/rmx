@@ -260,7 +260,9 @@ impl Vault {
                 RemoteKey::Same => session_key.clone(),
                 // A repeated push finds the remote already re-encrypted.
                 RemoteKey::Replace(_)
-                    if session_key.as_ref().is_some_and(|key| object.data.starts_with(&key.salt())) =>
+                    if session_key
+                        .as_ref()
+                        .is_some_and(|key| object.data.starts_with(&key.salt())) =>
                 {
                     session_key.clone()
                 },

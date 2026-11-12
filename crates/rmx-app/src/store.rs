@@ -10,20 +10,18 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use rmx_ssh::{AuthMethod, HostConfig, SecretString};
-use rmx_ui::widgets::{
-    SnippetRow,
-    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SettingsDraft, SyncDraft, SyncKind,
-    TreeModel, TreeNode, VncColors,
-};
-use rmx_ui::widgets::SessionDot;
-use rmx_ui::{NodeId, Protocol, ThemeMode};
 use rmx_serial::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
+use rmx_ssh::{AuthMethod, HostConfig, SecretString};
+use rmx_ui::widgets::SessionDot;
+use rmx_ui::widgets::{
+    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SettingsDraft,
+    SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
+};
+use rmx_ui::{NodeId, Protocol, ThemeMode};
 use rmx_vault::{
-    Snippet,
     Connection, Credential, Credentials, Error, Folder, Id, KdfParams, KnownHost, LocalPathBackend,
-    S3Backend, S3Config, Secret, SftpBackend, SharedSetting, SshKey, SyncBackend, SyncReport, Tunnel,
-    Vault, VaultKind, WebDavBackend, WebDavConfig,
+    S3Backend, S3Config, Secret, SftpBackend, SharedSetting, Snippet, SshKey, SyncBackend,
+    SyncReport, Tunnel, Vault, VaultKind, WebDavBackend, WebDavConfig,
 };
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
@@ -63,14 +61,33 @@ const OPTION_SERVER_KEY: &str = "server_key";
 
 /// Something for the vault's thread to do.
 pub enum Request {
-    Create { password: Secret, key_file: Option<PathBuf>, plain_ok: bool },
-    Unlock { password: Secret, key_file: Option<PathBuf> },
-    Join { password: Secret, key_file: Option<PathBuf>, sync: Box<SyncDraft>, plain_ok: bool },
+    Create {
+        password: Secret,
+        key_file: Option<PathBuf>,
+        plain_ok: bool,
+    },
+    Unlock {
+        password: Secret,
+        key_file: Option<PathBuf>,
+    },
+    Join {
+        password: Secret,
+        key_file: Option<PathBuf>,
+        sync: Box<SyncDraft>,
+        plain_ok: bool,
+    },
     /// Re-encrypt the vault with a new master password and key file, and the synced copy too.
     /// The current password must be right; the current key file is the one it was opened with.
-    ChangePassword { current: Secret, new: Secret, key_file: Option<PathBuf> },
+    ChangePassword {
+        current: Secret,
+        new: Secret,
+        key_file: Option<PathBuf>,
+    },
     /// The synced copy was re-keyed on another device: take on its password and key file.
-    AdoptPassword { password: Secret, key_file: Option<PathBuf> },
+    AdoptPassword {
+        password: Secret,
+        key_file: Option<PathBuf>,
+    },
     Lock,
     /// Close the vault and go to the one at this path, which need not exist yet.
     Switch(String),
@@ -82,18 +99,40 @@ pub enum Request {
     EditConnection(u64),
     Duplicate(u64),
     DeleteConnection(u64),
-    NewFolder { parent: Option<u64>, name: String },
-    RenameFolder { node: u64, name: String },
+    NewFolder {
+        parent: Option<u64>,
+        name: String,
+    },
+    RenameFolder {
+        node: u64,
+        name: String,
+    },
     DeleteFolder(u64),
-    FolderToggled { node: u64, expanded: bool },
-    LoadSettings { theme: ThemeMode },
+    FolderToggled {
+        node: u64,
+        expanded: bool,
+    },
+    LoadSettings {
+        theme: ThemeMode,
+    },
     SaveSettings(Box<SettingsDraft>),
     SyncNow,
     ImportSshConfig,
-    Plan { node: u64, reply: oneshot::Sender<Result<ConnectPlan, String>> },
-    KnownHosts { host: String, port: u16, reply: oneshot::Sender<Result<Vec<KnownHost>, String>> },
+    Plan {
+        node: u64,
+        reply: oneshot::Sender<Result<ConnectPlan, String>>,
+    },
+    KnownHosts {
+        host: String,
+        port: u16,
+        reply: oneshot::Sender<Result<Vec<KnownHost>, String>>,
+    },
     TrustHost(KnownHost),
-    SaveSnippet { id: Option<u64>, name: String, body: String },
+    SaveSnippet {
+        id: Option<u64>,
+        name: String,
+        body: String,
+    },
     DeleteSnippet(u64),
     SaveLayout(Layout),
     /// How the windows are laid out, as it goes in the state file.
@@ -137,7 +176,11 @@ enum Protection {
 impl Protection {
     /// What the form said. Having nothing to protect it with counts only if the user agreed to
     /// that, whichever way the request got here.
-    fn asked_for(password: Secret, key_file: Option<PathBuf>, plain_ok: bool) -> Result<Self, String> {
+    fn asked_for(
+        password: Secret,
+        key_file: Option<PathBuf>,
+        plain_ok: bool,
+    ) -> Result<Self, String> {
         if password.is_empty() && key_file.is_none() {
             return if plain_ok { Ok(Self::Plain) } else { Err(PLAIN_NOT_AGREED.to_owned()) };
         }
@@ -156,7 +199,10 @@ pub enum Phase {
     Setup(PathBuf),
     Locked(PathBuf),
     /// With the key file it was opened with, if any.
-    Unlocked { unencrypted: bool, key_file: Option<PathBuf> },
+    Unlocked {
+        unencrypted: bool,
+        key_file: Option<PathBuf>,
+    },
 }
 
 /// What sync is doing.
@@ -182,9 +228,15 @@ pub enum VaultEvent {
     Settings(Box<SettingsDraft>),
     Draft(Box<ConnectionDraft>),
     /// The connection was saved from "save and connect".
-    Saved { node: u64, connect: bool },
+    Saved {
+        node: u64,
+        connect: bool,
+    },
     /// Which vault this is, and the others this device knows.
-    Vaults { current: PathBuf, others: Vec<PathBuf> },
+    Vaults {
+        current: PathBuf,
+        others: Vec<PathBuf>,
+    },
     /// The synced copy has another master password: ask for it.
     RemoteKeyChanged,
 }
@@ -246,7 +298,8 @@ impl KeyHold {
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let written = options.open(&hold.path).and_then(|mut file| file.write_all(key.expose().as_bytes()));
+        let written =
+            options.open(&hold.path).and_then(|mut file| file.write_all(key.expose().as_bytes()));
         written.map_err(|err| format!("could not hold the key: {err}"))?;
         Ok(hold)
     }
@@ -414,7 +467,8 @@ impl Actor {
     /// Say which vaults there are to switch between. One whose file has gone is not offered.
     fn announce_vaults(&self) {
         let known = self.state.as_ref().map_or_else(Vec::new, AppState::recent_vaults);
-        let others = known.into_iter().filter(|path| *path != self.path && path.is_file()).collect();
+        let others =
+            known.into_iter().filter(|path| *path != self.path && path.is_file()).collect();
         self.send(VaultEvent::Vaults { current: self.path.clone(), others });
     }
 
@@ -554,18 +608,28 @@ impl Actor {
 
     fn handle(&mut self, request: Request) {
         match request {
-            Request::Create { password, key_file, plain_ok } => self.create(password, key_file, plain_ok),
+            Request::Create { password, key_file, plain_ok } => {
+                self.create(password, key_file, plain_ok)
+            },
             Request::Unlock { password, key_file } => self.unlock(password, key_file),
             Request::Join { password, key_file, sync, plain_ok } => {
                 self.join(password, key_file, *sync, plain_ok);
             },
             Request::ChangePassword { current, new, key_file } => {
                 let outcome = self.change_password(current, new, key_file);
-                self.password_outcome("Master password changed", "Master password not changed", outcome);
+                self.password_outcome(
+                    "Master password changed",
+                    "Master password not changed",
+                    outcome,
+                );
             },
             Request::AdoptPassword { password, key_file } => {
                 let outcome = self.adopt_password(password, key_file);
-                self.password_outcome("New master password in use", "New master password not used", outcome);
+                self.password_outcome(
+                    "New master password in use",
+                    "New master password not used",
+                    outcome,
+                );
             },
             Request::Lock => self.lock(),
             Request::Switch(path) => self.switch(&path),
@@ -626,22 +690,22 @@ impl Actor {
                     Err(err) => self.notice(err, true),
                 }
             },
-            other => {
-                match self.mutate(other) {
-                    Ok(Some(message)) => {
-                        self.changed();
-                        self.notice(message, false);
-                    },
-                    Ok(None) => self.changed(),
-                    Err(err) => self.notice(err, true),
-                }
+            other => match self.mutate(other) {
+                Ok(Some(message)) => {
+                    self.changed();
+                    self.notice(message, false);
+                },
+                Ok(None) => self.changed(),
+                Err(err) => self.notice(err, true),
             },
         }
     }
 
     fn mutate(&mut self, request: Request) -> Result<Option<String>, String> {
         match request {
-            Request::SaveSnippet { id, name, body } => self.save_snippet(id, name, body).map(|()| None),
+            Request::SaveSnippet { id, name, body } => {
+                self.save_snippet(id, name, body).map(|()| None)
+            },
             Request::DeleteSnippet(id) => self.delete_snippet(id).map(|()| None),
             Request::Duplicate(node) => self.duplicate(node).map(|()| None),
             Request::DeleteConnection(node) => self.delete_connection(node).map(|()| None),
@@ -730,7 +794,13 @@ impl Actor {
         }
     }
 
-    fn join(&mut self, password: Secret, key_file: Option<PathBuf>, sync: SyncDraft, plain_ok: bool) {
+    fn join(
+        &mut self,
+        password: Secret,
+        key_file: Option<PathBuf>,
+        sync: SyncDraft,
+        plain_ok: bool,
+    ) {
         let protection = match Protection::asked_for(password, key_file.clone(), plain_ok) {
             Ok(protection) => protection,
             Err(reason) => {
@@ -761,7 +831,9 @@ impl Actor {
         match joined {
             Ok(mut vault) => {
                 drop(backend);
-                for row in trusted.lock().map(|mut rows| std::mem::take(&mut *rows)).unwrap_or_default() {
+                for row in
+                    trusted.lock().map(|mut rows| std::mem::take(&mut *rows)).unwrap_or_default()
+                {
                     let _ = vault.put(&row);
                 }
                 let settings = SyncSettings { draft: sync, on_save: true, interval: None };
@@ -771,10 +843,14 @@ impl Actor {
                 self.opened(vault, key_file);
             },
             Err(Error::KindMismatch { remote: VaultKind::Encrypted, .. }) => {
-                self.send(VaultEvent::OpenFailed("The synced copy is encrypted: enter its master password".to_owned()));
+                self.send(VaultEvent::OpenFailed(
+                    "The synced copy is encrypted: enter its master password".to_owned(),
+                ));
             },
             Err(Error::KindMismatch { remote: VaultKind::Plain, .. }) => {
-                self.send(VaultEvent::OpenFailed("The synced copy has no master password: leave it empty".to_owned()));
+                self.send(VaultEvent::OpenFailed(
+                    "The synced copy has no master password: leave it empty".to_owned(),
+                ));
             },
             Err(err) => self.send(VaultEvent::OpenFailed(err.to_string())),
         }
@@ -858,7 +934,10 @@ impl Actor {
         let vault = self.open()?;
         let row = match existing {
             Some(id) => {
-                let row = vault.get::<Snippet>(id).map_err(text)?.ok_or("that snippet no longer exists")?;
+                let row = vault
+                    .get::<Snippet>(id)
+                    .map_err(text)?
+                    .ok_or("that snippet no longer exists")?;
                 Snippet { name, body, ..row }
             },
             None => Snippet { name, body, ..Default::default() },
@@ -978,12 +1057,17 @@ impl Actor {
         let mut folders = vault.list::<Folder>().map_err(text)?;
         let mut parent = None;
         for name in group.split('/').map(str::trim).filter(|name| !name.is_empty()) {
-            let found = folders.iter().find(|f| f.name == name && f.parent_id == parent).map(|f| f.id);
+            let found =
+                folders.iter().find(|f| f.name == name && f.parent_id == parent).map(|f| f.id);
             parent = Some(match found {
                 Some(id) => id,
                 None => {
-                    let folder =
-                        Folder { parent_id: parent, name: name.to_owned(), sort_order: 0, ..Default::default() };
+                    let folder = Folder {
+                        parent_id: parent,
+                        name: name.to_owned(),
+                        sort_order: 0,
+                        ..Default::default()
+                    };
                     vault.put(&folder).map_err(text)?;
                     let id = folder.id;
                     folders.push(folder);
@@ -1016,11 +1100,8 @@ impl Actor {
             draft.host.trim().to_owned()
         };
         // A serial port has no port number: its speed does not even fit in one, and is an option.
-        connection.port = if draft.protocol == Protocol::Serial {
-            None
-        } else {
-            draft.port.trim().parse().ok()
-        };
+        connection.port =
+            if draft.protocol == Protocol::Serial { None } else { draft.port.trim().parse().ok() };
         connection.name = non_empty(&draft.name).unwrap_or_else(|| connection.host.clone());
         connection.username = non_empty(&draft.username);
 
@@ -1190,8 +1271,11 @@ impl Actor {
             draft.jump = jump.name;
         }
         let tunnels = vault.list::<Tunnel>().map_err(text)?;
-        let specs: Vec<String> =
-            tunnels.iter().filter(|t| t.connection_id == row.id).map(options::forward_text).collect();
+        let specs: Vec<String> = tunnels
+            .iter()
+            .filter(|t| t.connection_id == row.id)
+            .map(options::forward_text)
+            .collect();
         draft.forwards = specs.join(", ");
         draft.scale = if settings.get(OPTION_SCALE).is_some_and(|value| value == "native") {
             ScaleChoice::Native
@@ -1300,7 +1384,8 @@ impl Actor {
             interval: minutes(&draft.sync_interval_minutes),
         };
         store_sync_settings(vault, &settings, &draft.auto_lock_minutes)?;
-        self.auto_lock = minutes(&draft.auto_lock_minutes).filter(|_| vault.kind() != VaultKind::Plain);
+        self.auto_lock =
+            minutes(&draft.auto_lock_minutes).filter(|_| vault.kind() != VaultKind::Plain);
         self.sync = (settings.draft.kind != SyncKind::None).then_some(settings);
         self.active = Instant::now();
         self.schedule_interval();
@@ -1373,7 +1458,9 @@ impl Actor {
         }
         match self.with_backend(interactive, |vault, backend| vault.sync(backend)) {
             Ok(Err(Error::RemoteKeyChanged)) => {
-                self.send(VaultEvent::Sync(SyncState::Failed(describe_sync_error(Error::RemoteKeyChanged))));
+                self.send(VaultEvent::Sync(SyncState::Failed(describe_sync_error(
+                    Error::RemoteKeyChanged,
+                ))));
                 if !std::mem::replace(&mut self.asked_remote_key, true) {
                     self.send(VaultEvent::RemoteKeyChanged);
                 }
@@ -1456,19 +1543,22 @@ impl Actor {
             Err(err) => {
                 // An error after the upload leaves the synced copy on the new password already:
                 // putting the old one back here would split the two.
-                let landed = self.with_backend(false, |vault, backend| vault.remote_has_current_key(backend));
+                let landed = self
+                    .with_backend(false, |vault, backend| vault.remote_has_current_key(backend));
                 if matches!(landed, Ok(Ok(true))) {
                     self.run_sync(false);
                     return Ok("Master password changed, here and in the synced copy".to_owned());
                 }
                 self.report_sync(Err(err.clone()));
-                let undone = self
-                    .open()
-                    .and_then(|vault| vault.change_credentials(&old, KdfParams::RECOMMENDED).map_err(text));
+                let undone = self.open().and_then(|vault| {
+                    vault.change_credentials(&old, KdfParams::RECOMMENDED).map_err(text)
+                });
                 match undone {
                     Ok(()) => {
                         self.key_file = old_key_file;
-                        Err(format!("The synced copy could not be updated, so the master password is unchanged: {err}"))
+                        Err(format!(
+                            "The synced copy could not be updated, so the master password is unchanged: {err}"
+                        ))
                     },
                     Err(back) => Err(format!(
                         "The synced copy could not be updated ({err}) and the old master password could not be put back ({back}): this vault now opens with the new one"
@@ -1479,14 +1569,20 @@ impl Actor {
     }
 
     /// Follow a password change made on another device.
-    fn adopt_password(&mut self, password: Secret, key_file: Option<PathBuf>) -> Result<String, String> {
+    fn adopt_password(
+        &mut self,
+        password: Secret,
+        key_file: Option<PathBuf>,
+    ) -> Result<String, String> {
         if password.is_empty() && key_file.is_none() {
             return Err("Enter the new master password or key file".to_owned());
         }
         off_main("argon2");
         let credentials = Self::credentials(password, key_file.clone());
         let adopted = self
-            .with_backend(true, |vault, backend| vault.adopt_remote_credentials(backend, &credentials))
+            .with_backend(true, |vault, backend| {
+                vault.adopt_remote_credentials(backend, &credentials)
+            })
             .and_then(|result| result.map_err(describe_sync_error));
         match adopted {
             Ok(report) => {
@@ -1548,7 +1644,10 @@ fn serial_config(settings: &BTreeMap<String, String>) -> SerialConfig {
     let choice = |key: &str| settings.get(key).and_then(|value| value.parse::<usize>().ok());
     let defaults = SerialConfig::default();
     SerialConfig {
-        baud_rate: settings.get(OPTION_BAUD).and_then(|baud| baud.parse().ok()).unwrap_or(defaults.baud_rate),
+        baud_rate: settings
+            .get(OPTION_BAUD)
+            .and_then(|baud| baud.parse().ok())
+            .unwrap_or(defaults.baud_rate),
         data_bits: match choice(OPTION_DATA_BITS) {
             Some(0) => DataBits::Five,
             Some(1) => DataBits::Six,
@@ -1575,17 +1674,17 @@ fn text(err: impl std::fmt::Display) -> String {
 
 fn describe_sync_error(err: Error) -> String {
     match err {
-        Error::RemoteKeyChanged => {
-            "The synced copy has a different master password".to_owned()
-        },
+        Error::RemoteKeyChanged => "The synced copy has a different master password".to_owned(),
         Error::WrongKey => "That is not the synced copy's master password or key file".to_owned(),
         other => other.to_string(),
     }
 }
 
 fn clock_now() -> String {
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |now| now.as_secs());
-    rmx_ui::local_time(now).map_or_else(String::new, |local| format!("{:02}:{:02}", local.hour, local.minute))
+    let now =
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |now| now.as_secs());
+    rmx_ui::local_time(now)
+        .map_or_else(String::new, |local| format!("{:02}:{:02}", local.hour, local.minute))
 }
 
 fn describe_report(report: &SyncReport) -> String {
@@ -1610,7 +1709,8 @@ fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Move a closed vault's file, and the files beside it, making the folder it goes to.
 fn move_vault(from: &Path, to: &Path) -> Result<(), String> {
     if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("Could not make {}: {err}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Could not make {}: {err}", parent.display()))?;
     }
     move_file(from, to).map_err(|err| format!("Could not move the vault: {err}"))?;
     // Its own settings for this device, and whatever a crash left of the journal.
@@ -1742,11 +1842,17 @@ fn host_config(
         holds.push(hold);
     }
     if let Some(files) = settings.get("identity_files") {
-        auth.extend(files.split('\n').map(PathBuf::from).filter(|path| path.exists()).map(|path| {
-            AuthMethod::PrivateKeyFile { path, passphrase: None }
-        }));
+        auth.extend(
+            files
+                .split('\n')
+                .map(PathBuf::from)
+                .filter(|path| path.exists())
+                .map(|path| AuthMethod::PrivateKeyFile { path, passphrase: None }),
+        );
     }
-    if settings.get("auth").is_some_and(|auth| auth == "agent") || settings.contains_key("identity_files") {
+    if settings.get("auth").is_some_and(|auth| auth == "agent")
+        || settings.contains_key("identity_files")
+    {
         auth.push(AuthMethod::Agent { socket: None });
     }
     if let Some(credential) = &credential {
@@ -1915,7 +2021,10 @@ fn tree_nodes(folders: Vec<Folder>, connections: Vec<Connection>, collapsed: &Ha
             }
             let id = node_number(folder.id);
             self.ids.insert(id, folder.id);
-            self.info.insert(id, NodeInfo { name: folder.name.clone(), kind: NodeKind::Folder, host: String::new() });
+            self.info.insert(
+                id,
+                NodeInfo { name: folder.name.clone(), kind: NodeKind::Folder, host: String::new() },
+            );
             self.nodes.push(TreeNode {
                 id: NodeId(id),
                 depth,
@@ -1935,7 +2044,10 @@ fn tree_nodes(folders: Vec<Folder>, connections: Vec<Connection>, collapsed: &Ha
                 let id = node_number(connection.id);
                 let kind = NodeKind::Connection(parse_protocol(&connection.protocol));
                 self.ids.insert(id, connection.id);
-                self.info.insert(id, NodeInfo { name: connection.name.clone(), kind, host: connection.host.clone() });
+                self.info.insert(
+                    id,
+                    NodeInfo { name: connection.name.clone(), kind, host: connection.host.clone() },
+                );
                 self.nodes.push(TreeNode {
                     id: NodeId(id),
                     depth,
@@ -1985,8 +2097,11 @@ mod tests {
     fn the_tree_is_depth_first_with_folders_first() {
         let a = folder("a", None);
         let b = folder("b", Some(a.id));
-        let conns =
-            vec![connection("in-b", Some(b.id)), connection("in-a", Some(a.id)), connection("top", None)];
+        let conns = vec![
+            connection("in-b", Some(b.id)),
+            connection("in-a", Some(a.id)),
+            connection("top", None),
+        ];
         let (nodes, ..) = tree_nodes(vec![b, a], conns, &HashSet::new());
         assert_eq!(labels(&nodes), [(0, "a"), (1, "b"), (2, "in-b"), (1, "in-a"), (0, "top")]);
     }
@@ -2017,9 +2132,13 @@ mod tests {
     #[test]
     fn display_quality_reads_back_as_saved() {
         let saved = |key: &str, value: Option<&str>| {
-            value.map(|value| BTreeMap::from([(key.to_owned(), value.to_owned())])).unwrap_or_default()
+            value
+                .map(|value| BTreeMap::from([(key.to_owned(), value.to_owned())]))
+                .unwrap_or_default()
         };
-        for quality in [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast, RdpQuality::Custom] {
+        for quality in
+            [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast, RdpQuality::Custom]
+        {
             assert_eq!(rdp_quality(&saved(OPTION_QUALITY, rdp_quality_option(quality))), quality);
         }
         for colors in [VncColors::Full, VncColors::Bits16, VncColors::Bits8] {
@@ -2060,7 +2179,8 @@ mod tests {
     }
 
     fn plain(password: &str, key_file: Option<&str>, agreed: bool) -> Result<bool, String> {
-        let protection = Protection::asked_for(Secret::new(password), key_file.map(PathBuf::from), agreed)?;
+        let protection =
+            Protection::asked_for(Secret::new(password), key_file.map(PathBuf::from), agreed)?;
         Ok(matches!(protection, Protection::Plain))
     }
 

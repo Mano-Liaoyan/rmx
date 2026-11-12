@@ -134,7 +134,10 @@ pub fn pane_bar(
     let title = elided_at(&painter, start, y, view.title, font, color, (end - start).max(0.));
     if grab.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::Grab);
-        let name = Rect::from_min_max(pos2(start, rect.top()), pos2((start + title).min(end), rect.bottom()));
+        let name = Rect::from_min_max(
+            pos2(start, rect.top()),
+            pos2((start + title).min(end), rect.bottom()),
+        );
         let over_name = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pos| name.contains(pos));
         if over_name && !view.tooltip.is_empty() {
             grab.on_hover_text(view.tooltip);

@@ -414,11 +414,16 @@ fn port_choices(ui: &mut Ui, ports: Option<&[SerialPortChoice]>, device: &mut St
         match ports {
             None => (),
             Some([]) => {
-                ui.label(egui::RichText::new("No serial ports found").size(TEXT_SM).color(p.muted_fg));
+                ui.label(
+                    egui::RichText::new("No serial ports found").size(TEXT_SM).color(p.muted_fg),
+                );
             },
             Some(_) => (),
         }
-        if icon_button(ui, icons::FOLDER_SYNC, CONTROL_HEIGHT, 14.).on_hover_text("Look again").clicked() {
+        if icon_button(ui, icons::FOLDER_SYNC, CONTROL_HEIGHT, 14.)
+            .on_hover_text("Look again")
+            .clicked()
+        {
             again = true;
         }
     });
@@ -455,11 +460,12 @@ fn field(
     password: bool,
 ) {
     row(ui, label, |ui| {
-        text_input(ui, Id::unique(salt), value, InputOptions {
-            hint,
-            password,
-            ..Default::default()
-        });
+        text_input(
+            ui,
+            Id::unique(salt),
+            value,
+            InputOptions { hint, password, ..Default::default() },
+        );
     });
 }
 

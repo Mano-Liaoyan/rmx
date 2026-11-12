@@ -9,25 +9,30 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use rmx_layout::PaneId;
-use rmx_render::SizeInfo;
 use rmx_display::{DisplayEvent, DisplayHandle};
+use rmx_layout::PaneId;
 use rmx_rdp::{CertificatePolicy, CertificatePrompt, RdpConfig, RdpError, Security};
+use rmx_render::SizeInfo;
 use rmx_ssh::{
     ConnectConfig, ConnectOptions, HostConfig, HostKeyCheck, HostKeyDecision, HostKeyRejection,
     HostKeyVerifier, KeyboardChallenge, PortForward, PromptContext, Prompter, PublicKey,
     SecretString, ShellExit, ShellOptions, ShellReader, ShellWriter, SshClient,
 };
-use rmx_terminal::{CloseReason, Sink, Terminal, Theme, TransportReader, TransportWriter, WindowSize};
+use rmx_terminal::{
+    CloseReason, Sink, Terminal, Theme, TransportReader, TransportWriter, WindowSize,
+};
 use rmx_transfer::rustls;
-use rmx_transfer::rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rmx_transfer::rustls::client::danger::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
 use rmx_transfer::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rmx_transfer::{
     DialedStream, FtpConfig, FtpDialer, FtpFs, FtpTls, RemoteFs, SftpFs, SftpOptions, TunnelStream,
 };
 use rmx_ui::Protocol;
 use rmx_ui::widgets::{
-    HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, VncColors, is_rustdesk_address,
+    HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, VncColors,
+    is_rustdesk_address,
 };
 use rmx_vault::{KnownHost, Tunnel};
 use tokio::net::TcpStream;
@@ -494,7 +499,12 @@ pub async fn run(request: ConnectRequest) {
 }
 
 /// The verifier and prompter of everything this pane connects through.
-fn ssh_config(reporter: &Reporter, target: HostConfig, jumps: Vec<HostConfig>, vault: VaultHandle) -> ConnectConfig {
+fn ssh_config(
+    reporter: &Reporter,
+    target: HostConfig,
+    jumps: Vec<HostConfig>,
+    vault: VaultHandle,
+) -> ConnectConfig {
     ConnectConfig {
         target,
         jumps,
@@ -522,7 +532,9 @@ async fn connect_ssh(
         1 => "Connecting through a jump host".to_owned(),
         hops => format!("Connecting through {hops} jump hosts"),
     }));
-    rmx_ssh::connect(ssh_config(reporter, target, jumps, vault)).await.map_err(|err| err.to_string())
+    rmx_ssh::connect(ssh_config(reporter, target, jumps, vault))
+        .await
+        .map_err(|err| err.to_string())
 }
 
 /// What opening a terminal takes.
@@ -607,7 +619,8 @@ async fn run_sftp(
         drop(holds);
         reporter.send(LinkEvent::Stage("Starting SFTP".to_owned()));
         let stream = client.open_sftp().await.map_err(|err| err.to_string())?;
-        let fs = SftpFs::connect(stream, SftpOptions::default()).await.map_err(|err| err.to_string())?;
+        let fs =
+            SftpFs::connect(stream, SftpOptions::default()).await.map_err(|err| err.to_string())?;
         let start = match directory {
             Some(directory) => directory,
             None => fs.canonicalize(".").await.map_err(|err| err.to_string())?,
@@ -644,11 +657,9 @@ struct SshDialer(SshClient);
 #[async_trait]
 impl FtpDialer for SshDialer {
     async fn dial(&self, host: &str, port: u16) -> std::io::Result<DialedStream> {
-        let stream = self
-            .0
-            .open_direct_tcpip(host, port)
-            .await
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, err.to_string()))?;
+        let stream = self.0.open_direct_tcpip(host, port).await.map_err(|err| {
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, err.to_string())
+        })?;
         Ok(DialedStream::Tunnel(Box::new(stream)))
     }
 }
@@ -691,7 +702,12 @@ impl ServerCertVerifier for PinnedCertificate {
         cert: &CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -700,7 +716,12 @@ impl ServerCertVerifier for PinnedCertificate {
         cert: &CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
@@ -761,7 +782,10 @@ async fn known_keys(vault: &VaultHandle, host: &str, port: u16, pin_type: &str) 
 }
 
 /// A TLS configuration trusting only `pins`, noting whatever else the server presents.
-fn ftps_config(pins: Vec<[u8; 32]>, seen: Arc<Mutex<Option<[u8; 32]>>>) -> Result<rustls::ClientConfig, String> {
+fn ftps_config(
+    pins: Vec<[u8; 32]>,
+    seen: Arc<Mutex<Option<[u8; 32]>>>,
+) -> Result<rustls::ClientConfig, String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = Arc::new(PinnedCertificate { pins, seen, provider: provider.clone() });
     Ok(rustls::ClientConfig::builder_with_provider(provider)
@@ -780,7 +804,8 @@ async fn run_ftp(
 ) -> Result<(), String> {
     let ConnectPlan { endpoint, jumps, ftps, holds, .. } = plan;
     let Endpoint { host, port, user, password, .. } = endpoint;
-    let label = if user.is_empty() { format!("{host}:{port}") } else { format!("{user}@{host}:{port}") };
+    let label =
+        if user.is_empty() { format!("{host}:{port}") } else { format!("{user}@{host}:{port}") };
     reporter.send(LinkEvent::Target(label));
     let password = password.map(|secret| secret.expose().to_owned()).unwrap_or_default();
 
@@ -810,7 +835,8 @@ async fn run_ftp(
                 Err(err) => {
                     let noted = seen.lock().ok().and_then(|mut seen| seen.take());
                     let Some(hash) = noted else { return Err(err.to_string()) };
-                    match ask_certificate(reporter, &vault, FTPS_PIN_TYPE, &host, port, &hash).await {
+                    match ask_certificate(reporter, &vault, FTPS_PIN_TYPE, &host, port, &hash).await
+                    {
                         Some(_) => pins.push(hash),
                         None => return Err("the server's certificate was not trusted".to_owned()),
                     }
@@ -897,7 +923,9 @@ fn serial_problem(path: &str, error: &SerialError) -> String {
     match error {
         SerialError::NotFound => format!("{path} is not on this machine"),
         SerialError::PermissionDenied => {
-            format!("Not allowed to open {path}: add yourself to the dialout group and log in again")
+            format!(
+                "Not allowed to open {path}: add yourself to the dialout group and log in again"
+            )
         },
         SerialError::Busy => format!("{path} is in use by another program"),
         SerialError::NotASerialPort => format!("{path} is not a serial port"),
@@ -959,21 +987,29 @@ async fn open_tunnel(
 }
 
 /// A connection to the server itself, straight or through `tunnel`.
-async fn open_stream(tunnel: Option<&SshClient>, host: &str, port: u16) -> Result<Box<dyn TunnelStream>, String> {
+async fn open_stream(
+    tunnel: Option<&SshClient>,
+    host: &str,
+    port: u16,
+) -> Result<Box<dyn TunnelStream>, String> {
     let connect = async {
         match tunnel {
             Some(client) => {
-                let stream = client.open_direct_tcpip(host, port).await.map_err(|err| err.to_string())?;
+                let stream =
+                    client.open_direct_tcpip(host, port).await.map_err(|err| err.to_string())?;
                 Ok::<Box<dyn TunnelStream>, String>(Box::new(stream))
             },
             None => {
-                let stream = TcpStream::connect((host, port)).await.map_err(|err| err.to_string())?;
+                let stream =
+                    TcpStream::connect((host, port)).await.map_err(|err| err.to_string())?;
                 let _ = stream.set_nodelay(true);
                 Ok::<Box<dyn TunnelStream>, String>(Box::new(stream))
             },
         }
     };
-    tokio::time::timeout(CONNECT_TIMEOUT, connect).await.map_err(|_| "the server did not answer".to_owned())?
+    tokio::time::timeout(CONNECT_TIMEOUT, connect)
+        .await
+        .map_err(|_| "the server did not answer".to_owned())?
 }
 
 /// Read a session's events, delivering frames as the main thread can take them.
@@ -1010,11 +1046,13 @@ async fn pump_display(
             Some(DisplayEvent::Resized { width, height }) => Incoming::Resized { width, height },
             Some(DisplayEvent::Update(update)) => Incoming::Update(update),
             Some(DisplayEvent::Clipboard(text)) => {
-                let _ = reporter.proxy.send_event(AppEvent::DisplayClipboard(pane, generation, text));
+                let _ =
+                    reporter.proxy.send_event(AppEvent::DisplayClipboard(pane, generation, text));
                 continue;
             },
             Some(DisplayEvent::Cursor(cursor)) => {
-                let _ = reporter.proxy.send_event(AppEvent::DisplayCursor(pane, generation, cursor));
+                let _ =
+                    reporter.proxy.send_event(AppEvent::DisplayCursor(pane, generation, cursor));
                 continue;
             },
             Some(DisplayEvent::Bell) => continue,
@@ -1056,13 +1094,18 @@ async fn run_vnc(
         reporter.send(LinkEvent::Stage("Starting the session".to_owned()));
         for attempt in 0..PASSWORD_ATTEMPTS {
             let stream = open_stream(tunnel.as_ref(), &host, port).await?;
-            let config =
-                rmx_vnc::Config { password: password.clone(), color_depth, ..rmx_vnc::Config::default() };
+            let config = rmx_vnc::Config {
+                password: password.clone(),
+                color_depth,
+                ..rmx_vnc::Config::default()
+            };
             let connect = tokio::time::timeout(CONNECT_TIMEOUT, rmx_vnc::connect(stream, config));
             let result = connect.await.map_err(|_| "the server did not answer".to_owned())?;
             match result {
                 Ok(handle) => return Ok::<_, String>((handle, tunnel)),
-                Err(rmx_vnc::ConnectError::PasswordRequired | rmx_vnc::ConnectError::WrongPassword) => {
+                Err(
+                    rmx_vnc::ConnectError::PasswordRequired | rmx_vnc::ConnectError::WrongPassword,
+                ) => {
                     let title = format!("VNC password for {host}");
                     let detail = retry_note(attempt + 1);
                     let labels = vec![("Password".to_owned(), true)];
@@ -1121,7 +1164,15 @@ async fn run_rdp(
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let ConnectPlan {
-        endpoint, jumps, holds, scale, follow_size, rdp_security, rdp_quality, rdp, ..
+        endpoint,
+        jumps,
+        holds,
+        scale,
+        follow_size,
+        rdp_security,
+        rdp_quality,
+        rdp,
+        ..
     } = plan;
     let Endpoint { host, port, user, password, domain } = endpoint;
     reporter.send(LinkEvent::Target(format!("{user}@{host}:{port}")));
@@ -1144,14 +1195,21 @@ async fn run_rdp(
                 None => {
                     let title = format!("Password for {user}@{host}");
                     let labels = vec![("Password".to_owned(), true)];
-                    let answer =
-                        ask(&reporter.proxy, Some(reporter.pane), title, retry_note(attempt + 1), labels).await;
+                    let answer = ask(
+                        &reporter.proxy,
+                        Some(reporter.pane),
+                        title,
+                        retry_note(attempt + 1),
+                        labels,
+                    )
+                    .await;
                     let typed = answer.and_then(|answers| answers.into_iter().next());
                     typed.ok_or("A password is needed")?.expose().to_owned()
                 },
             };
             let (prompts_tx, prompts) = mpsc::channel(1);
-            let mut config = RdpConfig::new(host.clone(), user.clone(), secret, (width, height), [0; 32]);
+            let mut config =
+                RdpConfig::new(host.clone(), user.clone(), secret, (width, height), [0; 32]);
             // Asking is the only way a certificate is judged here: nothing is accepted unseen.
             config.certificate = CertificatePolicy::Ask(prompts_tx);
             config.security = security;
@@ -1160,7 +1218,8 @@ async fn run_rdp(
             config.connect_timeout = CONNECT_TIMEOUT;
 
             let stream = open_stream(tunnel.as_ref(), &host, port).await?;
-            let judge = judge_certificates(reporter.clone(), vault.clone(), host.clone(), port, prompts);
+            let judge =
+                judge_certificates(reporter.clone(), vault.clone(), host.clone(), port, prompts);
             let connect = rmx_rdp::connect(stream, config);
             tokio::pin!(judge);
             tokio::pin!(connect);
@@ -1170,7 +1229,9 @@ async fn run_rdp(
             };
             match result {
                 Ok(handle) => return Ok::<_, String>((handle, tunnel)),
-                Err(RdpError::Handshake(message)) if password.is_some() && is_auth_failure(&message) => {
+                Err(RdpError::Handshake(message))
+                    if password.is_some() && is_auth_failure(&message) =>
+                {
                     password = None;
                 },
                 Err(RdpError::CertificateRejected) => {
@@ -1205,14 +1266,20 @@ impl rmx_rustdesk::Dial for RustDeskDialer<'_> {
         port: u16,
     ) -> rmx_rustdesk::BoxFuture<'a, std::io::Result<Box<dyn rmx_rustdesk::Transport>>> {
         Box::pin(async move {
-            let stream = open_stream(self.tunnel, host, port).await.map_err(std::io::Error::other)?;
+            let stream =
+                open_stream(self.tunnel, host, port).await.map_err(std::io::Error::other)?;
             Ok(Box::new(stream) as Box<dyn rmx_rustdesk::Transport>)
         })
     }
 }
 
 /// Where a RustDesk connection goes: an address straight, an ID through its server.
-fn rustdesk_target(host: &str, port: u16, server: Option<String>, key: Option<String>) -> rmx_rustdesk::Target {
+fn rustdesk_target(
+    host: &str,
+    port: u16,
+    server: Option<String>,
+    key: Option<String>,
+) -> rmx_rustdesk::Target {
     if is_rustdesk_address(host) {
         return rmx_rustdesk::Target::Direct { host: host.trim().to_owned(), port };
     }
@@ -1231,8 +1298,16 @@ async fn run_rustdesk(
 ) -> Result<(), String> {
     use rmx_rustdesk::ConnectError;
 
-    let ConnectPlan { endpoint, jumps, holds, scale, rdp_quality, rustdesk_server, rustdesk_key, .. } =
-        plan;
+    let ConnectPlan {
+        endpoint,
+        jumps,
+        holds,
+        scale,
+        rdp_quality,
+        rustdesk_server,
+        rustdesk_key,
+        ..
+    } = plan;
     let Endpoint { host, port, password, .. } = endpoint;
     let target = rustdesk_target(&host, port, rustdesk_server, rustdesk_key);
     reporter.send(LinkEvent::Target(match &target {
@@ -1267,10 +1342,14 @@ async fn run_rustdesk(
                     match session.identity {
                         rmx_rustdesk::Identity::Verified => {},
                         rmx_rustdesk::Identity::Unverified => {
-                            log::warn!("the RustDesk peer at {host} is encrypted but its identity was not checked")
+                            log::warn!(
+                                "the RustDesk peer at {host} is encrypted but its identity was not checked"
+                            )
                         },
                         rmx_rustdesk::Identity::Unencrypted => {
-                            log::warn!("the RustDesk session with {host} is not encrypted, as RustDesk serves direct connections")
+                            log::warn!(
+                                "the RustDesk session with {host} is not encrypted, as RustDesk serves direct connections"
+                            )
                         },
                     }
                     return Ok::<_, String>((session.display, tunnel));
@@ -1285,8 +1364,17 @@ async fn run_rustdesk(
             };
             let detail = retry_note(attempt + 1);
             let secret = label == "Password";
-            let answer = ask(&reporter.proxy, Some(reporter.pane), title, detail, vec![(label.to_owned(), secret)]).await;
-            let typed = answer.and_then(|answers| answers.into_iter().next()).ok_or("An answer is needed")?;
+            let answer = ask(
+                &reporter.proxy,
+                Some(reporter.pane),
+                title,
+                detail,
+                vec![(label.to_owned(), secret)],
+            )
+            .await;
+            let typed = answer
+                .and_then(|answers| answers.into_iter().next())
+                .ok_or("An answer is needed")?;
             if secret {
                 credentials.password = Some(typed.expose().to_owned());
             } else {
@@ -1358,7 +1446,8 @@ mod tests {
         assert_eq!(by_id, rmx_rustdesk::Target::Id { id: "123456789".to_owned(), server });
 
         let own = rustdesk_target("office", 1, Some("rd.example.com".into()), Some("KEY".into()));
-        let server = rmx_rustdesk::Server { host: "rd.example.com".to_owned(), key: Some("KEY".into()) };
+        let server =
+            rmx_rustdesk::Server { host: "rd.example.com".to_owned(), key: Some("KEY".into()) };
         assert_eq!(own, rmx_rustdesk::Target::Id { id: "office".to_owned(), server });
 
         for host in ["192.168.1.20", "pc.lan", "fe80::1"] {
@@ -1405,18 +1494,16 @@ mod tests {
         assert_eq!(close_reason(Some(&ShellExit::Status(3))), CloseReason::Exited(3));
         assert_eq!(close_reason(Some(&ShellExit::Closed)), CloseReason::Closed);
         assert_eq!(close_reason(None), CloseReason::Closed);
-        let signal = ShellExit::Signal {
-            name: "TERM".into(),
-            core_dumped: false,
-            message: String::new(),
-        };
+        let signal =
+            ShellExit::Signal { name: "TERM".into(), core_dumped: false, message: String::new() };
         let reason = close_reason(Some(&signal));
         assert_eq!(reason, CloseReason::Killed { signal: "TERM".into(), message: String::new() });
     }
 
     #[test]
     fn a_key_splits_into_what_known_hosts_stores() {
-        const LINE: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMIRiy7ZfFV9wAKHiSxTvfwgpvxcDVqrrPnFBnbtxvEG";
+        const LINE: &str =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMIRiy7ZfFV9wAKHiSxTvfwgpvxcDVqrrPnFBnbtxvEG";
         let key = PublicKey::from_openssh(LINE).unwrap();
         let (algorithm, base64) = key_parts(&key).unwrap();
         assert_eq!(algorithm, "ssh-ed25519");

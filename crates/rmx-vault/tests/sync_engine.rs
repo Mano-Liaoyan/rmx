@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use common::{MemoryBackend, creds, fast_kdf, replicas};
 use rmx_vault::{
-    BackendError, Connection, Credentials, Error, Folder, Id, RemoteObject, RemoteVersion, SyncBackend,
-    Vault,
+    BackendError, Connection, Credentials, Error, Folder, Id, RemoteObject, RemoteVersion,
+    SyncBackend, Vault,
 };
 
 fn folder(name: &str) -> Folder {

@@ -9,10 +9,9 @@ use rmx_ui::theme::{self, PANE_BAR_HEIGHT, STRIP_HEIGHT, TREE_ROW_HEIGHT};
 use rmx_ui::virtual_list::{self, window};
 use rmx_ui::widgets::tabs::{TAB_GAP, drop_index, preview_slot, slot_x, tab_width};
 use rmx_ui::widgets::{
-    QuickItem, QuickOpenState, quick_open,
-    NewConnectionState, NodeKind, PaneBarView, PaneStatus, Reveal, TabStripState, TabView, TitleBarView,
-    TreeModel, TreeNode, TreeState, connection_tree, new_connection_dialog, pane_bar, tab_strip,
-    title_bar,
+    NewConnectionState, NodeKind, PaneBarView, PaneStatus, QuickItem, QuickOpenState, Reveal,
+    TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState, connection_tree,
+    new_connection_dialog, pane_bar, quick_open, tab_strip, title_bar,
 };
 use rmx_ui::{NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction};
 
@@ -83,7 +82,14 @@ fn tabs_vm(ids: &[u64]) -> Vec<TabView<'static>> {
 }
 
 fn node(id: u64, depth: u16, kind: NodeKind, label: &str) -> TreeNode {
-    TreeNode { id: NodeId(id), depth, kind, label: label.into(), state: Default::default(), expanded: true }
+    TreeNode {
+        id: NodeId(id),
+        depth,
+        kind,
+        label: label.into(),
+        state: Default::default(),
+        expanded: true,
+    }
 }
 
 fn big_tree(rows: u64) -> TreeModel {
@@ -330,7 +336,8 @@ fn title_bar_routes_its_controls() {
     let tabs = tabs_vm(&[1]);
     let mut state = TabStripState::default();
     let bar = Rect::from_min_size(pos2(0., 0.), vec2(SCREEN.width(), STRIP_HEIGHT));
-    let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: 260. };
+    let view =
+        TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: 260. };
     let now = Instant::now();
     let mut draw = |ui: &mut Ui| title_bar(ui, bar, &view, &mut state, now);
 
@@ -347,7 +354,8 @@ fn title_bar_empty_space_drags_the_window() {
     let tabs = tabs_vm(&[1]);
     let mut state = TabStripState::default();
     let bar = Rect::from_min_size(pos2(0., 0.), vec2(SCREEN.width(), STRIP_HEIGHT));
-    let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: 260. };
+    let view =
+        TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: 260. };
     let now = Instant::now();
     let mut draw = |ui: &mut Ui| title_bar(ui, bar, &view, &mut state, now);
 
@@ -420,8 +428,14 @@ fn pane_bar_routes_its_buttons() {
     harness.click(pos2(800. - 14., y), &mut draw);
     assert_eq!(harness.click(pos2(800. - 14., y), &mut draw), Some(UiAction::PaneClose(PaneId(7))));
     assert_eq!(harness.click(pos2(800. - 40., y), &mut draw), Some(UiAction::PaneZoom(PaneId(7))));
-    assert_eq!(harness.click(pos2(800. - 66., y), &mut draw), Some(UiAction::PaneSplitDown(PaneId(7))));
-    assert_eq!(harness.click(pos2(800. - 92., y), &mut draw), Some(UiAction::PaneSplitRight(PaneId(7))));
+    assert_eq!(
+        harness.click(pos2(800. - 66., y), &mut draw),
+        Some(UiAction::PaneSplitDown(PaneId(7)))
+    );
+    assert_eq!(
+        harness.click(pos2(800. - 92., y), &mut draw),
+        Some(UiAction::PaneSplitRight(PaneId(7)))
+    );
 }
 
 fn core() -> ChromeCore {
@@ -527,7 +541,6 @@ fn pointer_over_panes_does_not_run_egui() {
     assert!(core.window_event(&moved(100., 500.)));
     assert!(core.needs_update(settled));
 }
-
 
 #[test]
 fn closing_the_palette_gives_the_keyboard_back() {

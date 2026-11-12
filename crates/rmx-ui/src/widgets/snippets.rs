@@ -8,9 +8,9 @@ use egui::{
 
 use crate::action::UiAction;
 use crate::draw::{elided_at, hline, palette, vline};
+use crate::float::Resizable;
 use crate::theme::{CONTROL_HEIGHT, RADIUS, RADIUS_SM, TEXT_SM, TREE_ROW_HEIGHT};
 use crate::virtual_list::{clamp_scroll, window};
-use crate::float::Resizable;
 use crate::{float, fonts, icons};
 
 use super::controls::{ButtonKind, InputOptions, button_full, text_input};
@@ -166,12 +166,17 @@ fn snippets_body(
     let search =
         Rect::from_min_size(list.min + vec2(PAD, PAD), vec2(width - 2. * PAD, CONTROL_HEIGHT));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(search));
-    let input = text_input(&mut child, id.with("query"), &mut state.query, InputOptions {
-        hint: "Search",
-        glyph: Some(icons::SEARCH),
-        width: Some(search.width()),
-        ..Default::default()
-    });
+    let input = text_input(
+        &mut child,
+        id.with("query"),
+        &mut state.query,
+        InputOptions {
+            hint: "Search",
+            glyph: Some(icons::SEARCH),
+            width: Some(search.width()),
+            ..Default::default()
+        },
+    );
     if std::mem::take(&mut state.focus_query) {
         input.request_focus();
     }
@@ -239,11 +244,12 @@ fn snippets_body(
         Rect::from_min_max(form.min + vec2(16., 16.), pos2(form.right() - 16., footer_y - 12.));
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with("form")).max_rect(body));
     child.spacing_mut().item_spacing.y = 6.;
-    text_input(&mut child, id.with("name"), &mut state.name, InputOptions {
-        hint: "Name",
-        width: Some(body.width()),
-        ..Default::default()
-    });
+    text_input(
+        &mut child,
+        id.with("name"),
+        &mut state.name,
+        InputOptions { hint: "Name", width: Some(body.width()), ..Default::default() },
+    );
     child.add_space(4.);
     let height = (body.bottom() - child.cursor().top()).max(CONTROL_HEIGHT);
     let frame = Frame::new()

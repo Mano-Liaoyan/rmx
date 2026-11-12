@@ -87,11 +87,10 @@ mod tests {
     #[test]
     fn variables_come_once_in_order_with_their_defaults() {
         let body = "scp {{file}} {{ host : }}:{{dir:/tmp}}; rm {{file}}";
-        assert_eq!(variables(body), [
-            var("file", None),
-            var("host", Some(" ")),
-            var("dir", Some("/tmp"))
-        ]);
+        assert_eq!(
+            variables(body),
+            [var("file", None), var("host", Some(" ")), var("dir", Some("/tmp"))]
+        );
     }
 
     #[test]

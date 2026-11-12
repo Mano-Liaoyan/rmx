@@ -6,8 +6,8 @@ use egui::{
 };
 
 use crate::draw::{icon, palette, snap};
-use crate::{fonts, icons};
 use crate::theme::{CONTROL_HEIGHT, RADIUS, RADIUS_SM, TEXT_SM};
+use crate::{fonts, icons};
 
 /// How much a button draws the eye.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,7 +136,13 @@ pub fn checkbox(ui: &mut Ui, rect: Rect, salt: Id, checked: &mut bool, label: &s
         p.border
     };
     let fill = if *checked { p.foreground } else { Color32::TRANSPARENT };
-    painter.rect(square, CornerRadius::same(RADIUS_SM), fill, Stroke::new(1., edge), StrokeKind::Inside);
+    painter.rect(
+        square,
+        CornerRadius::same(RADIUS_SM),
+        fill,
+        Stroke::new(1., edge),
+        StrokeKind::Inside,
+    );
     if *checked {
         icon(painter, center, icons::CHECK, 12., p.background);
     }

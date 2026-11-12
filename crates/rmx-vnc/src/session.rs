@@ -18,8 +18,8 @@ use tokio::time::{Instant, sleep_until};
 use vnc::client::VncClient;
 use vnc::{DesktopLayout, PixelFormat, Rect as VncRect, ResizeError, VncError, VncEvent, X11Event};
 
-use rmx_display::outbox::{InvalidRect, Outbox, Rect};
 use crate::input;
+use rmx_display::outbox::{InvalidRect, Outbox, Rect};
 
 /// Asks for changes at most this often, once the server is producing them.
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);

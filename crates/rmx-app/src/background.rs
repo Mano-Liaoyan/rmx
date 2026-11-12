@@ -100,7 +100,14 @@ pub struct Layout {
 
 impl Default for Layout {
     fn default() -> Self {
-        Self { width: 1280., height: 800., maximized: false, sidebar_open: true, theme: ThemeMode::Dark, panels: Panels::default() }
+        Self {
+            width: 1280.,
+            height: 800.,
+            maximized: false,
+            sidebar_open: true,
+            theme: ThemeMode::Dark,
+            panels: Panels::default(),
+        }
     }
 }
 
@@ -114,7 +121,9 @@ pub struct Paths {
 impl Paths {
     /// `RMX_DATA_DIR`, or the user's data directory.
     fn locate() -> Self {
-        let dir = std::env::var_os("RMX_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| user_data().join("rmx"));
+        let dir = std::env::var_os("RMX_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| user_data().join("rmx"));
         Self { state: dir.join("app.local"), default_vault: dir.join("vault.rmxdb") }
     }
 }
@@ -134,9 +143,8 @@ impl AppState {
         let number = |key, default| {
             self.0.get(key).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(default)
         };
-        let flag = |key, default| {
-            self.0.get(key).ok().flatten().map_or(default, |value| value == "1")
-        };
+        let flag =
+            |key, default| self.0.get(key).ok().flatten().map_or(default, |value| value == "1");
         let theme = self.0.get(KEY_THEME).ok().flatten();
         let defaults = Layout::default();
         Layout {
@@ -144,8 +152,17 @@ impl AppState {
             height: number(KEY_HEIGHT, defaults.height),
             maximized: flag(KEY_MAXIMIZED, false),
             sidebar_open: flag(KEY_SIDEBAR, true),
-            theme: if theme.as_deref() == Some("light") { ThemeMode::Light } else { ThemeMode::Dark },
-            panels: self.0.get(KEY_PANELS).ok().flatten().map_or_else(Panels::default, |text| Panels::read(&text)),
+            theme: if theme.as_deref() == Some("light") {
+                ThemeMode::Light
+            } else {
+                ThemeMode::Dark
+            },
+            panels: self
+                .0
+                .get(KEY_PANELS)
+                .ok()
+                .flatten()
+                .map_or_else(Panels::default, |text| Panels::read(&text)),
         }
     }
 
@@ -209,11 +226,15 @@ impl AppState {
 fn user_data() -> PathBuf {
     let home = || std::env::home_dir().unwrap_or_default();
     if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| home().join("AppData/Roaming"))
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join("AppData/Roaming"))
     } else if cfg!(target_os = "macos") {
         home().join("Library/Application Support")
     } else {
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"))
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".local/share"))
     }
 }
 
@@ -266,17 +287,37 @@ mod tests {
     #[test]
     fn a_session_survives_the_state_file() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
+        let paths =
+            Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
         let state = AppState::open(&paths).unwrap();
         assert_eq!(state.session(), None);
-        let tab = SavedTab { layout: Split::Pane(SavedPane::Node(9)), focus: 0, zoomed: false, name: None };
+        let tab = SavedTab {
+            layout: Split::Pane(SavedPane::Node(9)),
+            focus: 0,
+            zoomed: false,
+            name: None,
+        };
         let windows = vec![SavedWindow {
             width: 900.,
             height: 600.,
             maximized: false,
             sidebar_open: true,
             active: 0,
-            tabs: vec![tab, SavedTab { layout: Split::Pane(SavedPane::Files(7)), focus: 0, zoomed: false, name: None }, SavedTab { layout: Split::Pane(SavedPane::Local), focus: 0, zoomed: false, name: None }],
+            tabs: vec![
+                tab,
+                SavedTab {
+                    layout: Split::Pane(SavedPane::Files(7)),
+                    focus: 0,
+                    zoomed: false,
+                    name: None,
+                },
+                SavedTab {
+                    layout: Split::Pane(SavedPane::Local),
+                    focus: 0,
+                    zoomed: false,
+                    name: None,
+                },
+            ],
         }];
         state.save_session(&session::encode(&windows, |pane| pane.spell()));
         drop(state);
@@ -292,7 +333,8 @@ mod tests {
     #[test]
     fn the_layout_survives_the_state_file() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
+        let paths =
+            Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
         let state = AppState::open(&paths).unwrap();
         assert_eq!(state.layout(), Layout::default());
 
@@ -316,7 +358,8 @@ mod tests {
     #[test]
     fn the_latest_vault_comes_first_and_once() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
+        let paths =
+            Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
         let state = AppState::open(&paths).unwrap();
         for name in ["/a", "/b", "/a"] {
             state.set_last_vault(Path::new(name));

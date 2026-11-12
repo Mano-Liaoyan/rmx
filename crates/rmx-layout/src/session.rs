@@ -161,12 +161,15 @@ mod tests {
                 maximized: false,
                 sidebar_open: true,
                 active: 1,
-                tabs: vec![SavedTab { layout, focus: 2, zoomed: true, name: None }, SavedTab {
-                    layout: Split::Pane(4),
-                    focus: 0,
-                    zoomed: false,
-                    name: Some("two words".to_owned()),
-                }],
+                tabs: vec![
+                    SavedTab { layout, focus: 2, zoomed: true, name: None },
+                    SavedTab {
+                        layout: Split::Pane(4),
+                        focus: 0,
+                        zoomed: false,
+                        name: Some("two words".to_owned()),
+                    },
+                ],
             },
             SavedWindow {
                 width: 640.,
@@ -174,7 +177,12 @@ mod tests {
                 maximized: true,
                 sidebar_open: false,
                 active: 0,
-                tabs: vec![SavedTab { layout: Split::Pane(5), focus: 0, zoomed: false, name: None }],
+                tabs: vec![SavedTab {
+                    layout: Split::Pane(5),
+                    focus: 0,
+                    zoomed: false,
+                    name: None,
+                }],
             },
         ]
     }

@@ -6,8 +6,8 @@ use egui::{Align, Context, Id, Layout, RichText, Sense, Ui, vec2};
 
 use crate::action::UiAction;
 use crate::draw::{hline, palette};
-use crate::theme::{CONTROL_HEIGHT, TEXT_LG, TEXT_SM, ThemeMode};
 use crate::float::Resizable;
+use crate::theme::{CONTROL_HEIGHT, TEXT_LG, TEXT_SM, ThemeMode};
 use crate::{float, fonts, icons};
 
 use super::controls::{ButtonKind, InputOptions, button, button_full, segmented, text_input};
@@ -108,7 +108,8 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
         vec2(ui.available_width(), CONTROL_HEIGHT),
         Layout::left_to_right(Align::Center),
         |ui| {
-            let (cell, _) = ui.allocate_exact_size(vec2(LABEL - 8., CONTROL_HEIGHT), Sense::hover());
+            let (cell, _) =
+                ui.allocate_exact_size(vec2(LABEL - 8., CONTROL_HEIGHT), Sense::hover());
             ui.painter().text(
                 cell.left_center(),
                 egui::Align2::LEFT_CENTER,
@@ -123,11 +124,12 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
 
 fn field(ui: &mut Ui, salt: Id, label: &str, value: &mut String, hint: &str, password: bool) {
     row(ui, label, |ui| {
-        text_input(ui, salt.with(label), value, InputOptions {
-            hint,
-            password,
-            ..Default::default()
-        });
+        text_input(
+            ui,
+            salt.with(label),
+            value,
+            InputOptions { hint, password, ..Default::default() },
+        );
     });
 }
 
@@ -186,8 +188,11 @@ pub fn settings_dialog(
     let id = Id::unique("settings-dialog");
     let default = [WIDTH, (ctx.content_rect().height() - 120.).max(MIN_SIZE[1])];
     let mut changed = false;
-    let resize = Resizable { size: &mut panels.settings, default, min: MIN_SIZE, changed: &mut changed };
-    let modal = float::resizable_modal(ctx, id, resize, |ui, size| settings_body(ui, id, draft, view, size[1]));
+    let resize =
+        Resizable { size: &mut panels.settings, default, min: MIN_SIZE, changed: &mut changed };
+    let modal = float::resizable_modal(ctx, id, resize, |ui, size| {
+        settings_body(ui, id, draft, view, size[1])
+    });
     if changed {
         return Some(UiAction::PanelsChanged);
     }
@@ -262,7 +267,8 @@ fn settings_body(
                         action = Some(UiAction::VaultAskMove);
                     }
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let path = RichText::new(view.vault).font(fonts::mono(TEXT_SM)).color(p.muted_fg);
+                        let path =
+                            RichText::new(view.vault).font(fonts::mono(TEXT_SM)).color(p.muted_fg);
                         ui.add(egui::Label::new(path).truncate()).on_hover_text(view.vault);
                     });
                 });
@@ -271,13 +277,16 @@ fn settings_body(
             group_rule(ui);
             sync_fields(ui, id.with("sync"), &mut draft.sync, true);
             if draft.sync.kind != SyncKind::None {
-                row(ui, "Sync on save", |ui| on_off(ui, id.with("on-save"), &mut draft.sync_on_save));
+                row(ui, "Sync on save", |ui| {
+                    on_off(ui, id.with("on-save"), &mut draft.sync_on_save)
+                });
                 field(ui, id, "Every, min", &mut draft.sync_interval_minutes, "", false);
             }
 
             group_rule(ui);
             let glyph = Some(icons::KEY_ROUND);
-            let import = button_full(ui, glyph, "Import ~/.ssh/config", ButtonKind::Secondary, true, None);
+            let import =
+                button_full(ui, glyph, "Import ~/.ssh/config", ButtonKind::Secondary, true, None);
             if import.clicked() {
                 action = Some(UiAction::ImportSshConfig);
             }

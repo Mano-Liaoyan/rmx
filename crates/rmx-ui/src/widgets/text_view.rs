@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{
-    Align, Align2, Color32, CornerRadius, Frame, Galley, Id, Key, Layout, Modifiers, Painter, Rect, ScrollArea,
-    Sense, TextBuffer, TextEdit, Ui, UiBuilder, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, Frame, Galley, Id, Key, Layout, Modifiers, Painter, Rect,
+    ScrollArea, Sense, TextBuffer, TextEdit, Ui, UiBuilder, pos2, vec2,
 };
 
 use crate::action::{FilesAction, PaneId, UiAction};
@@ -231,8 +231,19 @@ fn drawn_part(line: &str) -> &str {
 }
 
 /// The color of each stretch of `line`, split where a run or the `changed` part starts or ends.
-fn line_job(line: &str, runs: &[TokenRun], changed: Option<(usize, usize)>, p: &Palette, mark: Color32) -> LayoutJob {
-    let format = TextFormat { font_id: fonts::mono(TEXT_SM), color: p.foreground, line_height: Some(LINE), ..Default::default() };
+fn line_job(
+    line: &str,
+    runs: &[TokenRun],
+    changed: Option<(usize, usize)>,
+    p: &Palette,
+    mark: Color32,
+) -> LayoutJob {
+    let format = TextFormat {
+        font_id: fonts::mono(TEXT_SM),
+        color: p.foreground,
+        line_height: Some(LINE),
+        ..Default::default()
+    };
     let mut cuts = vec![0, line.len()];
     let clamp = |at: usize| line.floor_char_boundary(at.min(line.len()));
     for run in runs {
@@ -279,7 +290,12 @@ fn paint_line(
 
 /// All of `text`, each line colored by `highlight` as far as that still fits it.
 fn editor_job(text: &str, highlight: Option<&Highlight>, p: &Palette) -> LayoutJob {
-    let format = TextFormat { font_id: fonts::mono(TEXT_SM), color: p.foreground, line_height: Some(LINE), ..Default::default() };
+    let format = TextFormat {
+        font_id: fonts::mono(TEXT_SM),
+        color: p.foreground,
+        line_height: Some(LINE),
+        ..Default::default()
+    };
     let mut job = LayoutJob::default();
     let mut section = |range: std::ops::Range<usize>, color: Color32| {
         if !range.is_empty() {
@@ -292,7 +308,11 @@ fn editor_job(text: &str, highlight: Option<&Highlight>, p: &Palette) -> LayoutJ
         let mut at = 0;
         for run in highlight.map_or(&[][..], |highlight| highlight.runs_for(index, content)) {
             let (start, end) = (run.start as usize, (run.end as usize).min(content.len()));
-            if start < at || start >= end || !content.is_char_boundary(start) || !content.is_char_boundary(end) {
+            if start < at
+                || start >= end
+                || !content.is_char_boundary(start)
+                || !content.is_char_boundary(end)
+            {
                 continue;
             }
             section(line_start + at..line_start + start, p.foreground);
@@ -310,7 +330,15 @@ fn paint_title(ui: &Ui, bar: Rect, title: &str, path: &str, right: f32) {
     let p = palette(ui);
     let y = bar.center().y;
     let room = (right - bar.left() - 20.).max(0.);
-    let title_width = elided_at(ui.painter(), bar.left() + 10., y, title, fonts::medium(TEXT_SM), p.foreground, room * 0.4);
+    let title_width = elided_at(
+        ui.painter(),
+        bar.left() + 10.,
+        y,
+        title,
+        fonts::medium(TEXT_SM),
+        p.foreground,
+        room * 0.4,
+    );
     let x = bar.left() + 10. + title_width + 10.;
     elided_at(ui.painter(), x, y, path, fonts::mono(TEXT_SM), p.muted_fg, right - x - 10.);
 }
@@ -336,19 +364,33 @@ fn tools(ui: &mut Ui, bar: Rect, id: Id, add: impl FnOnce(&mut Ui)) -> f32 {
 }
 
 /// The vertical scrollbar of `len` lines at `rows`, with `ticks` marked along it.
-fn scrollbar(ui: &mut Ui, rows: Rect, id: Id, len: usize, state: &mut BodyState, ticks: &[u32], p: &Palette) {
+fn scrollbar(
+    ui: &mut Ui,
+    rows: Rect,
+    id: Id,
+    len: usize,
+    state: &mut BodyState,
+    ticks: &[u32],
+    p: &Palette,
+) {
     let viewport = rows.height();
     if len as f64 * f64::from(LINE) <= f64::from(viewport) {
         return;
     }
-    let track = Rect::from_min_max(pos2(rows.right() - THUMB_WIDTH - 2., rows.top()), pos2(rows.right() - 1., rows.bottom()));
+    let track = Rect::from_min_max(
+        pos2(rows.right() - THUMB_WIDTH - 2., rows.top()),
+        pos2(rows.right() - 1., rows.bottom()),
+    );
     let bar = ui.interact(track, id.with("thumb"), Sense::drag());
     let (top, height) = thumb(state.scroll, len, LINE, viewport, THUMB_MIN);
     if bar.drag_started() {
         let pointer = bar.interact_pointer_pos().map_or(0., |pos| pos.y - rows.top());
-        state.thumb_grab = Some(if (top..top + height).contains(&pointer) { pointer - top } else { height / 2. });
+        state.thumb_grab =
+            Some(if (top..top + height).contains(&pointer) { pointer - top } else { height / 2. });
     }
-    if let (true, Some(grab), Some(pos)) = (bar.dragged(), state.thumb_grab, bar.interact_pointer_pos()) {
+    if let (true, Some(grab), Some(pos)) =
+        (bar.dragged(), state.thumb_grab, bar.interact_pointer_pos())
+    {
         state.scroll = scroll_for_thumb(pos.y - rows.top() - grab, len, LINE, viewport, THUMB_MIN);
     }
     if bar.drag_stopped() {
@@ -359,7 +401,11 @@ fn scrollbar(ui: &mut Ui, rows: Rect, id: Id, len: usize, state: &mut BodyState,
     for &row in ticks {
         let y = rows.top() + (row as f32 / len as f32 * viewport).floor();
         if y > last {
-            painter.rect_filled(Rect::from_min_size(pos2(track.left(), y), vec2(THUMB_WIDTH, 2.)), 0., p.warning);
+            painter.rect_filled(
+                Rect::from_min_size(pos2(track.left(), y), vec2(THUMB_WIDTH, 2.)),
+                0.,
+                p.warning,
+            );
             last = y;
         }
     }
@@ -372,7 +418,14 @@ fn scrollbar(ui: &mut Ui, rows: Rect, id: Id, len: usize, state: &mut BodyState,
 }
 
 /// A file too long to edit: its lines on screen.
-fn show_lines(ui: &mut Ui, rows: Rect, id: Id, view: &TextView<'_>, lines: &[u32], state: &mut BodyState) {
+fn show_lines(
+    ui: &mut Ui,
+    rows: Rect,
+    id: Id,
+    view: &TextView<'_>,
+    lines: &[u32],
+    state: &mut BodyState,
+) {
     let p = palette(ui);
     let gutter = gutter_width(ui, lines.len());
     let wide = digit_width(ui) * LINE_BYTES as f32;
@@ -411,7 +464,12 @@ fn show_editor(
     let gutter = gutter_width(ui, state.line_count);
     let area = rows.with_min_x(rows.left() + gutter + 8.);
 
-    let mut child = ui.new_child(UiBuilder::new().id_salt(id.with("editor")).max_rect(area).layout(Layout::top_down(Align::LEFT)));
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .id_salt(id.with("editor"))
+            .max_rect(area)
+            .layout(Layout::top_down(Align::LEFT)),
+    );
     let key = (view.highlight_id, ui.visuals().dark_mode);
     let BodyState { buffer, galley: cache, .. } = state;
     // With every token a section of its own, this is worth not building at every pass.
@@ -426,19 +484,22 @@ fn show_editor(
         *cache = Some((galley.clone(), key.0, key.1));
         galley
     };
-    let output = ScrollArea::both().id_salt(("scroll", view.id)).auto_shrink([false, false]).show(&mut child, |ui| {
-        TextEdit::multiline(buffer)
-            .id_salt(("text", view.id))
-            .cursor_at_end(false)
-            .frame(Frame::NONE)
-            .lock_focus(true)
-            .desired_width(f32::INFINITY)
-            .min_size(area.size())
-            .layouter(&mut layouter)
-            .show(ui)
-            .response
-            .response
-    });
+    let output = ScrollArea::both().id_salt(("scroll", view.id)).auto_shrink([false, false]).show(
+        &mut child,
+        |ui| {
+            TextEdit::multiline(buffer)
+                .id_salt(("text", view.id))
+                .cursor_at_end(false)
+                .frame(Frame::NONE)
+                .lock_focus(true)
+                .desired_width(f32::INFINITY)
+                .min_size(area.size())
+                .layouter(&mut layouter)
+                .show(ui)
+                .response
+                .response
+        },
+    );
     let response = output.inner;
     if state.wants_focus && focused {
         response.request_focus();
@@ -453,7 +514,8 @@ fn show_editor(
         let now = ui.input(|i| i.time);
         if now >= due {
             state.highlight_due = None;
-            actions.push(UiAction::Files(pane, FilesAction::Highlight { text: state.buffer.clone() }));
+            actions
+                .push(UiAction::Files(pane, FilesAction::Highlight { text: state.buffer.clone() }));
         } else {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(due - now));
         }
@@ -507,18 +569,37 @@ fn show_text(
         }
         if editable {
             let glyph = view.saving.then_some(icons::LOADER_CIRCLE);
-            save = button_full(ui, glyph, "Save", ButtonKind::Secondary, dirty && !view.saving, None).clicked();
+            save =
+                button_full(ui, glyph, "Save", ButtonKind::Secondary, dirty && !view.saving, None)
+                    .clicked();
             diff = tool(ui, id.with("diff"), icons::COLUMNS_2, "Show changes", dirty);
         }
     });
     let right = match view.error {
         Some(error) => {
             let room = ((left - bar.left()) * 0.5).max(0.);
-            let width = ui.painter().layout_no_wrap(error.to_owned(), fonts::regular(TEXT_SM), p.danger).size().x.min(room);
+            let width = ui
+                .painter()
+                .layout_no_wrap(error.to_owned(), fonts::regular(TEXT_SM), p.danger)
+                .size()
+                .x
+                .min(room);
             let x = left - width - 8.;
-            elided_at(ui.painter(), x, bar.center().y, error, fonts::regular(TEXT_SM), p.danger, room);
-            ui.interact(Rect::from_min_max(pos2(x, bar.top()), pos2(left, bar.bottom())), id.with("error"), Sense::hover())
-                .on_hover_text(error);
+            elided_at(
+                ui.painter(),
+                x,
+                bar.center().y,
+                error,
+                fonts::regular(TEXT_SM),
+                p.danger,
+                room,
+            );
+            ui.interact(
+                Rect::from_min_max(pos2(x, bar.top()), pos2(left, bar.bottom())),
+                id.with("error"),
+                Sense::hover(),
+            )
+            .on_hover_text(error);
             x
         },
         None => left,
@@ -545,7 +626,14 @@ fn show_text(
     }
 }
 
-fn show_diff(ui: &mut Ui, rect: Rect, view: &DiffView<'_>, pane: PaneId, state: &mut BodyState, actions: &mut Vec<UiAction>) {
+fn show_diff(
+    ui: &mut Ui,
+    rect: Rect,
+    view: &DiffView<'_>,
+    pane: PaneId,
+    state: &mut BodyState,
+    actions: &mut Vec<UiAction>,
+) {
     let p = palette(ui);
     let id = Id::unique(("files-diff", pane.0));
     // The field lost the keyboard when it went out of sight.
@@ -562,14 +650,20 @@ fn show_diff(ui: &mut Ui, rect: Rect, view: &DiffView<'_>, pane: PaneId, state: 
     let top_row = (state.scroll / f64::from(LINE)).ceil() as usize;
     // From the change last jumped to, for as long as the view has stayed on it.
     let jumped = state.jumped.filter(|&(_, scroll)| scroll == state.scroll).map(|(index, _)| index);
-    let next = jumped.map_or_else(|| view.changes.partition_point(|&row| (row as usize) < top_row), |index| index + 1);
-    let previous = jumped.unwrap_or_else(|| view.changes.partition_point(|&row| (row as usize) < top_row)).checked_sub(1);
+    let next = jumped.map_or_else(
+        || view.changes.partition_point(|&row| (row as usize) < top_row),
+        |index| index + 1,
+    );
+    let previous = jumped
+        .unwrap_or_else(|| view.changes.partition_point(|&row| (row as usize) < top_row))
+        .checked_sub(1);
     let mut go_to = None;
     let left = tools(ui, bar, id.with("tools"), |ui| {
         if tool(ui, id.with("close"), icons::X, "Close", true) {
             actions.push(UiAction::Files(pane, FilesAction::CloseBody));
         }
-        if tool(ui, id.with("next"), icons::CHEVRON_DOWN, "Next change", next < view.changes.len()) {
+        if tool(ui, id.with("next"), icons::CHEVRON_DOWN, "Next change", next < view.changes.len())
+        {
             go_to = Some(next);
         }
         if tool(ui, id.with("previous"), icons::CHEVRON_UP, "Previous change", previous.is_some()) {
@@ -583,8 +677,24 @@ fn show_diff(ui: &mut Ui, rect: Rect, view: &DiffView<'_>, pane: PaneId, state: 
         state.jumped = Some((index, state.scroll));
     }
     let font = fonts::medium(TEXT_SM);
-    elided_at(ui.painter(), bar.left() + 10., bar.center().y, view.titles[0], font.clone(), p.foreground, middle - bar.left() - 20.);
-    elided_at(ui.painter(), middle + 10., bar.center().y, view.titles[1], font, p.foreground, left - middle - 20.);
+    elided_at(
+        ui.painter(),
+        bar.left() + 10.,
+        bar.center().y,
+        view.titles[0],
+        font.clone(),
+        p.foreground,
+        middle - bar.left() - 20.,
+    );
+    elided_at(
+        ui.painter(),
+        middle + 10.,
+        bar.center().y,
+        view.titles[1],
+        font,
+        p.foreground,
+        left - middle - 20.,
+    );
     hline(ui.painter(), bar.left(), bar.right(), bar.bottom() - 1., p.border);
 
     let rows = Rect::from_min_max(pos2(rect.left(), bar.bottom()), rect.max);
@@ -616,11 +726,21 @@ fn show_diff(ui: &mut Ui, rect: Rect, view: &DiffView<'_>, pane: PaneId, state: 
             }
             paint_number(&painter, half.left() + gutter - 10., y, line.number as usize, p.muted_fg);
             let text = &view.texts[side][line.start as usize..line.end as usize];
-            let changed = line.changed.map(|(start, end)| {
-                ((start - line.start) as usize, (end - line.start) as usize)
-            });
-            let runs = view.highlights[side].map_or(&[][..], |highlight| highlight.runs_for(line.number as usize - 1, text));
-            paint_line(&text_painter, text_left - state.across, y, text, runs, changed, p, marks[side]);
+            let changed = line
+                .changed
+                .map(|(start, end)| ((start - line.start) as usize, (end - line.start) as usize));
+            let runs = view.highlights[side]
+                .map_or(&[][..], |highlight| highlight.runs_for(line.number as usize - 1, text));
+            paint_line(
+                &text_painter,
+                text_left - state.across,
+                y,
+                text,
+                runs,
+                changed,
+                p,
+                marks[side],
+            );
         }
     }
     vline(ui.painter(), middle, rows.top(), rows.bottom(), p.border);
@@ -687,7 +807,10 @@ mod tests {
 
     #[test]
     fn colors_apply_only_to_a_line_that_still_is_the_length_it_was() {
-        let found = Highlight { runs: vec![run(0, 2, Token::Keyword)], lines: vec![HighlightLine { first_run: 0, len: 4 }] };
+        let found = Highlight {
+            runs: vec![run(0, 2, Token::Keyword)],
+            lines: vec![HighlightLine { first_run: 0, len: 4 }],
+        };
         assert_eq!(found.runs_for(0, "abcd").len(), 1);
         assert!(found.runs_for(0, "abcde").is_empty(), "edited since");
         assert!(found.runs_for(1, "abcd").is_empty(), "added since");
@@ -703,7 +826,10 @@ mod tests {
     #[test]
     fn an_edit_that_shifted_lines_cannot_cut_a_character() {
         let p = &crate::theme::DARK;
-        let stale = Highlight { runs: vec![run(1, 2, Token::Keyword)], lines: vec![HighlightLine { first_run: 0, len: 3 }] };
+        let stale = Highlight {
+            runs: vec![run(1, 2, Token::Keyword)],
+            lines: vec![HighlightLine { first_run: 0, len: 3 }],
+        };
         assert_eq!(editor_job("字\n", Some(&stale), p).text, "字\n");
     }
 

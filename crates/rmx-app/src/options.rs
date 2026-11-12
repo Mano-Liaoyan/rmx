@@ -89,15 +89,21 @@ pub fn parse_forwards(text: &str) -> Result<Vec<Tunnel>, String> {
         let (kind, bind, target) = match (letter, parts.as_slice()) {
             (Some('D'), [port]) => ("dynamic", (None, *port), None),
             (Some('D'), [host, port]) => ("dynamic", (Some(*host), *port), None),
-            (Some(letter @ ('L' | 'R')), [port, to, to_port]) => {
-                (if letter == 'L' { "local" } else { "remote" }, (None, *port), Some((*to, *to_port)))
-            },
+            (Some(letter @ ('L' | 'R')), [port, to, to_port]) => (
+                if letter == 'L' { "local" } else { "remote" },
+                (None, *port),
+                Some((*to, *to_port)),
+            ),
             (Some(letter @ ('L' | 'R')), [host, port, to, to_port]) => (
                 if letter == 'L' { "local" } else { "remote" },
                 (Some(*host), *port),
                 Some((*to, *to_port)),
             ),
-            _ => return Err(format!("{spec}: write it like L8080:db:5432, D1080 or R9000:localhost:80")),
+            _ => {
+                return Err(format!(
+                    "{spec}: write it like L8080:db:5432, D1080 or R9000:localhost:80"
+                ));
+            },
         };
         let (target_host, target_port) = match target {
             Some((host, port)) => (Some(host.to_owned()), Some(parse_port(port, spec)?)),

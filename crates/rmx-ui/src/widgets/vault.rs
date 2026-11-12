@@ -45,7 +45,13 @@ fn vault_title(ui: &mut Ui, width: f32, path: &str) {
     let p = palette(ui);
     let name = Path::new(path).file_stem().and_then(|name| name.to_str()).unwrap_or(path);
     let (title, response) = ui.allocate_exact_size(vec2(width, 44.), Sense::hover());
-    ui.painter().text(title.center(), Align2::CENTER_CENTER, name, fonts::medium(TEXT_TITLE), p.foreground);
+    ui.painter().text(
+        title.center(),
+        Align2::CENTER_CENTER,
+        name,
+        fonts::medium(TEXT_TITLE),
+        p.foreground,
+    );
     response.on_hover_text(path);
 }
 
@@ -64,7 +70,9 @@ pub fn vault_unlock(
         state.password.clear();
         state.key_file.clear();
         state.focused_once = false;
-        ui.ctx().data_mut(|data| data.remove::<TextEditState>(ui.make_persistent_id(Id::unique("vault-password"))));
+        ui.ctx().data_mut(|data| {
+            data.remove::<TextEditState>(ui.make_persistent_id(Id::unique("vault-password")))
+        });
     }
 
     let height = if view.error.is_some() { 244. } else { 222. };
@@ -78,21 +86,27 @@ pub fn vault_unlock(
 
     let salt = Id::unique("vault-password");
     ui.add_enabled_ui(!view.busy, |ui| {
-        let input = text_input(ui, salt, &mut state.password, InputOptions {
-            hint: "Master password",
-            password: true,
-            width: Some(WIDTH),
-            ..Default::default()
-        });
+        let input = text_input(
+            ui,
+            salt,
+            &mut state.password,
+            InputOptions {
+                hint: "Master password",
+                password: true,
+                width: Some(WIDTH),
+                ..Default::default()
+            },
+        );
         if !state.focused_once {
             input.request_focus();
             state.focused_once = true;
         }
-        text_input(ui, salt.with("key"), &mut state.key_file, InputOptions {
-            hint: "Key file",
-            width: Some(WIDTH),
-            ..Default::default()
-        });
+        text_input(
+            ui,
+            salt.with("key"),
+            &mut state.key_file,
+            InputOptions { hint: "Key file", width: Some(WIDTH), ..Default::default() },
+        );
     });
 
     if let Some(error) = view.error {
@@ -194,15 +208,34 @@ fn plain_warning(ui: &mut Ui, salt: Id, width: f32, joining: bool, agreed: &mut 
     const GAP: f32 = 8.;
     let p = palette(ui);
     let wrap = width - INDENT - PADDING;
-    let galley = ui.painter().layout(PLAIN_WARNING.to_owned(), fonts::regular(TEXT_SM), p.foreground, wrap);
+    let galley =
+        ui.painter().layout(PLAIN_WARNING.to_owned(), fonts::regular(TEXT_SM), p.foreground, wrap);
     let height = PADDING + galley.size().y + GAP + ROW + PADDING;
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let painter = ui.painter();
-    painter.rect_stroke(rect, CornerRadius::same(RADIUS), Stroke::new(1., p.border), StrokeKind::Inside);
-    icon(painter, pos2(rect.left() + PADDING + 7., rect.top() + PADDING + 7.), icons::TRIANGLE_ALERT, 14., p.warning);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(RADIUS),
+        Stroke::new(1., p.border),
+        StrokeKind::Inside,
+    );
+    icon(
+        painter,
+        pos2(rect.left() + PADDING + 7., rect.top() + PADDING + 7.),
+        icons::TRIANGLE_ALERT,
+        14.,
+        p.warning,
+    );
     painter.galley(rect.min + vec2(INDENT, PADDING), galley, p.foreground);
-    let line = Rect::from_min_size(pos2(rect.left() + INDENT, rect.bottom() - PADDING - ROW), vec2(wrap, ROW));
-    let label = if joining { "I understand, join it without encryption" } else { "I understand, create it without encryption" };
+    let line = Rect::from_min_size(
+        pos2(rect.left() + INDENT, rect.bottom() - PADDING - ROW),
+        vec2(wrap, ROW),
+    );
+    let label = if joining {
+        "I understand, join it without encryption"
+    } else {
+        "I understand, create it without encryption"
+    };
     checkbox(ui, line, salt, agreed, label);
 }
 
@@ -228,7 +261,8 @@ pub fn vault_setup(
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.background);
 
-    let height = f32::min(if state.joining { 520. } else { 320. } + WARNING_ROOM, rect.height() - 16.);
+    let height =
+        f32::min(if state.joining { 520. } else { 320. } + WARNING_ROOM, rect.height() - 16.);
     let area = Rect::from_center_size(rect.center(), vec2(TALL_WIDTH, height));
     let mut child = ui.new_child(
         egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Center)),
@@ -241,29 +275,35 @@ pub fn vault_setup(
     let salt = Id::unique("vault-setup");
     ui.add_enabled_ui(!view.busy, |ui| {
         let hint = "Master password";
-        let input = text_input(ui, salt.with("password"), &mut state.password, InputOptions {
-            hint,
-            password: true,
-            width: Some(TALL_WIDTH),
-            ..Default::default()
-        });
+        let input = text_input(
+            ui,
+            salt.with("password"),
+            &mut state.password,
+            InputOptions { hint, password: true, width: Some(TALL_WIDTH), ..Default::default() },
+        );
         if !state.focused_once {
             input.request_focus();
             state.focused_once = true;
         }
         if !state.joining {
-            text_input(ui, salt.with("confirm"), &mut state.confirm, InputOptions {
-                hint: "Repeat password",
-                password: true,
-                width: Some(TALL_WIDTH),
-                ..Default::default()
-            });
+            text_input(
+                ui,
+                salt.with("confirm"),
+                &mut state.confirm,
+                InputOptions {
+                    hint: "Repeat password",
+                    password: true,
+                    width: Some(TALL_WIDTH),
+                    ..Default::default()
+                },
+            );
         }
-        text_input(ui, salt.with("key"), &mut state.key_file, InputOptions {
-            hint: "Key file",
-            width: Some(TALL_WIDTH),
-            ..Default::default()
-        });
+        text_input(
+            ui,
+            salt.with("key"),
+            &mut state.key_file,
+            InputOptions { hint: "Key file", width: Some(TALL_WIDTH), ..Default::default() },
+        );
         if state.joining {
             sync_fields(ui, salt.with("sync"), &mut state.sync, false);
         }
@@ -272,7 +312,13 @@ pub fn vault_setup(
     let filled = state.filled(view.busy);
     if filled.plain {
         ui.add_enabled_ui(!view.busy, |ui| {
-            plain_warning(ui, salt.with("plain-ok"), TALL_WIDTH, state.joining, &mut state.plain_ok);
+            plain_warning(
+                ui,
+                salt.with("plain-ok"),
+                TALL_WIDTH,
+                state.joining,
+                &mut state.plain_ok,
+            );
         });
     } else {
         // Agreeing was to the form as it was then.
@@ -305,7 +351,8 @@ pub fn vault_setup(
         state.joining = !state.joining;
         ui.ctx().request_repaint();
     }
-    let vaults = button_full(ui, None, "Other vaults", ButtonKind::Ghost, !view.busy, Some(TALL_WIDTH));
+    let vaults =
+        button_full(ui, None, "Other vaults", ButtonKind::Ghost, !view.busy, Some(TALL_WIDTH));
     if vaults.clicked() {
         return Some(UiAction::VaultMenu(vaults.rect.left_bottom() + vec2(0., 4.)));
     }
@@ -325,7 +372,12 @@ pub fn vault_setup(
         let password = Sensitive::new(mem::take(&mut state.password));
         let key_file = state.key_file.clone();
         return Some(if state.joining {
-            UiAction::VaultJoin { password, key_file, sync: Box::new(mem::take(&mut state.sync)), plain_ok }
+            UiAction::VaultJoin {
+                password,
+                key_file,
+                sync: Box::new(mem::take(&mut state.sync)),
+                plain_ok,
+            }
         } else {
             UiAction::VaultCreate { password, key_file, plain_ok }
         });

@@ -37,7 +37,13 @@ fn common_ends(a: &str, b: &str) -> (usize, usize) {
     let prefix: usize =
         a.chars().zip(b.chars()).take_while(|(x, y)| x == y).map(|(x, _)| x.len_utf8()).sum();
     let (a, b) = (&a[prefix..], &b[prefix..]);
-    let suffix = a.chars().rev().zip(b.chars().rev()).take_while(|(x, y)| x == y).map(|(x, _)| x.len_utf8()).sum();
+    let suffix = a
+        .chars()
+        .rev()
+        .zip(b.chars().rev())
+        .take_while(|(x, y)| x == y)
+        .map(|(x, _)| x.len_utf8())
+        .sum();
     (prefix, suffix)
 }
 
@@ -61,9 +67,15 @@ pub fn compare(left: &str, right: &str) -> Comparison {
     for op in ops {
         let (old_index, old_len, new_index, new_len, same) = match op {
             DiffOp::Equal { old_index, new_index, len } => (old_index, len, new_index, len, true),
-            DiffOp::Delete { old_index, old_len, new_index } => (old_index, old_len, new_index, 0, false),
-            DiffOp::Insert { old_index, new_index, new_len } => (old_index, 0, new_index, new_len, false),
-            DiffOp::Replace { old_index, old_len, new_index, new_len } => (old_index, old_len, new_index, new_len, false),
+            DiffOp::Delete { old_index, old_len, new_index } => {
+                (old_index, old_len, new_index, 0, false)
+            },
+            DiffOp::Insert { old_index, new_index, new_len } => {
+                (old_index, 0, new_index, new_len, false)
+            },
+            DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+                (old_index, old_len, new_index, new_len, false)
+            },
         };
         if !same && !in_change {
             out.changes.push(out.rows.len() as u32);
@@ -75,7 +87,8 @@ pub fn compare(left: &str, right: &str) -> Comparison {
             let changed = match (old, new) {
                 (Some(old), Some(new)) if !same => {
                     let (prefix, suffix) = common_ends(a[old], b[new]);
-                    let part = |&(start, end): &(u32, u32)| (start + prefix as u32, end - suffix as u32);
+                    let part =
+                        |&(start, end): &(u32, u32)| (start + prefix as u32, end - suffix as u32);
                     Some((part(&left_lines[old]), part(&right_lines[new])))
                 },
                 _ => None,
