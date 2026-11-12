@@ -208,8 +208,7 @@ pub const TEXT_LG: f32 = 15.;
 pub const FLOAT_IN: f64 = 0.1;
 /// The scale a floating surface appears from.
 pub const FLOAT_SCALE: f32 = 0.95;
-/// How long a context menu takes to pop in from the pointer, in seconds, and the scale it grows
-/// from.
+/// How long a context menu takes to pop in from the pointer, in seconds, and the scale it grows from.
 pub const MENU_IN: f64 = 0.14;
 pub const MENU_SCALE: f32 = 0.92;
 /// How long tabs take to slide, in milliseconds.

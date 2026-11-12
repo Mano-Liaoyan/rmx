@@ -39,8 +39,8 @@ pub struct VaultView<'a> {
     pub error: Option<&'a str>,
 }
 
-/// The name of the vault at `path`, big enough to be what the screen is about. All of the path
-/// shows on hovering it.
+/// The name of the vault at `path`, big enough to be what the screen is about. All of the path shows
+/// on hovering it.
 fn vault_title(ui: &mut Ui, width: f32, path: &str) {
     let p = palette(ui);
     let name = Path::new(path).file_stem().and_then(|name| name.to_str()).unwrap_or(path);
@@ -195,9 +195,8 @@ impl VaultSetupState {
 }
 
 /// The warning shown for as long as the form would make a database nobody needs a password for.
-const PLAIN_WARNING: &str = "Without a master password, saved passwords and keys are stored \
-                             unencrypted on disk and in any sync target. Anyone who can read the \
-                             file can read them.";
+const PLAIN_WARNING: &str = "Without a master password, saved passwords and keys are stored unencrypted \
+     on disk and in any sync target. Anyone who can read the file can read them.";
 /// How much taller the form is while the warning shows, so that the fields above it stay put.
 const WARNING_ROOM: f32 = 96.;
 

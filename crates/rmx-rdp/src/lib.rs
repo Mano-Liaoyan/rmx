@@ -24,8 +24,9 @@ mod outbox;
 mod session;
 mod tls;
 
+use std::fmt;
+use std::thread;
 use std::time::Duration;
-use std::{fmt, thread};
 
 use rmx_display::DisplayHandle;
 use tokio::io::{AsyncRead, AsyncWrite};

@@ -1,8 +1,8 @@
 //! SFTP backend tests against a real OpenSSH server in a container.
 //!
-//! Most tests run the session over `ssh -s <host> sftp`, so a real SSH client carries the stream
-//! and this crate only sees stdin and stdout. `sftp_throughput_over_russh` uses a minimal `russh`
-//! client instead, to measure the native stack.
+//! Most tests run the session over `ssh -s <host> sftp`, so a real SSH client carries the stream and
+//! this crate only sees stdin and stdout. `sftp_throughput_over_russh` uses a minimal `russh` client
+//! instead, to measure the native stack.
 //!
 //! Run from the workspace root:
 //!
@@ -286,10 +286,7 @@ async fn recursive_copy_both_ways(sftp: Arc<SftpFs>) {
 }
 
 async fn listing_of_100k_entries(sftp: Arc<SftpFs>, container: &Container) {
-    container.exec(
-        "mkdir /srv/data/big && cd /srv/data/big && seq -w 1 100000 | xargs touch && chown -R \
-         rmxtest /srv/data/big",
-    );
+    container.exec("mkdir /srv/data/big && cd /srv/data/big && seq -w 1 100000 | xargs touch && chown -R rmxtest /srv/data/big");
     let started = Instant::now();
     let mut stream = sftp
         .list("/srv/data/big", ListOptions { batch_size: 1000, ..ListOptions::default() })
@@ -341,8 +338,7 @@ impl Bench {
         let shm = Path::new("/dev/shm");
         let (local_up, local_down) = (shm.join(format!("{id}.up")), shm.join(format!("{id}.down")));
         server.container.exec(&format!(
-            "head -c {BENCH_SIZE} /dev/urandom > /srv/data/big.bin && chown rmxtest \
-             /srv/data/big.bin"
+            "head -c {BENCH_SIZE} /dev/urandom > /srv/data/big.bin && chown rmxtest /srv/data/big.bin"
         ));
         let status = std::process::Command::new("sh")
             .arg("-c")

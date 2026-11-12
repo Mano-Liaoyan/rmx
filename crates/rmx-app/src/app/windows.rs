@@ -117,8 +117,7 @@ impl Running {
             // The last window stays with nothing in it, which is how it comes back. But only
             // once there has been something in it: before that, nothing is what it starts with.
             .filter(|win| {
-                !win.workspace.tabs().is_empty()
-                    || (self.windows.len() == 1 && core.opened_first_tab)
+                !win.workspace.tabs().is_empty() || (self.windows.len() == 1 && core.opened_first_tab)
             })
             .map(|win| {
                 let (width, height) = win.logical_size();

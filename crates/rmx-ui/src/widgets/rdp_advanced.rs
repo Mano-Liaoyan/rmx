@@ -71,15 +71,6 @@ pub struct RdpEffects {
 }
 
 impl RdpEffects {
-    pub const ALL_OFF: Self = Self {
-        wallpaper: false,
-        full_window_drag: false,
-        menu_animations: false,
-        themes: false,
-        cursor_shadow: false,
-        font_smoothing: false,
-        desktop_composition: false,
-    };
     pub const ALL_ON: Self = Self {
         wallpaper: true,
         full_window_drag: true,
@@ -88,6 +79,15 @@ impl RdpEffects {
         cursor_shadow: true,
         font_smoothing: true,
         desktop_composition: true,
+    };
+    pub const ALL_OFF: Self = Self {
+        wallpaper: false,
+        full_window_drag: false,
+        menu_animations: false,
+        themes: false,
+        cursor_shadow: false,
+        font_smoothing: false,
+        desktop_composition: false,
     };
 
     /// Each effect with its label, to go through them in order.

@@ -28,8 +28,8 @@ impl FrameCodec {
 }
 
 impl Decoder for FrameCodec {
-    type Error = io::Error;
     type Item = BytesMut;
+    type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<BytesMut>> {
         let length = match self.pending {

@@ -718,8 +718,9 @@ fn window_attributes(size: (f64, f64), maximized: bool) -> WindowAttributes {
     // Wayland's app id and X11's class, by which the desktop finds `rmx.desktop`.
     #[cfg(not(any(target_os = "macos", windows)))]
     let attributes = {
-        use winit::platform::wayland::WindowAttributesExtWayland as Wayland;
-        use winit::platform::x11::WindowAttributesExtX11 as X11;
+        use winit::platform::{
+            wayland::WindowAttributesExtWayland as Wayland, x11::WindowAttributesExtX11 as X11,
+        };
         X11::with_name(Wayland::with_name(Window::default_attributes(), "rmx", "rmx"), "rmx", "rmx")
     };
     #[cfg(any(target_os = "macos", windows))]
@@ -1695,8 +1696,7 @@ impl At<'_> {
                 value: self.core.ui.vault_key_file.clone(),
             },
         ];
-        let detail = "The synced copy has a different master password, such as one set on another \
-                      device. Enter it to keep syncing; this vault will use it too.";
+        let detail = "The synced copy has a different master password, such as one set on another device. Enter it to keep syncing; this vault will use it too.";
         let mut state = PromptState::new("Synced copy has another password", detail, fields);
         state.submit = "Use it".to_owned();
         self.ask_here(state, Reply::VaultRemotePassword);
@@ -2133,8 +2133,7 @@ impl At<'_> {
         }
     }
 
-    /// Open the saved connection `node` beside the focused pane, or in a tab with none to go
-    /// beside.
+    /// Open the saved connection `node` beside the focused pane, or in a tab with none to go beside.
     fn open_node_split(&mut self, node: u64, axis: Axis) {
         let Some(info) = self.core.ui.nodes.get(&node) else { return };
         if info.kind == NodeKind::Folder {

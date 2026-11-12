@@ -6,11 +6,13 @@ use log::info;
 
 use alacritty_terminal::term::cell::Flags;
 
+use crate::RenderableCell;
+use crate::SizeInfo;
+use crate::gl;
 use crate::gl::types::*;
 use crate::probe::{self, Phase};
 use crate::renderer::Error;
 use crate::renderer::shader::{ShaderProgram, ShaderVersion};
-use crate::{RenderableCell, SizeInfo, gl};
 
 use super::atlas::{ATLAS_SIZE, Atlas};
 use super::{

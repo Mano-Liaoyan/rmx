@@ -3,8 +3,8 @@
 //! For each row id a replica holds a set of content versions and at most one tombstone. Merging
 //! is set union with per-element maximum, which makes it commutative, associative and idempotent:
 //!
-//! - the newest content version `(hlc, payload)` is the live row unless a tombstone is at least as
-//!   new, in which case the row is gone and that version stays in `history`;
+//! - the newest content version `(hlc, payload)` is the live row unless a tombstone is at least
+//!   as new, in which case the row is gone and that version stays in `history`;
 //! - a tombstone older than the live row is dropped: it can never win again;
 //! - `history` keeps the other versions, trimmed to the newest [`HISTORY_LIMIT`]. "Newest k" of a
 //!   union equals "newest k" of the unions of "newest k", so trimming preserves the laws.

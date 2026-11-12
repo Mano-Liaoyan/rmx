@@ -9,7 +9,8 @@ use ureq::Agent;
 use ureq::http::Response;
 use url::Url;
 
-use super::{RemoteObject, RemoteVersion, SyncBackend, http};
+use super::http;
+use super::{RemoteObject, RemoteVersion, SyncBackend};
 use crate::error::BackendError;
 use crate::secret::Secret;
 

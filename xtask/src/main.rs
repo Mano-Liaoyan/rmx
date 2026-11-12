@@ -66,13 +66,11 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p xtask -- <bench | e2e [shots dir] | package> \
-                 [--vendored-openssl]"
+                "usage: cargo run -p xtask -- <bench | e2e [shots dir] | package> [--vendored-openssl]"
             );
             eprintln!(
-                "       cargo run -p xtask -- bench --real-display --output <name> [--expect-hz \
-                 <hz>] \\\n         [--wayland-display <socket>] [--kwin-pid <pid>] [--keep \
-                 <dir>] [--max-seconds <s>] [--no-build]"
+                "       cargo run -p xtask -- bench --real-display --output <name> [--expect-hz <hz>] \\\n         \
+                 [--wayland-display <socket>] [--kwin-pid <pid>] [--keep <dir>] [--max-seconds <s>] [--no-build]"
             );
             ExitCode::from(2)
         },
@@ -314,9 +312,8 @@ impl RealDisplay {
 
         let gpu = summarize_gpu(&gpu_file);
         let summary = format!(
-            "scene={scene}\nwindow_seconds={:.1}\nexit={finished:?}\nload_before={load_before}\\
-             nload_after={load_after}\ngpu={gpu}\nkwin={kwin}\nkwin_journal_lines={journal}\\
-             nbusy_before=\n{busy_before}\nbusy_after=\n{busy_after}\n",
+            "scene={scene}\nwindow_seconds={:.1}\nexit={finished:?}\nload_before={load_before}\nload_after={load_after}\n\
+             gpu={gpu}\nkwin={kwin}\nkwin_journal_lines={journal}\nbusy_before=\n{busy_before}\nbusy_after=\n{busy_after}\n",
             elapsed.as_secs_f64(),
         );
         let report = fs::read_to_string(out).ok();
@@ -417,8 +414,7 @@ impl KwinSampler {
             let _ = fs::write(file, csv);
             let (Some(first), Some(end)) = (first, last) else { return "no data".to_owned() };
             format!(
-                "pid={pid} cpu_ms={} run_wait_ms={} worst_50ms_window_cpu_us={max_cpu} \
-                 worst_50ms_window_run_wait_us={max_wait}",
+                "pid={pid} cpu_ms={} run_wait_ms={} worst_50ms_window_cpu_us={max_cpu} worst_50ms_window_run_wait_us={max_wait}",
                 (end.0 - first.0) / 1_000_000,
                 (end.1 - first.1) / 1_000_000,
             )
@@ -523,8 +519,7 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
         Some(0) => (),
         nice => {
             eprintln!(
-                "refusing to measure at nice {nice:?}: run the built xtask directly, not under \
-                 nice"
+                "refusing to measure at nice {nice:?}: run the built xtask directly, not under nice"
             );
             return ExitCode::FAILURE;
         },
@@ -685,8 +680,8 @@ fn bench(vendored: bool) -> ExitCode {
     let cycles = std::env::var("RMX_BENCH_CYCLES").ok().and_then(|cycles| cycles.parse().ok());
 
     if wanted("throughput") {
-        // Throughput: one pane drinking the corpus, timed by the app from its first frame, so that
-        // the start of the compositor does not count.
+        // Throughput: one pane drinking the corpus, timed by the app from its first frame, so that the
+        // start of the compositor does not count.
         let shell = format!("cat {corpus} {corpus}");
         let vaultless = [("RMX_BENCH_VAULT", "off")];
         let Some(report) = measure(&bench_target, None, &vaultless, &shell) else {
@@ -732,8 +727,7 @@ fn bench(vendored: bool) -> ExitCode {
             report.value("settled_max_us"),
         );
         println!(
-            "info interface: {} egui passes, p99 {} us, max {} us; {} allocations over {} frames \
-             with a pass",
+            "info interface: {} egui passes, p99 {} us, max {} us; {} allocations over {} frames with a pass",
             report.value("ui_passes"),
             report.value("ui_p99_us"),
             report.value("ui_max_us"),
@@ -743,8 +737,7 @@ fn bench(vendored: bool) -> ExitCode {
         let draw_allocations = report.value("draw_allocations");
         check("draw allocations", draw_allocations, MAX_DRAW_ALLOCATIONS, "allocations");
         println!(
-            "info allocations per frame: {:.3} drawing, {:.3} whole main thread (over {} and {} \
-             frames)",
+            "info allocations per frame: {:.3} drawing, {:.3} whole main thread (over {} and {} frames)",
             draw_allocations as f64 / report.value("steady_frames").max(1) as f64,
             report.value("loop_allocations") as f64 / report.value("loop_frames").max(1) as f64,
             report.value("steady_frames"),
@@ -753,13 +746,12 @@ fn bench(vendored: bool) -> ExitCode {
     }
 
     if wanted("standard") {
-        // The plan's standard scene: three busy SSH terminals and a VNC desktop in full-screen
-        // motion, against real servers, with the animations cycling over them.
+        // The plan's standard scene: three busy SSH terminals and a VNC desktop in full-screen motion,
+        // against real servers, with the animations cycling over them.
         match e2e::standard_scene(&bench_target, cycles.unwrap_or(SCENE_CYCLES)) {
             Ok(report) => {
                 println!(
-                    "info standard scene: {} frames, p50 {} us, {} full and {} partial, {} remote \
-                     frames",
+                    "info standard scene: {} frames, p50 {} us, {} full and {} partial, {} remote frames",
                     report.value("frames"),
                     report.value("frame_p50_us"),
                     report.value("full_frames"),
@@ -870,8 +862,8 @@ fn bench(vendored: bool) -> ExitCode {
     }
 
     if wanted("ssh") {
-        // An idle SSH pane against a real server: the session must cost the main thread nothing,
-        // and deriving the key and connecting must not run there.
+        // An idle SSH pane against a real server: the session must cost the main thread nothing, and
+        // deriving the key and connecting must not run there.
         match e2e::idle_ssh_pane(&bench_target) {
             Ok(report) => {
                 println!(
@@ -919,8 +911,7 @@ fn corpus(bench_target: &Path) -> PathBuf {
     let mut line = 0usize;
     while written < CORPUS_BYTES {
         let text = format!(
-            "\x1b[3{}m{line:>8}\x1b[0m drwxr-xr-x  \x1b[1mroot\x1b[0m  远程连接 {} \
-             /usr/lib/x86_64/lib{}.so\n",
+            "\x1b[3{}m{line:>8}\x1b[0m drwxr-xr-x  \x1b[1mroot\x1b[0m  远程连接 {} /usr/lib/x86_64/lib{}.so\n",
             line % 8,
             "abcdefghij".repeat(line % 12),
             line % 977,

@@ -37,10 +37,9 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 const CONTAINERFILE: &str = "\
 FROM docker.io/library/alpine:3.22
-RUN apk add --no-cache openssh-server-pam linux-pam openssh-keygen socat && ln -sf \
-                             /usr/sbin/sshd.pam /usr/sbin/sshd
-RUN printf 'auth required pam_unix.so\\naccount required pam_unix.so\\nsession required \
-                             pam_permit.so\\npassword required pam_deny.so\\n' > /etc/pam.d/sshd
+RUN apk add --no-cache openssh-server-pam linux-pam openssh-keygen socat \
+ && ln -sf /usr/sbin/sshd.pam /usr/sbin/sshd
+RUN printf 'auth required pam_unix.so\\naccount required pam_unix.so\\nsession required pam_permit.so\\npassword required pam_deny.so\\n' > /etc/pam.d/sshd
 ";
 
 const ENTRYPOINT: &str = r#"

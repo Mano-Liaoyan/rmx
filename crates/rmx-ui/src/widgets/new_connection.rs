@@ -529,24 +529,18 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 field(ui, "cd-device", "Device", &mut draft.device, "", false);
                 look_again = port_choices(ui, ports, &mut draft.device);
                 field(ui, "cd-baud", "Baud rate", &mut draft.baud, "", false);
-                let mut choice =
-                    |label, salt: &'static str, options: &[&str], value: &mut usize| {
-                        row(ui, label, |ui| {
-                            let mut selected = *value;
-                            if segmented(ui, Id::unique(salt), options, &mut selected).changed() {
-                                *value = selected;
-                            }
-                        });
-                    };
+                let mut choice = |label, salt: &'static str, options: &[&str], value: &mut usize| {
+                    row(ui, label, |ui| {
+                        let mut selected = *value;
+                        if segmented(ui, Id::unique(salt), options, &mut selected).changed() {
+                            *value = selected;
+                        }
+                    });
+                };
                 choice("Data bits", "cd-data", &["5", "6", "7", "8"], &mut draft.data_bits);
                 choice("Parity", "cd-parity", &["None", "Odd", "Even"], &mut draft.parity);
                 choice("Stop bits", "cd-stop", &["1", "2"], &mut draft.stop_bits);
-                choice(
-                    "Flow control",
-                    "cd-flow",
-                    &["None", "XON/XOFF", "RTS/CTS"],
-                    &mut draft.flow_control,
-                );
+                choice("Flow control", "cd-flow", &["None", "XON/XOFF", "RTS/CTS"], &mut draft.flow_control);
             } else {
                 let (label, hint) = if protocol == Protocol::RustDesk {
                     ("ID or host", "123 456 789, or an address")
@@ -555,18 +549,16 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 };
                 row(ui, label, |ui| {
                     let width = ui.available_width() - 88.;
-                    text_input(
-                        ui,
-                        Id::unique("cd-host"),
-                        &mut draft.host,
-                        InputOptions { hint, width: Some(width), ..Default::default() },
-                    );
-                    text_input(
-                        ui,
-                        Id::unique("cd-port"),
-                        &mut draft.port,
-                        InputOptions { hint: "Port", width: Some(80.), ..Default::default() },
-                    );
+                    text_input(ui, Id::unique("cd-host"), &mut draft.host, InputOptions {
+                        hint,
+                        width: Some(width),
+                        ..Default::default()
+                    });
+                    text_input(ui, Id::unique("cd-port"), &mut draft.port, InputOptions {
+                        hint: "Port",
+                        width: Some(80.),
+                        ..Default::default()
+                    });
                 });
             }
 
@@ -588,26 +580,36 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                             &mut selected,
                         );
                         if response.changed() {
-                            draft.auth =
-                                [AuthKind::Password, AuthKind::Key, AuthKind::Agent][selected];
+                            draft.auth = [AuthKind::Password, AuthKind::Key, AuthKind::Agent][selected];
                         }
                     });
                     match draft.auth {
                         AuthKind::Password => {
-                            field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                            field(
+                                ui,
+                                "cd-password",
+                                "Password",
+                                &mut draft.password,
+                                "",
+                                true,
+                            );
                         },
                         AuthKind::Key => {
-                            field(ui, "cd-key", "Key file", &mut draft.key_path, "", false);
+                            field(
+                                ui,
+                                "cd-key",
+                                "Key file",
+                                &mut draft.key_path,
+                                "",
+                                false,
+                            );
                         },
                         AuthKind::Agent => {},
                     }
                 },
                 Protocol::Telnet => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                    warning(
-                        ui,
-                        "Telnet is not encrypted: anyone on the network can read what is typed.",
-                    );
+                    warning(ui, "Telnet is not encrypted: anyone on the network can read what is typed.");
                 },
                 Protocol::Ftp => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -620,7 +622,14 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     });
                     section(ui);
                     field(ui, "cd-user", "Username", &mut draft.username, "", false);
-                    field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                    field(
+                        ui,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "",
+                        true,
+                    );
                 },
                 Protocol::Rdp => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -628,20 +637,15 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     row(ui, "Security", |ui| {
                         let mut selected = draft.rdp_security as usize;
                         let options = ["Negotiate", "NLA", "TLS"];
-                        if segmented(ui, Id::unique("cd-security"), &options, &mut selected)
-                            .changed()
-                        {
+                        if segmented(ui, Id::unique("cd-security"), &options, &mut selected).changed() {
                             draft.rdp_security =
-                                [RdpSecurity::Negotiate, RdpSecurity::Nla, RdpSecurity::Tls]
-                                    [selected];
+                                [RdpSecurity::Negotiate, RdpSecurity::Nla, RdpSecurity::Tls][selected];
                         }
                     });
                     row(ui, "Quality", |ui| {
                         let mut selected = draft.rdp_quality as usize;
                         let options = ["Best", "Balanced", "Fast", "Custom"];
-                        if segmented(ui, Id::unique("cd-quality"), &options, &mut selected)
-                            .changed()
-                        {
+                        if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
                             // Custom starts from what the preset was asking for.
                             if let Some(preset) = draft.rdp_quality.preset() {
                                 draft.rdp.picture = preset;
@@ -657,16 +661,21 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     row(ui, "", |ui| {
                         let label = "Advanced settings";
                         let arrow = Some(icons::CHEVRON_RIGHT);
-                        if button_full(ui, arrow, label, ButtonKind::Secondary, true, None)
-                            .clicked()
-                        {
+                        if button_full(ui, arrow, label, ButtonKind::Secondary, true, None).clicked() {
                             open_advanced = true;
                         }
                     });
                     section(ui);
                     field(ui, "cd-user", "Username", &mut draft.username, "", false);
                     field(ui, "cd-domain", "Domain", &mut draft.domain, "", false);
-                    field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                    field(
+                        ui,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "",
+                        true,
+                    );
                 },
                 Protocol::RustDesk => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -675,12 +684,9 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     row(ui, "Quality", |ui| {
                         let mut selected = draft.rdp_quality as usize;
                         let options = ["Best", "Balanced", "Fast"];
-                        if segmented(ui, Id::unique("cd-quality"), &options, &mut selected)
-                            .changed()
-                        {
+                        if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
                             draft.rdp_quality =
-                                [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast]
-                                    [selected];
+                                [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast][selected];
                         }
                     });
                     section(ui);
@@ -689,12 +695,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     let hint = "The public server's key";
                     field(ui, "cd-rd-key", "Server key", &mut draft.rustdesk_key, hint, false);
                     if is_rustdesk_address(&draft.host) {
-                        warning(
-                            ui,
-                            "By address RustDesk serves the session unencrypted, and the peer's \
-                             identity is not checked. Use it over a network you trust, such as a \
-                             VPN.",
-                        );
+                        warning(ui, "By address RustDesk serves the session unencrypted, and the peer's identity is not checked. Use it over a network you trust, such as a VPN.");
                     }
                     section(ui);
                     field(
@@ -712,14 +713,20 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     row(ui, "Colors", |ui| {
                         let mut selected = draft.vnc_colors as usize;
                         let options = ["Full", "16-bit", "8-bit"];
-                        if segmented(ui, Id::unique("cd-colors"), &options, &mut selected).changed()
-                        {
+                        if segmented(ui, Id::unique("cd-colors"), &options, &mut selected).changed() {
                             draft.vnc_colors =
                                 [VncColors::Full, VncColors::Bits16, VncColors::Bits8][selected];
                         }
                     });
                     section(ui);
-                    field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                    field(
+                        ui,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "",
+                        true,
+                    );
                 },
                 Protocol::Serial => {},
             }

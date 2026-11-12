@@ -558,8 +558,7 @@ Host *
     #[test]
     fn unsupported_directives_warn() {
         let config = SshConfig::parse(
-            "Include foo\nProxyCommand nc %h %p\nMatch host x\n  User hidden\nHost a\n  User \
-             shown\n",
+            "Include foo\nProxyCommand nc %h %p\nMatch host x\n  User hidden\nHost a\n  User shown\n",
         );
         assert_eq!(config.warnings().len(), 3);
         assert_eq!(config.warnings()[2].line, 3);

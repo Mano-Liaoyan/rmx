@@ -581,8 +581,7 @@ impl Shell {
         self.menu.is_open()
     }
 
-    /// The labels of what the context menu offers, and where a row is, for driving it from a
-    /// script.
+    /// The labels of what the context menu offers, and where a row is, for driving it from a script.
     #[cfg(feature = "bench")]
     pub fn menu_offers(&self, label: &str) -> Option<egui::Pos2> {
         self.menu.row_center(&self.menu_items, label)

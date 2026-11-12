@@ -3,7 +3,8 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use ironrdp_cliprdr::{Cliprdr, CliprdrClient};
+use ironrdp_cliprdr::Cliprdr;
+use ironrdp_cliprdr::CliprdrClient;
 use ironrdp_connector::connection_activation::{
     ConnectionActivationSequence, ConnectionActivationState,
 };

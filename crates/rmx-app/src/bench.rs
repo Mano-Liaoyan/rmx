@@ -1,12 +1,12 @@
 //! Measurements for `xtask bench`, and scripted actions to measure.
 //!
 //! `RMX_BENCH_OUT` names the report file. `RMX_BENCH_SCRIPT` is a comma separated list of steps,
-//! one performed every `RMX_BENCH_STEP_MS`: `split-right`, `split-right-local`, `split-down`,
-//! `new-tab`, `next-tab`, `close`, `zoom`, `left`, `right`, `up`, `down`, `palette`, `dialog`,
-//! `sidebar`, `wait`, `quit`, `shot:<path>` to write a fully redrawn frame, and `peek:<path>` to
-//! write a frame as partial redraws leave it. `move:<x>:<y>`, `press` and `release` drive the
-//! pointer, `text:<text>` types into the focused field, `escape` and `enter` press those keys in
-//! it, and `preedit:<text>` shows that text as the input method's.
+//! one performed every `RMX_BENCH_STEP_MS`: `split-right`, `split-right-local`, `split-down`, `new-tab`, `next-tab`,
+//! `close`, `zoom`, `left`, `right`, `up`, `down`, `palette`, `dialog`, `sidebar`, `wait`, `quit`,
+//! `shot:<path>` to write a fully redrawn frame, and `peek:<path>` to write a frame as partial
+//! redraws leave it. `move:<x>:<y>`, `press` and `release` drive the pointer, `text:<text>` types
+//! into the focused field, `escape` and `enter` press those keys in it, and `preedit:<text>` shows
+//! that text as the input method's.
 //!
 //! Steps driving the real interface, where fields are separated by `|` since `,` ends a step:
 //! `vault-create:<password>[|<key file>]`, `vault-unlock:<password>[|<key file>]`, `vault-lock`,
@@ -32,10 +32,10 @@
 //!
 //! `await:<condition>` holds the script until the condition is true, failing the run after 30 s:
 //! `setup`, `locked`, `unlocked`, `host-key`, `prompt`, `live`, `closed`, `failed`, `synced`,
-//! `no-question`, `vault-error`, `remote-size`, `tree:<label>`, `no-tree:<label>`,
-//! `text:<substring>`, `panes:<count>`, `display`, `display-fits`, `listed:<side>|<name>`,
-//! `at-path:<side>|<path>`, `transfer:<name>|<state>`, `clipboard:<text>`, `notice:<text>`,
-//! `unencrypted`, `sync-failed:<text>`. And
+//! `no-question`, `vault-error`, `remote-size`, `tree:<label>`, `no-tree:<label>`, `text:<substring>`, `panes:<count>`,
+//! `display`, `display-fits`, `listed:<side>|<name>`, `at-path:<side>|<path>`,
+//! `transfer:<name>|<state>`, `clipboard:<text>`, `notice:<text>`, `unencrypted`,
+//! `sync-failed:<text>`. And
 //! `idle:<ms>` measures how quiet the app stays for that long.
 //!
 //! `snippet-new:<name>|<body>` saves a snippet (`~` is a line break) and `snippets` opens its
@@ -1101,8 +1101,7 @@ pub struct Recorder {
     phase_walls: Vec<[u32; PHASES]>,
     /// The slowest frames, in full.
     traces: Vec<Trace>,
-    /// Every frame's wall, CPU, run queue wait, and wall and CPU per phase, for
-    /// `RMX_BENCH_FRAMES`.
+    /// Every frame's wall, CPU, run queue wait, and wall and CPU per phase, for `RMX_BENCH_FRAMES`.
     frame_rows: Vec<(u32, u32, u32, [Spent; PHASES])>,
     /// What each frame did to the scheduler, summed over the run.
     sched_totals: Sched,
@@ -1177,8 +1176,7 @@ struct Trace {
 impl Trace {
     fn line(&self) -> String {
         let mut line = format!(
-            "wall={} on_cpu={} run_wait={} off_cpu_blocked={} vcs={} ics={} minflt={} end_us={} \
-             frame={} at_ms={} full={} shown={} drawn={} stale={} age={} ui={:?} action={:?} |",
+            "wall={} on_cpu={} run_wait={} off_cpu_blocked={} vcs={} ics={} minflt={} end_us={} frame={} at_ms={} full={} shown={} drawn={} stale={} age={} ui={:?} action={:?} |",
             self.wall_us,
             self.on_cpu_us,
             self.sched.run_wait_us,
@@ -1440,18 +1438,17 @@ impl Recorder {
         let run = self.first_frame_at.map_or(Duration::ZERO, |at| at.elapsed());
 
         let report = format!(
-            "gl={}\nfirst_frame_us={}\nframes={}\nframe_p50_us={}\nframe_p99_us={}\\
-             nframe_max_us={}\nrun_us={}\nsettled_p99_us={}\nsettled_max_us={}\naction_max_us={}\\
-             nfull_frames={}\npartial_frames={}\npartial_shown={}\npartial_drawn={}\\
-             nstale_panes={}\ndrawn_panes={}\nmax_buffer_age={}\nsteady_frames={}\\
-             ndraw_allocations={}\ndraw_allocations_max={}\nloop_frames={}\nloop_allocations={}\\
-             nslowest_index={}\nslowest_phases={:?}\nworst_phases={:?}\nphase_p50={:?}\\
-             naction_slowest={}\nwinit_allocations={}\nstartup={:?}\non_cpu_p99_us={}\\
-             non_cpu_max_us={}\nslowest_on_cpu_us={}\nui_passes={}\nui_p99_us={}\nui_max_us={}\\
-             nui_passes_on_partial={}\nui_allocations={}\nui_frames={}\nslow_frames={:?}\\
-             nargon2_runs={}\nconnect_runs={}\nsync_runs={}\non_main_violations={}\\
-             nidle_measured={}\nidle_frames={}\nidle_wakeups={}\nscript_ok={}\nscript_failed={}\\
-             nremote_frames={}\nremote_p99_us={}\nremote_max_us={}\nwindow_open_us={}\n",
+            "gl={}\nfirst_frame_us={}\nframes={}\nframe_p50_us={}\nframe_p99_us={}\nframe_max_us={}\n\
+             run_us={}\nsettled_p99_us={}\nsettled_max_us={}\naction_max_us={}\nfull_frames={}\npartial_frames={}\n\
+             partial_shown={}\npartial_drawn={}\nstale_panes={}\ndrawn_panes={}\nmax_buffer_age={}\nsteady_frames={}\n\
+             draw_allocations={}\ndraw_allocations_max={}\nloop_frames={}\n\
+             loop_allocations={}\nslowest_index={}\nslowest_phases={:?}\nworst_phases={:?}\n\
+             phase_p50={:?}\naction_slowest={}\nwinit_allocations={}\nstartup={:?}\n\
+             on_cpu_p99_us={}\non_cpu_max_us={}\nslowest_on_cpu_us={}\nui_passes={}\nui_p99_us={}\n\
+             ui_max_us={}\nui_passes_on_partial={}\nui_allocations={}\nui_frames={}\nslow_frames={:?}\n\
+             argon2_runs={}\nconnect_runs={}\nsync_runs={}\non_main_violations={}\nidle_measured={}\n\
+             idle_frames={}\nidle_wakeups={}\nscript_ok={}\nscript_failed={}\nremote_frames={}\n\
+             remote_p99_us={}\nremote_max_us={}\nwindow_open_us={}\n",
             self.renderer,
             self.first_frame.unwrap_or_default().as_micros(),
             frames.len(),
@@ -1524,8 +1521,7 @@ impl Recorder {
         let traces: String =
             self.traces.iter().map(|trace| format!("trace={}\n", trace.line())).collect();
         let report = format!(
-            "{report}phase_stats={phase_stats}\nover_3000={}\nover_4000={}\nsched_totals={:?}\\
-             n{traces}",
+            "{report}phase_stats={phase_stats}\nover_3000={}\nover_4000={}\nsched_totals={:?}\n{traces}",
             over(3000),
             over(4000),
             self.sched_totals,

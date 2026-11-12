@@ -1,11 +1,12 @@
 //! Serial ports through the kernel's `termios2`, which unlike `termios` takes any baud rate.
 
 use std::ffi::CString;
+use std::fs;
+use std::io;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::{fs, io};
 
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;

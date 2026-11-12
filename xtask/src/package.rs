@@ -11,10 +11,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 
 const IMAGE: &str = "localhost/rmx-package-build:1";
 
-/// Unpack the source, build, and pack the packages onto stdout, which is why the log goes to
-/// stderr.
-const IN_CONTAINER: &str = "mkdir /src && tar -x --no-same-owner -C /src && cd /src && bash \
-                            packaging/build.sh >&2 && cd /out && tar -c *";
+/// Unpack the source, build, and pack the packages onto stdout, which is why the log goes to stderr.
+const IN_CONTAINER: &str = "mkdir /src && tar -x --no-same-owner -C /src && cd /src \
+    && bash packaging/build.sh >&2 && cd /out && tar -c *";
 
 pub fn package() -> Result<(), String> {
     let root =
@@ -48,17 +47,7 @@ pub fn package() -> Result<(), String> {
     let mut build = spawn(
         Command::new(engine)
             // Passing just the name hands on the host's value, if it has one.
-            .args([
-                "run",
-                "--rm",
-                "-i",
-                "--env",
-                "CARGO_BUILD_JOBS",
-                IMAGE,
-                "sh",
-                "-c",
-                IN_CONTAINER,
-            ])
+            .args(["run", "--rm", "-i", "--env", "CARGO_BUILD_JOBS", IMAGE, "sh", "-c", IN_CONTAINER])
             .stdin(source)
             .stdout(Stdio::piped()),
     )?;

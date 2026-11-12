@@ -374,10 +374,7 @@ pub fn ssh(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "theme:light,wait,wait".to_owned(),
         shot("08-light.ppm"),
         "theme:dark,wait".to_owned(),
-        format!(
-            "conn:inner|127.0.0.1|2222|alice|{password}|box|L127.0.0.1:{forward_port}:127.0.0.1:\
-             7777"
-        ),
+        format!("conn:inner|127.0.0.1|2222|alice|{password}|box|L127.0.0.1:{forward_port}:127.0.0.1:7777"),
         "await:host-key".to_owned(),
         "hostkey:always".to_owned(),
         "await:live".to_owned(),
@@ -484,8 +481,7 @@ pub fn ssh(bench_target: &Path, shots: &Path) -> Result<(), String> {
 
 fn report_paths(name: &str, report: &Report) {
     println!(
-        "ok   {name}: action max {} us ({}), frame max {} us, argon2 {} and connect {} off main, \
-         {} on it",
+        "ok   {name}: action max {} us ({}), frame max {} us, argon2 {} and connect {} off main, {} on it",
         report.value("action_max_us"),
         report.text.lines().find_map(|l| l.strip_prefix("action_slowest=")).unwrap_or("?"),
         report.value("frame_max_us"),
@@ -507,23 +503,23 @@ fn two_devices(
     let hold = if first_sync_held { "await:host-key,hostkey:always," } else { "" };
 
     let a = format!(
-        "await:setup,vault-create:{password},await:unlocked,sync-set:{connect},wait,wait,conn:\
-         from-a|127.0.0.1|1|u|p,await:failed,snippet-new:snip-a|echo \
-         a,await:snippet:snip-a,sync-now,{hold}await:synced,wait"
+        "await:setup,vault-create:{password},await:unlocked,sync-set:{connect},wait,wait,\
+         conn:from-a|127.0.0.1|1|u|p,await:failed,snippet-new:snip-a|echo a,await:snippet:snip-a,\
+         sync-now,{hold}await:synced,wait"
     );
     let report = app_run(bench_target, &scratch, "a", &a)?;
     report_paths(&format!("{name}: first device"), &report);
 
     let b = format!(
-        "await:setup,join:{password}|{connect},{hold}await:unlocked,await:tree:from-a,await:\
-         snippet:snip-a,conn:from-b|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
+        "await:setup,join:{password}|{connect},{hold}await:unlocked,await:tree:from-a,await:snippet:snip-a,\
+         conn:from-b|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
     );
     let report = app_run(bench_target, &scratch, "b", &b)?;
     report_paths(&format!("{name}: second device"), &report);
 
     let again = format!(
-        "await:locked,vault-unlock:{password},await:unlocked,sync-now,await:synced,await:tree:\
-         from-b,await:tree:from-a,wait"
+        "await:locked,vault-unlock:{password},await:unlocked,sync-now,await:synced,\
+         await:tree:from-b,await:tree:from-a,wait"
     );
     let report = app_run(bench_target, &scratch, "a", &again)?;
     report_paths(&format!("{name}: first device again"), &report);
@@ -551,8 +547,7 @@ const CLAIM_MS: &str = "1500";
 /// Drag the tab at `index` of the window acted on off the top of its window and let go.
 fn tear_tab(index: usize) -> String {
     format!(
-        "tab-point:{index},wait,press,wait,move:700:20,wait,move:700:-80,wait,move:700:-200,wait,\
-         release"
+        "tab-point:{index},wait,press,wait,move:700:20,wait,move:700:-80,wait,move:700:-200,wait,release"
     )
 }
 
@@ -576,21 +571,14 @@ fn pane_chrome(panes: usize, menu_row: &str, name: &str, shots: &Path) -> String
         shot_step(shots, &format!("ux-{name}-menu.ppm")),
         "escape,await:no-menu,wait".to_owned(),
         // The shell beside it leaves the mouse alone, so a right click there is the menu.
-        "pane-at:1:0.5:0.5,wait,press-right,wait,release-right,await:menu,await:menu-offers:Paste,\
-         escape,await:no-menu,wait"
-            .to_owned(),
+        "pane-at:1:0.5:0.5,wait,press-right,wait,release-right,await:menu,await:menu-offers:Paste,escape,await:no-menu,wait".to_owned(),
         // Held by its bar, the pane docks under its neighbour, and back.
-        "bar:0,wait,press,wait,pointer-by:40:30,wait,pane-at:1:0.5:0.9,wait,wait,wait,wait"
-            .to_owned(),
+        "bar:0,wait,press,wait,pointer-by:40:30,wait,pane-at:1:0.5:0.9,wait,wait,wait,wait".to_owned(),
         shot_step(shots, &format!("ux-{name}-drag.ppm")),
         "release,await:split-column,wait,wait,wait".to_owned(),
-        "bar:0,wait,press,wait,pointer-by:40:30,wait,pane-at:1:0.9:0.5,wait,wait,release,await:\
-         split-row,wait,wait,wait"
-            .to_owned(),
+        "bar:0,wait,press,wait,pointer-by:40:30,wait,pane-at:1:0.9:0.5,wait,wait,release,await:split-row,wait,wait,wait".to_owned(),
         // The neighbour goes by its own close button.
-        format!(
-            "bar:1,wait,bar-button:1:0,wait,press,wait,release,await:panes:{panes},wait,wait,wait"
-        ),
+        format!("bar:1,wait,bar-button:1:0,wait,press,wait,release,await:panes:{panes},wait,wait,wait"),
     ]
     .join(",")
 }
@@ -605,8 +593,7 @@ pub fn panes(bench_target: &Path, shots: &Path) -> Result<(), String> {
     let shell =
         format!("printf '\\033[?1000h'; stty raw -echo; exec cat >> {}", reports.display(),);
     let script = [
-        "await:setup,vault-create-plain,await:unlocked,await:panes:1,wait,wait,wait,wait"
-            .to_owned(),
+        "await:setup,vault-create-plain,await:unlocked,await:panes:1,wait,wait,wait,wait".to_owned(),
         "pane-at:0:0.5:0.5,wait,press-right,wait,release-right,wait,wait".to_owned(),
         "await:no-menu".to_owned(),
         "shift-down,wait,press-right,wait,release-right,await:menu,shift-up,wait,wait".to_owned(),
@@ -615,23 +602,15 @@ pub fn panes(bench_target: &Path, shots: &Path) -> Result<(), String> {
         shot("ux-terminal-menu-light.ppm"),
         "theme:dark,wait,wait,wait,wait".to_owned(),
         shot("ux-terminal-menu-dark.ppm"),
-        "shift-down,wait,pane-at:0:0.2:0.3,wait,press-right,wait,release-right,await:menu,\
-         shift-up,wait,wait"
-            .to_owned(),
+        "shift-down,wait,pane-at:0:0.2:0.3,wait,press-right,wait,release-right,await:menu,shift-up,wait,wait".to_owned(),
         "escape,await:no-menu,wait".to_owned(),
-        "tab-point:0,wait,press-right,wait,release-right,await:menu,await:menu-offers:Rename,wait,\
-         wait,wait"
-            .to_owned(),
+        "tab-point:0,wait,press-right,wait,release-right,await:menu,await:menu-offers:Rename,wait,wait,wait".to_owned(),
         shot("ux-tab-menu-dark.ppm"),
         "theme:light,wait,wait,wait,wait,wait".to_owned(),
         shot("ux-tab-menu-light.ppm"),
         "theme:dark,wait,wait,wait".to_owned(),
-        "menu-row:Rename,wait,press,wait,release,await:no-menu,wait,wait,text:prod,wait,enter,\
-         await:tab-name:prod,wait"
-            .to_owned(),
-        "new-tab,await:tabs:2,await:panes:2,wait,wait,wait,split-right-local,await:panes:3,wait,\
-         wait,wait,wait"
-            .to_owned(),
+        "menu-row:Rename,wait,press,wait,release,await:no-menu,wait,wait,text:prod,wait,enter,await:tab-name:prod,wait".to_owned(),
+        "new-tab,await:tabs:2,await:panes:2,wait,wait,wait,split-right-local,await:panes:3,wait,wait,wait,wait".to_owned(),
         "bar:0,wait,wait,wait".to_owned(),
         shot("ux-pane-bar-dark.ppm"),
         "theme:light,wait,wait,wait,wait,wait".to_owned(),
@@ -645,25 +624,19 @@ pub fn panes(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "theme:light,wait,wait,wait,wait,wait".to_owned(),
         shot("ux-resize-divider-light.ppm"),
         "theme:dark,wait,wait,wait".to_owned(),
-        "press,wait,pointer-by:-150:0,wait,pointer-by:-50:0,wait,release,await:ratio:0.2:0.42,wait"
-            .to_owned(),
-        "divider:0,wait,press,release,wait,press,release,await:ratio:0.49:0.51,wait,wait,wait,wait"
-            .to_owned(),
+        "press,wait,pointer-by:-150:0,wait,pointer-by:-50:0,wait,release,await:ratio:0.2:0.42,wait".to_owned(),
+        "divider:0,wait,press,release,wait,press,release,await:ratio:0.49:0.51,wait,wait,wait,wait".to_owned(),
         // The sidebar: by its edge, then double clicked back, then to where it is to stay.
         "sidebar-edge,wait,wait,wait".to_owned(),
         shot("ux-resize-sidebar-dark.ppm"),
         "theme:light,wait,wait,wait,wait,wait".to_owned(),
         shot("ux-resize-sidebar-light.ppm"),
         "theme:dark,wait,wait,wait".to_owned(),
-        "press,wait,pointer-by:40:0,wait,pointer-by:60:0,wait,release,await:sidebar:340:380,wait"
-            .to_owned(),
-        "sidebar-edge,wait,press,release,press,release,await:sidebar:259:261,wait,wait,wait,wait"
-            .to_owned(),
-        "sidebar-edge,wait,press,wait,pointer-by:-60:0,wait,release,await:sidebar:190:210,wait"
-            .to_owned(),
+        "press,wait,pointer-by:40:0,wait,pointer-by:60:0,wait,release,await:sidebar:340:380,wait".to_owned(),
+        "sidebar-edge,wait,press,release,press,release,await:sidebar:259:261,wait,wait,wait,wait".to_owned(),
+        "sidebar-edge,wait,press,wait,pointer-by:-60:0,wait,release,await:sidebar:190:210,wait".to_owned(),
         // The smallest it goes.
-        "sidebar-edge,wait,press,wait,pointer-by:-200:0,wait,release,await:sidebar:180:181,wait"
-            .to_owned(),
+        "sidebar-edge,wait,press,wait,pointer-by:-200:0,wait,release,await:sidebar:180:181,wait".to_owned(),
         "settings,wait,wait,wait".to_owned(),
         shot("ux-settings-dark.ppm"),
         "theme:light,wait,wait,wait,wait,wait".to_owned(),
@@ -870,8 +843,7 @@ pub fn no_passphrase(bench_target: &Path, shots: &Path) -> Result<(), String> {
 
     // Neither Enter nor a request without the box ticked gets a database made.
     let scratch = Scratch::new();
-    let script = "await:setup,wait,wait,enter,wait,wait,wait,await:setup,vault-create:,await:\
-                  vault-error,wait";
+    let script = "await:setup,wait,wait,enter,wait,wait,wait,await:setup,vault-create:,await:vault-error,wait";
     let report = app_run(bench_target, &scratch, "refused", script)?;
     report_paths("no passphrase refused", &report);
     if fs::metadata(scratch.path("refused/vault.rmxdb")).is_ok_and(|meta| meta.len() > 0) {
@@ -945,8 +917,8 @@ fn plain_sync(bench_target: &Path) -> Result<(), String> {
     let plain_target = folder("synced-plain")?;
     let plain_file = scratch.path("synced-plain/vault.rmxdb");
     let a = format!(
-        "await:setup,vault-create-plain,await:unlocked,sync-set:{plain_target},wait,wait,conn:\
-         from-a|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
+        "await:setup,vault-create-plain,await:unlocked,sync-set:{plain_target},wait,wait,\
+         conn:from-a|127.0.0.1|1|u|p,await:failed,sync-now,await:synced,wait"
     );
     report_paths("plain sync: first device", &app_run(bench_target, &scratch, "a", &a)?);
     must_be(&plain_file, true)?;
@@ -987,8 +959,8 @@ fn plain_sync(bench_target: &Path) -> Result<(), String> {
     must_be(&encrypted_file, false)?;
     let before = fs::read(&encrypted_file).map_err(|err| err.to_string())?;
     let d = format!(
-        "await:setup,vault-create-plain,await:unlocked,sync-set:{encrypted_target},wait,wait,conn:\
-         from-d|127.0.0.1|1|u|p,await:failed,sync-now,await:sync-failed:encrypted,wait"
+        "await:setup,vault-create-plain,await:unlocked,sync-set:{encrypted_target},wait,wait,\
+         conn:from-d|127.0.0.1|1|u|p,await:failed,sync-now,await:sync-failed:encrypted,wait"
     );
     report_paths("mismatch: plain against encrypted", &app_run(bench_target, &scratch, "d", &d)?);
     if fs::read(&encrypted_file).map_err(|err| err.to_string())? != before {
@@ -1063,14 +1035,12 @@ pub fn last_tab(bench_target: &Path, shots: &Path) -> Result<(), String> {
         ));
     }
     println!(
-        "ok   last tab: closed three ways and stayed alive, idle at 0 frames and 0 wakeups, \
-         torn-off window closed alone"
+        "ok   last tab: closed three ways and stayed alive, idle at 0 frames and 0 wakeups, torn-off window closed alone"
     );
 
     // Left with nothing open, it comes back with nothing open, and carries on.
     let script = format!(
-        "await:unlocked,{settle}await:tabs:0,await:panes:0,new-tab,await:tabs:1,await:live-shown:\
-         1,wait"
+        "await:unlocked,{settle}await:tabs:0,await:panes:0,new-tab,await:tabs:1,await:live-shown:1,wait"
     );
     let report = app_run(bench_target, &scratch, "device", &script)?;
     report_paths("last tab, restart", &report);
@@ -1078,8 +1048,8 @@ pub fn last_tab(bench_target: &Path, shots: &Path) -> Result<(), String> {
 
     // The window's own close button still ends it, here as anywhere. The hold never releases, so
     // only the application ending lets the run finish clean.
-    let script = "await:unlocked,await:live-shown:1,wait,close,await:tabs:0,wait,wait,wait,move:\
-                  1260:20,wait,press,release,await:tabs:99";
+    let script = "await:unlocked,await:live-shown:1,wait,close,await:tabs:0,wait,wait,wait,\
+                  move:1260:20,wait,press,release,await:tabs:99";
     app_run(bench_target, &scratch, "device", script)?;
     println!("ok   last tab: the window's close button quits from the empty state");
 
@@ -1096,8 +1066,7 @@ pub fn last_tab(bench_target: &Path, shots: &Path) -> Result<(), String> {
     // The shell ending by itself is the same as closing the tab. Without `-e`, as a person runs it.
     let scratch = Scratch::new();
     let script = "await:setup,vault-create-plain,await:unlocked,await:tabs:1,await:live-shown:1,\
-                  await:text:$ \
-                  ,wait,run:exit,await:tabs:0,await:panes:0,wait,wait,wait,await:windows:1,\
+                  await:text:$ ,wait,run:exit,await:tabs:0,await:panes:0,wait,wait,wait,await:windows:1,\
                   new-tab,await:tabs:1,await:live-shown:1";
     let report =
         app_run_shell(bench_target, &scratch, "device", script, &[("SHELL", "/bin/sh")], "")?;
@@ -1244,10 +1213,10 @@ pub fn idle_ssh_pane(bench_target: &Path) -> Result<Report, String> {
     let password = random_hex();
     let (port, secret) = (server.port, &server.password);
     let script = format!(
-        "await:setup,vault-create:{password},await:unlocked,vault-lock,await:locked,vault-unlock:\
-         {password},await:unlocked,conn:idle|127.0.0.1|{port}|alice|{secret},await:host-key,\
-         hostkey:always,await:live,await:text:$ \
-         ,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,idle:3000,wait"
+        "await:setup,vault-create:{password},await:unlocked,vault-lock,await:locked,\
+         vault-unlock:{password},await:unlocked,conn:idle|127.0.0.1|{port}|alice|{secret},\
+         await:host-key,hostkey:always,await:live,await:text:$ ,wait,wait,wait,wait,wait,wait,\
+         wait,wait,wait,wait,idle:3000,wait"
     );
     app_run(bench_target, &scratch, "device", &script)
 }
@@ -1468,9 +1437,7 @@ fn browse_and_copy(
     let local = home.join("ftp-side");
     fs::create_dir_all(&local).map_err(|err| err.to_string())?;
     fs::write(local.join("up.txt"), b"from-the-client").map_err(|err| err.to_string())?;
-    let sample = "#!/usr/bin/env python3\n# Say hello.\nimport sys\n\nclass Greeter:\n    def \
-                  greet(self, name: str) -> str:\n        return f\"hello {name}\" * \
-                  2\n\nGreeter().greet(sys.argv[1])\n";
+    let sample = "#!/usr/bin/env python3\n# Say hello.\nimport sys\n\nclass Greeter:\n    def greet(self, name: str) -> str:\n        return f\"hello {name}\" * 2\n\nGreeter().greet(sys.argv[1])\n";
     fs::write(local.join("sample.py"), sample).map_err(|err| err.to_string())?;
     let local = local.display().to_string();
     let shot = |file: &str| shot_step(shots, &format!("{name}-{file}"));
@@ -1492,19 +1459,11 @@ fn browse_and_copy(
         shot("ux-resize-files-split-light.ppm"),
         "theme:dark,wait,wait,wait".to_owned(),
         "press,wait,pointer-by:-120:0,wait,release,await:files-split:0.3:0.45,wait,wait".to_owned(),
-        "files-split,wait,press,release,press,release,await:files-split:0.49:0.51,wait,wait,wait,\
-         wait"
-            .to_owned(),
-        "files-queue,wait,press,wait,pointer-by:0:-60,wait,release,await:files-queue:200:215,wait,\
-         wait"
-            .to_owned(),
-        "files-queue,wait,press,release,press,release,await:files-queue:147:149,wait,wait,wait,\
-         wait"
-            .to_owned(),
+        "files-split,wait,press,release,press,release,await:files-split:0.49:0.51,wait,wait,wait,wait".to_owned(),
+        "files-queue,wait,press,wait,pointer-by:0:-60,wait,release,await:files-queue:200:215,wait,wait".to_owned(),
+        "files-queue,wait,press,release,press,release,await:files-queue:147:149,wait,wait,wait,wait".to_owned(),
         // The menu of a row, and of the empty space under the rows.
-        "files-point:R|down.txt,wait,press-right,wait,release-right,await:menu,await:menu-offers:\
-         Download,wait,wait,wait"
-            .to_owned(),
+        "files-point:R|down.txt,wait,press-right,wait,release-right,await:menu,await:menu-offers:Download,wait,wait,wait".to_owned(),
         shot("ux-files-row-menu-dark.ppm"),
         "theme:light,wait,wait,wait,wait,wait".to_owned(),
         shot("ux-files-row-menu-light.ppm"),
@@ -1537,8 +1496,7 @@ fn browse_and_copy(
         shot("ux-files-queue-folded.ppm"),
         "files-fold,wait,press,release,await:files-folded:0,wait,wait".to_owned(),
         // What to do about a file in the way is a menu now.
-        "move:300:666,wait,press,release,await:menu,await:menu-offers:Overwrite,wait,wait"
-            .to_owned(),
+        "move:300:666,wait,press,release,await:menu,await:menu-offers:Overwrite,wait,wait".to_owned(),
         shot("ux-files-policy-menu.ppm"),
         "escape,await:no-menu,wait".to_owned(),
         // A file opened in the pane, written back, and compared with its local copy.
@@ -1736,10 +1694,11 @@ pub fn files(bench_target: &Path, shots: &Path) -> Result<(), String> {
 
     let scratch = Scratch::new();
     let script = format!(
-        "await:setup,vault-create:{vault_password},await:unlocked,conn-as:FTP|ftps-files|127.0.0.\
-         1|{port}|alice|{password}||ftps,await:host-key,hostkey:always,await:live,files-goto:R|/\
-         home/alice,await:listed:R|down.txt,wait,{shot},disconnect,await:closed,reconnect,await:\
-         live,files-goto:R|/home/alice,await:listed:R|down.txt,wait",
+        "await:setup,vault-create:{vault_password},await:unlocked,\
+         conn-as:FTP|ftps-files|127.0.0.1|{port}|alice|{password}||ftps,\
+         await:host-key,hostkey:always,await:live,files-goto:R|/home/alice,\
+         await:listed:R|down.txt,wait,{shot},disconnect,await:closed,reconnect,await:live,\
+         files-goto:R|/home/alice,await:listed:R|down.txt,wait",
         shot = shot_step(shots, "ftps-listing.ppm"),
     );
     let report = app_run(bench_target, &scratch, "ftps", &script)?;
@@ -1790,8 +1749,8 @@ fn vnc_server(
 ) -> Result<Server, String> {
     ensure_image(
         VNC_IMAGE,
-        "FROM docker.io/library/alpine:3.22\nRUN apk add --no-cache --quiet tigervnc xterm \
-         xsetroot xclip openssh font-misc-misc mesa-dri-gallium\nRUN ssh-keygen -A\n",
+        "FROM docker.io/library/alpine:3.22\nRUN apk add --no-cache --quiet tigervnc xterm xsetroot xclip \
+         openssh font-misc-misc mesa-dri-gallium\nRUN ssh-keygen -A\n",
     )?;
     let script = format!(
         r#"set -eu
@@ -1858,9 +1817,7 @@ pub fn vnc(bench_target: &Path, shots: &Path) -> Result<(), String> {
         pane_chrome(4, "Send Ctrl+Alt+Del", "vnc", shots),
         // Inside a desktop, the right button is the desktop's; with Shift it is ours.
         "pane-at:0:0.5:0.5,wait,press-right,wait,release-right,wait,await:no-menu".to_owned(),
-        "shift-down,wait,press-right,wait,release-right,await:menu,shift-up,await:menu-offers:\
-         Toggle scale,escape,await:no-menu,wait"
-            .to_owned(),
+        "shift-down,wait,press-right,wait,release-right,await:menu,shift-up,await:menu-offers:Toggle scale,escape,await:no-menu,wait".to_owned(),
         format!("clip-set:from-rmx-client,clip-offer,{}", "wait,".repeat(30).trim_end_matches(',')),
         // Past ASCII, nothing crosses and the user is told.
         "clip-set:中文内容,clip-offer".to_owned(),
@@ -2044,8 +2001,7 @@ exec xterm -geometry 160x48+0+0 -bg '#102030' -fg '#e0e0e0' -e sh -c 'stty echo;
         return Err(format!("the typing through the tunnel did not arrive: {typed:?}"));
     }
     println!(
-        "ok   rdp: typing on the server, clipboard both ways, resize, pinned certificate, ssh \
-         tunnel"
+        "ok   rdp: typing on the server, clipboard both ways, resize, pinned certificate, ssh tunnel"
     );
     Ok(())
 }
@@ -2121,9 +2077,9 @@ pub fn idle_remote_pane(bench_target: &Path) -> Result<Report, String> {
     let scratch = Scratch::new();
     let vault_password = random_hex();
     let script = format!(
-        "await:setup,vault-create:{vault_password},await:unlocked,conn-as:VNC|idle|127.0.0.\
-         1|{port}||{vnc_password}||,await:live,await:display,wait,wait,wait,wait,wait,wait,wait,\
-         wait,wait,wait,wait,wait,wait,wait,wait,idle:3000,wait"
+        "await:setup,vault-create:{vault_password},await:unlocked,\
+         conn-as:VNC|idle|127.0.0.1|{port}||{vnc_password}||,await:live,await:display,\
+         wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,wait,idle:3000,wait"
     );
     app_run(bench_target, &scratch, "device", &script)
 }

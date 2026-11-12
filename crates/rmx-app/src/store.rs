@@ -12,9 +12,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rmx_serial::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use rmx_ssh::{AuthMethod, HostConfig, SecretString};
+use rmx_ui::widgets::SessionDot;
 use rmx_ui::widgets::{
-    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SessionDot,
-    SettingsDraft, SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
+    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SettingsDraft,
+    SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
 };
 use rmx_ui::{NodeId, Protocol, ThemeMode};
 use rmx_vault::{
@@ -1556,13 +1557,11 @@ impl Actor {
                     Ok(()) => {
                         self.key_file = old_key_file;
                         Err(format!(
-                            "The synced copy could not be updated, so the master password is \
-                             unchanged: {err}"
+                            "The synced copy could not be updated, so the master password is unchanged: {err}"
                         ))
                     },
                     Err(back) => Err(format!(
-                        "The synced copy could not be updated ({err}) and the old master password \
-                         could not be put back ({back}): this vault now opens with the new one"
+                        "The synced copy could not be updated ({err}) and the old master password could not be put back ({back}): this vault now opens with the new one"
                     )),
                 }
             },
@@ -2164,8 +2163,8 @@ mod tests {
         let mut vault = Vault::create(&dir.path().join("v.rmxdb"), &creds, params).unwrap();
 
         let config = rmx_ssh::ssh_config::SshConfig::parse(
-            "Host web\n  HostName 10.0.0.1\n  User deploy\n  ProxyJump bastion\nHost bastion\n  \
-             HostName 10.0.0.2\n  Port 2200\n",
+            "Host web\n  HostName 10.0.0.1\n  User deploy\n  ProxyJump bastion\n\
+             Host bastion\n  HostName 10.0.0.2\n  Port 2200\n",
         );
         assert_eq!(import_hosts(&mut vault, &config).unwrap(), 2);
         let digest = vault.digest().unwrap();

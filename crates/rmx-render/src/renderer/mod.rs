@@ -15,9 +15,13 @@ use unicode_width::UnicodeWidthChar;
 use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::cell::Flags;
 
+use crate::RenderableCell;
+use crate::RendererPreference;
+use crate::Rgb;
+use crate::SizeInfo;
+use crate::gl;
 use crate::renderer::rects::{RectKind, RectRenderer, RenderRect};
 use crate::renderer::shader::ShaderError;
-use crate::{RenderableCell, RendererPreference, Rgb, SizeInfo, gl};
 
 pub mod platform;
 pub mod rects;
