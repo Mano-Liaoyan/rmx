@@ -188,6 +188,9 @@ impl<'a> TextRenderer<'a> for Gles2Renderer {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
             gl::ActiveTexture(gl::TEXTURE0);
         }
+        // Remote desktops bind their own textures between text draws; the atlas bound last time
+        // may not be bound now.
+        self.active_tex = 0;
 
         let res = func(RenderApi {
             active_tex: &mut self.active_tex,
