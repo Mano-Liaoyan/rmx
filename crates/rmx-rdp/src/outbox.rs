@@ -85,6 +85,13 @@ impl Outbox {
         self.resized = true;
     }
 
+    /// Announces `width` x `height` if the desktop is not already that size.
+    pub fn fit(&mut self, width: u32, height: u32) {
+        if (self.width, self.height) != (width, height) {
+            self.resize(width, height);
+        }
+    }
+
     /// Records that `rect` of the framebuffer changed.
     pub fn mark_dirty(&mut self, rect: Rect) {
         let rect = rect.clamped_to(self.width, self.height);
@@ -255,6 +262,18 @@ mod tests {
         };
         assert_eq!((update.x, update.y, update.width, update.height), (0, 0, 4, 4));
         assert_eq!(outbox.next_event(frame), None);
+    }
+
+    #[test]
+    fn fit_announces_only_a_size_that_changed() {
+        let mut outbox = sized();
+        outbox.fit(W, H);
+        assert!(!outbox.has_pending());
+
+        outbox.fit(32, 24);
+        let data = vec![0u8; 32 * 24 * 4];
+        let frame = Frame { data: &data, stride: 32 * 4 };
+        assert_eq!(outbox.next_event(frame), Some(DisplayEvent::Resized { width: 32, height: 24 }));
     }
 
     #[test]
