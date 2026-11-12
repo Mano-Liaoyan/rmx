@@ -112,21 +112,7 @@ where
     S: AsyncRead + AsyncWrite + Send + Unpin,
 {
     let server_name = config.server_name.clone();
-    let connector_config = connector_config(&config)?;
-
-    let mut dynamic =
-        DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
-    if config.graphics_pipeline {
-        dynamic.attach_dynamic_channel(GraphicsPipelineClient::new(Box::new(Pipeline), None));
-    }
-    let mut connector = ClientConnector::new(connector_config, SocketAddr::from(([0, 0, 0, 0], 0)))
-        .with_static_channel(dynamic);
-    // Without the channel nothing crosses the clipboard either way.
-    if config.clipboard {
-        connector.attach_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
-            clipboard.backend(),
-        )));
-    }
+    let mut connector = connector(&config, clipboard)?;
 
     let mut framed = MovableTokioFramed::new(stream);
     let should_upgrade =
@@ -154,6 +140,25 @@ where
         ConnectionOutcome::Connected(result) => Ok((result, framed)),
         ConnectionOutcome::Redirected(_) => Err(RdpError::Redirected),
     }
+}
+
+/// The connector for `config`, with its channels registered.
+fn connector(config: &RdpConfig, clipboard: &ClipboardHandle) -> Result<ClientConnector, RdpError> {
+    let connector_config = connector_config(config)?;
+    let mut dynamic =
+        DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    if config.graphics_pipeline {
+        dynamic.attach_dynamic_channel(GraphicsPipelineClient::new(Box::new(Pipeline), None));
+    }
+    let mut connector = ClientConnector::new(connector_config, SocketAddr::from(([0, 0, 0, 0], 0)))
+        .with_static_channel(dynamic);
+    // Without the channel nothing crosses the clipboard either way.
+    if config.clipboard {
+        connector.attach_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
+            clipboard.backend(),
+        )));
+    }
+    Ok(connector)
 }
 
 fn handshake_error(error: ironrdp_connector::ConnectorError) -> RdpError {
@@ -828,5 +833,24 @@ mod tests {
         assert_eq!(config.bitmap.unwrap().color_depth, 16);
         assert!(config.performance_flags.contains(PerformanceFlags::DISABLE_WALLPAPER));
         assert!(!config.performance_flags.contains(PerformanceFlags::ENABLE_FONT_SMOOTHING));
+    }
+    /// The channels a session offers when nothing is turned off: what the client did before
+    /// channels had modules of their own.
+    #[test]
+    fn default_channels_register_what_they_always_have() {
+        let rdp = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
+        let mut connector = connector(&rdp, &ClipboardHandle::default()).unwrap();
+        let mut statics: Vec<String> = connector
+            .static_channels
+            .values()
+            .map(|channel| channel.channel_name().as_str().unwrap_or_default().to_owned())
+            .collect();
+        statics.sort();
+        assert_eq!(statics, ["cliprdr", "drdynvc"]);
+
+        let dynamic = connector.get_static_channel_processor::<DrdynvcClient>().unwrap();
+        assert!(dynamic.has_registered_dvc::<DisplayControlClient>());
+        assert!(dynamic.has_registered_dvc::<GraphicsPipelineClient>());
+        assert!(connector.config.support_dyn_vc_gfx_protocol);
     }
 }
