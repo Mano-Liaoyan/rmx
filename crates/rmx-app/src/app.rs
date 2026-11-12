@@ -29,7 +29,9 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
+use winit::window::{
+    CursorIcon, CustomCursor, ResizeDirection, Window, WindowAttributes, WindowId,
+};
 
 use crate::background::{Boot, Layout, SavedPane, SavedSession};
 use crate::clipboard::Clipboard;
@@ -91,6 +93,8 @@ pub enum AppEvent {
     DisplayReady(PaneId, u64),
     /// The remote clipboard now holds this text.
     DisplayClipboard(PaneId, u64, String),
+    /// The remote pointer of a pane's desktop changed shape.
+    DisplayCursor(PaneId, u64, rmx_display::RemoteCursor),
     /// A file pane's listings and transfers have moved on.
     Files(PaneId, u64, FilesEvent),
     /// Something off the main thread needs the user.
@@ -268,6 +272,26 @@ fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
     }
 }
 
+/// What the window's cursor is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WindowCursor {
+    Icon(CursorIcon),
+    /// A remote desktop's pointer.
+    Custom(CustomCursor),
+    Hidden,
+}
+
+impl From<&crate::remote::DisplayCursor> for WindowCursor {
+    fn from(cursor: &crate::remote::DisplayCursor) -> Self {
+        use crate::remote::DisplayCursor;
+        match cursor {
+            DisplayCursor::Default => Self::Icon(CursorIcon::Default),
+            DisplayCursor::Hidden => Self::Hidden,
+            DisplayCursor::Custom(custom) => Self::Custom(custom.clone()),
+        }
+    }
+}
+
 /// A divider being dragged.
 #[derive(Clone, Copy)]
 struct DividerDrag {
@@ -405,7 +429,7 @@ struct Win {
     shell: Shell,
     preedit: Option<Preedit>,
     /// The cursor last shown, to tell the window only when it changes.
-    cursor: CursorIcon,
+    cursor: WindowCursor,
     /// Where the input method was last told text goes.
     ime_area: Option<(i32, i32, u32, u32)>,
     maximized: bool,
@@ -474,7 +498,7 @@ impl Win {
             captured: None,
             shell,
             preedit: None,
-            cursor: CursorIcon::Default,
+            cursor: WindowCursor::Icon(CursorIcon::Default),
             ime_area: None,
             maximized: false,
             exit: false,
@@ -830,9 +854,52 @@ impl At<'_> {
 
     /// Show this icon, which winit passes to the compositor even when it is the same.
     fn set_cursor(&mut self, icon: CursorIcon) {
-        if self.win.cursor != icon {
-            self.win.cursor = icon;
-            self.win.gfx.window.set_cursor(icon);
+        self.show_cursor(WindowCursor::Icon(icon));
+    }
+
+    /// Show this cursor, telling the window only if it is not showing already.
+    fn show_cursor(&mut self, cursor: WindowCursor) {
+        if self.win.cursor == cursor {
+            return;
+        }
+        let window = &self.win.gfx.window;
+        match &cursor {
+            WindowCursor::Icon(icon) => window.set_cursor(*icon),
+            WindowCursor::Custom(custom) => window.set_cursor(custom.clone()),
+            WindowCursor::Hidden => {},
+        }
+        let hidden = cursor == WindowCursor::Hidden;
+        if hidden != (self.win.cursor == WindowCursor::Hidden) {
+            window.set_cursor_visible(!hidden);
+        }
+        self.win.cursor = cursor;
+    }
+
+    /// The remote pointer of `id` took a new shape.
+    fn display_cursor(&mut self, id: PaneId, generation: u64, cursor: crate::remote::DisplayCursor) {
+        if self.pane_generation(id) != Some(generation) {
+            return;
+        }
+        let Some(display) = self.pane_mut(id).and_then(|pane| pane.content.display_mut()) else {
+            return;
+        };
+        display.cursor = cursor;
+        // Shown at once if the pointer is over the picture, even holding still.
+        let point = (self.win.pointer.x as f32, self.win.pointer.y as f32);
+        let over = self.win.captured.or_else(|| self.pane_at(point).map(|(pane, ..)| pane));
+        if over == Some(id) && !self.win.chrome.pointer_on_interface() {
+            let cursor = self.display_cursor_at(id);
+            self.show_cursor(cursor);
+        }
+    }
+
+    /// The cursor to show over the remote desktop of `id`: its own pointer over the picture,
+    /// the arrow over the bars around it.
+    fn display_cursor_at(&self, id: PaneId) -> WindowCursor {
+        let inside = self.display_point(id).is_some_and(|at| at.2);
+        match self.pane(id).and_then(|pane| pane.content.display()) {
+            Some(display) if inside => WindowCursor::from(&display.cursor),
+            _ => WindowCursor::Icon(CursorIcon::Default),
         }
     }
 
@@ -3139,19 +3206,19 @@ impl At<'_> {
 
         let hovered = self.divider_at(point);
         self.show_divider_pill(hovered, point, false);
-        let icon = match hovered.map(|divider| divider.axis) {
-            Some(Axis::Row) => CursorIcon::EwResize,
-            Some(Axis::Column) => CursorIcon::NsResize,
-            None if self.pane_at(point).is_some_and(|(id, ..)| {
-                self.pane(id).is_some_and(|pane| pane.content.display().is_some())
-            }) =>
-            {
-                CursorIcon::Default
+        let pane = self.pane_at(point).map(|(id, ..)| id);
+        let cursor = match hovered.map(|divider| divider.axis) {
+            Some(Axis::Row) => WindowCursor::Icon(CursorIcon::EwResize),
+            Some(Axis::Column) => WindowCursor::Icon(CursorIcon::NsResize),
+            None => match pane {
+                Some(id) if self.pane(id).is_some_and(|pane| pane.content.display().is_some()) => {
+                    self.display_cursor_at(id)
+                },
+                Some(_) => WindowCursor::Icon(CursorIcon::Text),
+                None => WindowCursor::Icon(CursorIcon::Default),
             },
-            None if self.pane_at(point).is_some() => CursorIcon::Text,
-            None => CursorIcon::Default,
         };
-        self.set_cursor(icon);
+        self.show_cursor(cursor);
 
         if let Some((id, x, y)) = self.pane_at(point) {
             if let Some(at) = self.display_point(id) {
@@ -3388,7 +3455,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, event: AppEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
         #[cfg(feature = "bench")]
         let _slow = crate::bench::present::Slow::new("user_event", app_event_name(&event));
         let Some(running) = &mut self.running else { return };
@@ -3423,6 +3490,12 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::DisplayClipboard(id, generation, text) => {
                 if let Some(mut at) = running.at_pane(id) {
                     at.display_clipboard(id, generation, text);
+                }
+            },
+            AppEvent::DisplayCursor(id, generation, cursor) => {
+                let cursor = crate::remote::display_cursor(event_loop, &cursor);
+                if let Some(mut at) = running.at_pane(id) {
+                    at.display_cursor(id, generation, cursor);
                 }
             },
             AppEvent::Files(id, generation, event) => {
@@ -3822,6 +3895,7 @@ fn app_event_name(event: &AppEvent) -> &'static str {
         AppEvent::DisplayNews(..) => "display-news",
         AppEvent::DisplayReady(..) => "display-ready",
         AppEvent::DisplayClipboard(..) => "display-clipboard",
+        AppEvent::DisplayCursor(..) => "display-cursor",
         AppEvent::Files(..) => "files",
         AppEvent::Prompt(_) => "prompt",
         AppEvent::SerialPorts(_) => "serial-ports",

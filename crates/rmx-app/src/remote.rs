@@ -40,6 +40,44 @@ const XK_CONTROL_L: u32 = 0xffe3;
 const XK_ALT_L: u32 = 0xffe9;
 const XK_DELETE: u32 = 0xffff;
 
+/// What the local cursor looks like over a desktop's picture.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DisplayCursor {
+    /// The ordinary arrow, also for sessions that draw the pointer into the picture.
+    #[default]
+    Default,
+    Hidden,
+    Custom(winit::window::CustomCursor),
+}
+
+/// Make what the session asked for into a cursor the window can show. An image the platform
+/// refuses shows as the arrow.
+pub fn display_cursor(
+    event_loop: &winit::event_loop::ActiveEventLoop,
+    cursor: &rmx_display::RemoteCursor,
+) -> DisplayCursor {
+    use rmx_display::RemoteCursor;
+    use winit::window::CustomCursor;
+    let image = match cursor {
+        RemoteCursor::Default => return DisplayCursor::Default,
+        RemoteCursor::Hidden => return DisplayCursor::Hidden,
+        RemoteCursor::Image(image) => image,
+    };
+    let side = |value: u32| u16::try_from(value).ok();
+    let (Some(width), Some(height), Some(x), Some(y)) =
+        (side(image.width), side(image.height), side(image.hotspot_x), side(image.hotspot_y))
+    else {
+        return DisplayCursor::Default;
+    };
+    match CustomCursor::from_rgba(image.rgba.clone(), width, height, x, y) {
+        Ok(source) => DisplayCursor::Custom(event_loop.create_custom_cursor(source)),
+        Err(err) => {
+            log::warn!("The remote pointer could not be shown: {err}");
+            DisplayCursor::Default
+        },
+    }
+}
+
 /// What the main thread still has to take from the session.
 pub enum Incoming {
     Resized { width: u32, height: u32 },
@@ -140,6 +178,8 @@ pub struct Display {
     /// What last crossed the clipboard, so that it does not bounce back.
     clipboard: Option<u64>,
     told_clipboard: bool,
+    /// The remote pointer's shape, shown in place of the local cursor over the picture.
+    pub cursor: DisplayCursor,
 }
 
 /// One button's bit in the mask, for those a desktop has.
@@ -178,6 +218,7 @@ impl Display {
             asked: None,
             clipboard: None,
             told_clipboard: false,
+            cursor: DisplayCursor::Default,
         }
     }
 

@@ -1,7 +1,7 @@
 //! What is still owed to the interface, kept small however far behind it falls.
 
 use ironrdp_pdu::geometry::InclusiveRectangle;
-use rmx_display::{DisplayEvent, FrameUpdate};
+use rmx_display::{DisplayEvent, FrameUpdate, RemoteCursor};
 
 /// Beyond this many separate rectangles they are merged into one.
 const MAX_DIRTY_RECTS: usize = 32;
@@ -65,7 +65,7 @@ pub(crate) struct Frame<'a> {
 }
 
 /// Events waiting for room in the channel. Nothing here grows without bound: rectangles merge,
-/// and a newer size or clipboard replaces an older one.
+/// and a newer size, clipboard or cursor replaces an older one.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
     width: u32,
@@ -73,6 +73,7 @@ pub(crate) struct Outbox {
     dirty: Vec<Rect>,
     resized: bool,
     clipboard: Option<String>,
+    cursor: Option<RemoteCursor>,
 }
 
 impl Outbox {
@@ -112,8 +113,13 @@ impl Outbox {
         self.clipboard = Some(text);
     }
 
+    /// Records that the remote pointer now looks like `cursor`.
+    pub fn cursor(&mut self, cursor: RemoteCursor) {
+        self.cursor = Some(cursor);
+    }
+
     pub fn has_pending(&self) -> bool {
-        self.resized || self.clipboard.is_some() || !self.dirty.is_empty()
+        self.resized || self.clipboard.is_some() || self.cursor.is_some() || !self.dirty.is_empty()
     }
 
     /// Takes the next event to send, reading any pixels from `frame` as they are now.
@@ -124,6 +130,9 @@ impl Outbox {
         }
         if let Some(text) = self.clipboard.take() {
             return Some(DisplayEvent::Clipboard(text));
+        }
+        if let Some(cursor) = self.cursor.take() {
+            return Some(DisplayEvent::Cursor(cursor));
         }
         let rect = self.dirty.pop()?;
         Some(DisplayEvent::Update(copy_rect(frame, rect)))
@@ -274,6 +283,16 @@ mod tests {
         let data = vec![0u8; 32 * 24 * 4];
         let frame = Frame { data: &data, stride: 32 * 4 };
         assert_eq!(outbox.next_event(frame), Some(DisplayEvent::Resized { width: 32, height: 24 }));
+    }
+
+    #[test]
+    fn a_new_cursor_replaces_the_unsent_one() {
+        let mut outbox = sized();
+        outbox.cursor(RemoteCursor::Hidden);
+        outbox.cursor(RemoteCursor::Default);
+        let data = vec![0u8; (W * H * 4) as usize];
+        assert_eq!(outbox.next_event(frame(&data)), Some(DisplayEvent::Cursor(RemoteCursor::Default)));
+        assert_eq!(outbox.next_event(frame(&data)), None);
     }
 
     #[test]

@@ -15,6 +15,7 @@ use crate::{float, fonts, icons};
 use super::controls::{
     ButtonKind, InputOptions, button, button_full, icon_button, segmented, text_input,
 };
+use super::rdp_advanced::{RdpAdvanced, rdp_advanced_page};
 
 const WIDTH: f32 = 540.;
 const LABEL: f32 = 96.;
@@ -61,6 +62,9 @@ pub enum RdpQuality {
     Balanced,
     /// Fewer colors and no desktop effects, for a slow link.
     Fast,
+    /// RDP: colors, link and effects as set on the advanced page. RustDesk takes it as
+    /// balanced.
+    Custom,
 }
 
 /// How many colors a VNC session asks for.
@@ -109,6 +113,8 @@ pub struct ConnectionDraft {
     pub rdp_security: RdpSecurity,
     /// RDP and RustDesk: how much picture to trade for bandwidth.
     pub rdp_quality: RdpQuality,
+    /// RDP: what the advanced page sets.
+    pub rdp: RdpAdvanced,
     /// RustDesk: the rendezvous server, `host[:port]`; empty for RustDesk's public one.
     pub rustdesk_server: String,
     /// RustDesk: the rendezvous server's public key; empty for the public server's.
@@ -156,6 +162,7 @@ impl ConnectionDraft {
             follow_size: true,
             rdp_security: RdpSecurity::default(),
             rdp_quality: RdpQuality::default(),
+            rdp: RdpAdvanced::default(),
             rustdesk_server: String::new(),
             rustdesk_key: String::new(),
             vnc_colors: VncColors::default(),
@@ -198,6 +205,8 @@ pub struct NewConnectionState {
     ports: Option<Vec<SerialPortChoice>>,
     /// Whether they have been asked for since the form opened.
     ports_asked: bool,
+    /// Showing the RDP form's advanced page.
+    advanced: bool,
 }
 
 impl NewConnectionState {
@@ -369,7 +378,7 @@ fn footer_rule(ui: &mut Ui) {
 }
 
 /// A gap and a hairline between groups of fields, which say what they are themselves.
-fn section(ui: &mut Ui) {
+pub(super) fn section(ui: &mut Ui) {
     ui.add_space(2.);
     super::panels::group_rule(ui);
     ui.add_space(2.);
@@ -417,7 +426,7 @@ fn port_choices(ui: &mut Ui, ports: Option<&[SerialPortChoice]>, device: &mut St
 }
 
 /// A labeled row: the label column, then whatever `add` puts in the rest.
-fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
+pub(super) fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     let p = palette(ui);
     ui.allocate_ui_with_layout(
         vec2(ui.available_width(), CONTROL_HEIGHT),
@@ -480,206 +489,238 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
     let editing = draft.editing.is_some();
     let verb = if editing { "Edit" } else { "New" };
     let title = format!("{verb} {} connection", protocol.label());
-    let backward = (!editing).then_some(&mut back);
-    header(ui, &title, backward);
+    let advanced = state.advanced && protocol == Protocol::Rdp;
+    let mut leave_advanced = false;
+    let mut open_advanced = false;
+    if advanced {
+        header(ui, "Advanced RDP settings", Some(&mut leave_advanced));
+    } else {
+        let backward = (!editing).then_some(&mut back);
+        header(ui, &title, backward);
+    }
     let ports = state.ports.as_deref();
     let mut look_again = false;
 
-    egui::Frame::new().inner_margin(PAD).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 8.;
-        field(ui, "cd-name", "Name", &mut draft.name, "", false);
-        field(ui, "cd-group", "Group", &mut draft.group, "", false);
-        section(ui);
-        if protocol == Protocol::Serial {
-            field(ui, "cd-device", "Device", &mut draft.device, "", false);
-            look_again = port_choices(ui, ports, &mut draft.device);
-            field(ui, "cd-baud", "Baud rate", &mut draft.baud, "", false);
-            let mut choice = |label, salt: &'static str, options: &[&str], value: &mut usize| {
-                row(ui, label, |ui| {
-                    let mut selected = *value;
-                    if segmented(ui, Id::unique(salt), options, &mut selected).changed() {
-                        *value = selected;
-                    }
-                });
-            };
-            choice("Data bits", "cd-data", &["5", "6", "7", "8"], &mut draft.data_bits);
-            choice("Parity", "cd-parity", &["None", "Odd", "Even"], &mut draft.parity);
-            choice("Stop bits", "cd-stop", &["1", "2"], &mut draft.stop_bits);
-            choice("Flow control", "cd-flow", &["None", "XON/XOFF", "RTS/CTS"], &mut draft.flow_control);
-        } else {
-            let (label, hint) = if protocol == Protocol::RustDesk {
-                ("ID or host", "123 456 789, or an address")
-            } else {
-                ("Host", "")
-            };
-            row(ui, label, |ui| {
-                let width = ui.available_width() - 88.;
-                text_input(ui, Id::unique("cd-host"), &mut draft.host, InputOptions {
-                    hint,
-                    width: Some(width),
-                    ..Default::default()
-                });
-                text_input(ui, Id::unique("cd-port"), &mut draft.port, InputOptions {
-                    hint: "Port",
-                    width: Some(80.),
-                    ..Default::default()
-                });
+    if advanced {
+        let height = (ui.ctx().content_rect().height() - 200.).clamp(240., 560.);
+        egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
+            egui::Frame::new().inner_margin(PAD).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 8.;
+                rdp_advanced_page(ui, draft);
             });
-        }
+        });
+    } else {
+        egui::Frame::new().inner_margin(PAD).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.;
+            field(ui, "cd-name", "Name", &mut draft.name, "", false);
+            field(ui, "cd-group", "Group", &mut draft.group, "", false);
+            section(ui);
+            if protocol == Protocol::Serial {
+                field(ui, "cd-device", "Device", &mut draft.device, "", false);
+                look_again = port_choices(ui, ports, &mut draft.device);
+                field(ui, "cd-baud", "Baud rate", &mut draft.baud, "", false);
+                let mut choice = |label, salt: &'static str, options: &[&str], value: &mut usize| {
+                    row(ui, label, |ui| {
+                        let mut selected = *value;
+                        if segmented(ui, Id::unique(salt), options, &mut selected).changed() {
+                            *value = selected;
+                        }
+                    });
+                };
+                choice("Data bits", "cd-data", &["5", "6", "7", "8"], &mut draft.data_bits);
+                choice("Parity", "cd-parity", &["None", "Odd", "Even"], &mut draft.parity);
+                choice("Stop bits", "cd-stop", &["1", "2"], &mut draft.stop_bits);
+                choice("Flow control", "cd-flow", &["None", "XON/XOFF", "RTS/CTS"], &mut draft.flow_control);
+            } else {
+                let (label, hint) = if protocol == Protocol::RustDesk {
+                    ("ID or host", "123 456 789, or an address")
+                } else {
+                    ("Host", "")
+                };
+                row(ui, label, |ui| {
+                    let width = ui.available_width() - 88.;
+                    text_input(ui, Id::unique("cd-host"), &mut draft.host, InputOptions {
+                        hint,
+                        width: Some(width),
+                        ..Default::default()
+                    });
+                    text_input(ui, Id::unique("cd-port"), &mut draft.port, InputOptions {
+                        hint: "Port",
+                        width: Some(80.),
+                        ..Default::default()
+                    });
+                });
+            }
 
-        match protocol {
-            Protocol::Ssh | Protocol::Sftp => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                if protocol == Protocol::Ssh {
-                    let hint = "L8080:db:5432, D1080, R9000:localhost:80";
-                    field(ui, "cd-forwards", "Forwards", &mut draft.forwards, hint, false);
-                }
-                section(ui);
-                field(ui, "cd-user", "Username", &mut draft.username, "", false);
-                row(ui, "Method", |ui| {
-                    let mut selected = draft.auth as usize;
-                    let response = segmented(
+            match protocol {
+                Protocol::Ssh | Protocol::Sftp => {
+                    field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                    if protocol == Protocol::Ssh {
+                        let hint = "L8080:db:5432, D1080, R9000:localhost:80";
+                        field(ui, "cd-forwards", "Forwards", &mut draft.forwards, hint, false);
+                    }
+                    section(ui);
+                    field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                    row(ui, "Method", |ui| {
+                        let mut selected = draft.auth as usize;
+                        let response = segmented(
+                            ui,
+                            Id::unique("cd-auth"),
+                            &["Password", "Key file", "Agent"],
+                            &mut selected,
+                        );
+                        if response.changed() {
+                            draft.auth = [AuthKind::Password, AuthKind::Key, AuthKind::Agent][selected];
+                        }
+                    });
+                    match draft.auth {
+                        AuthKind::Password => {
+                            field(
+                                ui,
+                                "cd-password",
+                                "Password",
+                                &mut draft.password,
+                                "",
+                                true,
+                            );
+                        },
+                        AuthKind::Key => {
+                            field(
+                                ui,
+                                "cd-key",
+                                "Key file",
+                                &mut draft.key_path,
+                                "",
+                                false,
+                            );
+                        },
+                        AuthKind::Agent => {},
+                    }
+                },
+                Protocol::Telnet => {
+                    field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                    warning(ui, "Telnet is not encrypted: anyone on the network can read what is typed.");
+                },
+                Protocol::Ftp => {
+                    field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                    row(ui, "Encryption", |ui| {
+                        let mut selected = usize::from(draft.ftps);
+                        let options = ["None", "FTPS (AUTH TLS)"];
+                        if segmented(ui, Id::unique("cd-ftps"), &options, &mut selected).changed() {
+                            draft.ftps = selected == 1;
+                        }
+                    });
+                    section(ui);
+                    field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                    field(
                         ui,
-                        Id::unique("cd-auth"),
-                        &["Password", "Key file", "Agent"],
-                        &mut selected,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "",
+                        true,
                     );
-                    if response.changed() {
-                        draft.auth = [AuthKind::Password, AuthKind::Key, AuthKind::Agent][selected];
+                },
+                Protocol::Rdp => {
+                    field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                    display_options(ui, draft);
+                    row(ui, "Security", |ui| {
+                        let mut selected = draft.rdp_security as usize;
+                        let options = ["Negotiate", "NLA", "TLS"];
+                        if segmented(ui, Id::unique("cd-security"), &options, &mut selected).changed() {
+                            draft.rdp_security =
+                                [RdpSecurity::Negotiate, RdpSecurity::Nla, RdpSecurity::Tls][selected];
+                        }
+                    });
+                    row(ui, "Quality", |ui| {
+                        let mut selected = draft.rdp_quality as usize;
+                        let options = ["Best", "Balanced", "Fast", "Custom"];
+                        if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
+                            // Custom starts from what the preset was asking for.
+                            if let Some(preset) = draft.rdp_quality.preset() {
+                                draft.rdp.picture = preset;
+                            }
+                            draft.rdp_quality = [
+                                RdpQuality::Best,
+                                RdpQuality::Balanced,
+                                RdpQuality::Fast,
+                                RdpQuality::Custom,
+                            ][selected];
+                        }
+                    });
+                    row(ui, "", |ui| {
+                        let label = "Advanced settings";
+                        let arrow = Some(icons::CHEVRON_RIGHT);
+                        if button_full(ui, arrow, label, ButtonKind::Secondary, true, None).clicked() {
+                            open_advanced = true;
+                        }
+                    });
+                    section(ui);
+                    field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                    field(ui, "cd-domain", "Domain", &mut draft.domain, "", false);
+                    field(
+                        ui,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "",
+                        true,
+                    );
+                },
+                Protocol::RustDesk => {
+                    field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                    display_options(ui, draft);
+                    row(ui, "Quality", |ui| {
+                        let mut selected = draft.rdp_quality as usize;
+                        let options = ["Best", "Balanced", "Fast"];
+                        if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
+                            draft.rdp_quality =
+                                [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast][selected];
+                        }
+                    });
+                    section(ui);
+                    let hint = "rs-ny.rustdesk.com";
+                    field(ui, "cd-rd-server", "Server", &mut draft.rustdesk_server, hint, false);
+                    let hint = "The public server's key";
+                    field(ui, "cd-rd-key", "Server key", &mut draft.rustdesk_key, hint, false);
+                    if is_rustdesk_address(&draft.host) {
+                        warning(ui, "By address RustDesk serves the session unencrypted, and the peer's identity is not checked. Use it over a network you trust, such as a VPN.");
                     }
-                });
-                match draft.auth {
-                    AuthKind::Password => {
-                        field(
-                            ui,
-                            "cd-password",
-                            "Password",
-                            &mut draft.password,
-                            "",
-                            true,
-                        );
-                    },
-                    AuthKind::Key => {
-                        field(
-                            ui,
-                            "cd-key",
-                            "Key file",
-                            &mut draft.key_path,
-                            "",
-                            false,
-                        );
-                    },
-                    AuthKind::Agent => {},
-                }
-            },
-            Protocol::Telnet => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                warning(ui, "Telnet is not encrypted: anyone on the network can read what is typed.");
-            },
-            Protocol::Ftp => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                row(ui, "Encryption", |ui| {
-                    let mut selected = usize::from(draft.ftps);
-                    let options = ["None", "FTPS (AUTH TLS)"];
-                    if segmented(ui, Id::unique("cd-ftps"), &options, &mut selected).changed() {
-                        draft.ftps = selected == 1;
-                    }
-                });
-                section(ui);
-                field(ui, "cd-user", "Username", &mut draft.username, "", false);
-                field(
-                    ui,
-                    "cd-password",
-                    "Password",
-                    &mut draft.password,
-                    "",
-                    true,
-                );
-            },
-            Protocol::Rdp => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                display_options(ui, draft);
-                row(ui, "Security", |ui| {
-                    let mut selected = draft.rdp_security as usize;
-                    let options = ["Negotiate", "NLA", "TLS"];
-                    if segmented(ui, Id::unique("cd-security"), &options, &mut selected).changed() {
-                        draft.rdp_security =
-                            [RdpSecurity::Negotiate, RdpSecurity::Nla, RdpSecurity::Tls][selected];
-                    }
-                });
-                row(ui, "Quality", |ui| {
-                    let mut selected = draft.rdp_quality as usize;
-                    let options = ["Best", "Balanced", "Fast"];
-                    if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
-                        draft.rdp_quality =
-                            [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast][selected];
-                    }
-                });
-                section(ui);
-                field(ui, "cd-user", "Username", &mut draft.username, "", false);
-                field(ui, "cd-domain", "Domain", &mut draft.domain, "", false);
-                field(
-                    ui,
-                    "cd-password",
-                    "Password",
-                    &mut draft.password,
-                    "",
-                    true,
-                );
-            },
-            Protocol::RustDesk => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                display_options(ui, draft);
-                row(ui, "Quality", |ui| {
-                    let mut selected = draft.rdp_quality as usize;
-                    let options = ["Best", "Balanced", "Fast"];
-                    if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
-                        draft.rdp_quality =
-                            [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast][selected];
-                    }
-                });
-                section(ui);
-                let hint = "rs-ny.rustdesk.com";
-                field(ui, "cd-rd-server", "Server", &mut draft.rustdesk_server, hint, false);
-                let hint = "The public server's key";
-                field(ui, "cd-rd-key", "Server key", &mut draft.rustdesk_key, hint, false);
-                if is_rustdesk_address(&draft.host) {
-                    warning(ui, "By address RustDesk serves the session unencrypted, and the peer's identity is not checked. Use it over a network you trust, such as a VPN.");
-                }
-                section(ui);
-                field(
-                    ui,
-                    "cd-password",
-                    "Password",
-                    &mut draft.password,
-                    "Empty to ask the person at the peer",
-                    true,
-                );
-            },
-            Protocol::Vnc => {
-                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                display_options(ui, draft);
-                row(ui, "Colors", |ui| {
-                    let mut selected = draft.vnc_colors as usize;
-                    let options = ["Full", "16-bit", "8-bit"];
-                    if segmented(ui, Id::unique("cd-colors"), &options, &mut selected).changed() {
-                        draft.vnc_colors =
-                            [VncColors::Full, VncColors::Bits16, VncColors::Bits8][selected];
-                    }
-                });
-                section(ui);
-                field(
-                    ui,
-                    "cd-password",
-                    "Password",
-                    &mut draft.password,
-                    "",
-                    true,
-                );
-            },
-            Protocol::Serial => {},
-        }
-    });
+                    section(ui);
+                    field(
+                        ui,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "Empty to ask the person at the peer",
+                        true,
+                    );
+                },
+                Protocol::Vnc => {
+                    field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                    display_options(ui, draft);
+                    row(ui, "Colors", |ui| {
+                        let mut selected = draft.vnc_colors as usize;
+                        let options = ["Full", "16-bit", "8-bit"];
+                        if segmented(ui, Id::unique("cd-colors"), &options, &mut selected).changed() {
+                            draft.vnc_colors =
+                                [VncColors::Full, VncColors::Bits16, VncColors::Bits8][selected];
+                        }
+                    });
+                    section(ui);
+                    field(
+                        ui,
+                        "cd-password",
+                        "Password",
+                        &mut draft.password,
+                        "",
+                        true,
+                    );
+                },
+                Protocol::Serial => {},
+            }
+        });
+    }
 
     footer_rule(ui);
     let complete = draft.is_complete();
@@ -696,6 +737,10 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
 
     if look_again {
         state.ports_asked = false;
+        ui.ctx().request_repaint();
+    }
+    if open_advanced || leave_advanced {
+        state.advanced = open_advanced;
         ui.ctx().request_repaint();
     }
     if submit {

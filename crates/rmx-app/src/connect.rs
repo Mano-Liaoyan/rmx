@@ -12,7 +12,7 @@ use bytes::Bytes;
 use rmx_layout::PaneId;
 use rmx_render::SizeInfo;
 use rmx_display::{DisplayEvent, DisplayHandle};
-use rmx_rdp::{CertificatePolicy, CertificatePrompt, Quality, RdpConfig, RdpError, Security};
+use rmx_rdp::{CertificatePolicy, CertificatePrompt, RdpConfig, RdpError, Security};
 use rmx_ssh::{
     ConnectConfig, ConnectOptions, HostConfig, HostKeyCheck, HostKeyDecision, HostKeyRejection,
     HostKeyVerifier, KeyboardChallenge, PortForward, PromptContext, Prompter, PublicKey,
@@ -399,6 +399,8 @@ pub struct ConnectPlan {
     pub follow_size: bool,
     pub rdp_security: RdpSecurity,
     pub rdp_quality: RdpQuality,
+    /// RDP: what the advanced page of the form set.
+    pub rdp: rmx_ui::widgets::RdpAdvanced,
     pub vnc_colors: VncColors,
     /// RustDesk: the rendezvous server, if not RustDesk's public one.
     pub rustdesk_server: Option<String>,
@@ -1011,6 +1013,10 @@ async fn pump_display(
                 let _ = reporter.proxy.send_event(AppEvent::DisplayClipboard(pane, generation, text));
                 continue;
             },
+            Some(DisplayEvent::Cursor(cursor)) => {
+                let _ = reporter.proxy.send_event(AppEvent::DisplayCursor(pane, generation, cursor));
+                continue;
+            },
             Some(DisplayEvent::Bell) => continue,
             Some(DisplayEvent::Closed(reason)) => {
                 break Some(reason.unwrap_or_else(|| "The session ended".to_owned()));
@@ -1114,8 +1120,9 @@ async fn run_rdp(
     vault: VaultHandle,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), String> {
-    let ConnectPlan { endpoint, jumps, holds, scale, follow_size, rdp_security, rdp_quality, .. } =
-        plan;
+    let ConnectPlan {
+        endpoint, jumps, holds, scale, follow_size, rdp_security, rdp_quality, rdp, ..
+    } = plan;
     let Endpoint { host, port, user, password, domain } = endpoint;
     reporter.send(LinkEvent::Target(format!("{user}@{host}:{port}")));
     let mut password = password.map(|secret| secret.expose().to_owned());
@@ -1129,11 +1136,6 @@ async fn run_rdp(
             RdpSecurity::Negotiate => Security::NlaOrTls,
             RdpSecurity::Nla => Security::Nla,
             RdpSecurity::Tls => Security::Tls,
-        };
-        let quality = match rdp_quality {
-            RdpQuality::Best => Quality::Best,
-            RdpQuality::Balanced => Quality::Balanced,
-            RdpQuality::Fast => Quality::Fast,
         };
 
         for attempt in 0..PASSWORD_ATTEMPTS {
@@ -1153,7 +1155,7 @@ async fn run_rdp(
             // Asking is the only way a certificate is judged here: nothing is accepted unseen.
             config.certificate = CertificatePolicy::Ask(prompts_tx);
             config.security = security;
-            config.quality = quality;
+            crate::rdp_options::apply(rdp_quality, &rdp, &mut config);
             config.domain = domain.clone();
             config.connect_timeout = CONNECT_TIMEOUT;
 
@@ -1240,7 +1242,7 @@ async fn run_rustdesk(
     }));
     let quality = match rdp_quality {
         RdpQuality::Best => rmx_rustdesk::Quality::Best,
-        RdpQuality::Balanced => rmx_rustdesk::Quality::Balanced,
+        RdpQuality::Balanced | RdpQuality::Custom => rmx_rustdesk::Quality::Balanced,
         RdpQuality::Fast => rmx_rustdesk::Quality::Fast,
     };
     let mut credentials = rmx_rustdesk::Credentials {

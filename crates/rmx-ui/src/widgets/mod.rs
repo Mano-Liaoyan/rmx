@@ -12,6 +12,7 @@ pub mod pane_bar;
 pub mod panels;
 pub mod prompt;
 pub mod quick_open;
+pub mod rdp_advanced;
 pub mod settings;
 pub mod snippets;
 pub mod tabs;
@@ -39,6 +40,10 @@ pub use new_connection::{
 };
 pub use overlay::{PaneOverlay, notice_rect, overlay_rect, pane_notice, pane_overlay};
 pub use prompt::{PromptField, PromptState, prompt_dialog};
+pub use rdp_advanced::{
+    RDP_SCALES, RdpAdvanced, RdpColorDepth, RdpCompression, RdpConnection, RdpEffects, RdpPicture,
+    parse_keyboard_layout,
+};
 pub use quick_open::{QuickItem, QuickOpenState, quick_open, quick_open_body};
 pub use settings::{SettingsDraft, SettingsState, SettingsView, SyncDraft, SyncKind, settings_dialog};
 pub use snippets::{SnippetRow, SnippetsState, snippets_dialog};

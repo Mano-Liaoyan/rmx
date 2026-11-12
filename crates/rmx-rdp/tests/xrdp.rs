@@ -197,7 +197,7 @@ fn watch(mut events: mpsc::Receiver<DisplayEvent>) -> Arc<Mutex<Seen>> {
                     seen.updates += 1;
                 },
                 DisplayEvent::Clipboard(text) => seen.clipboard.push(text),
-                DisplayEvent::Bell => {},
+                DisplayEvent::Bell | DisplayEvent::Cursor(_) => {},
                 DisplayEvent::Closed(reason) => {
                     seen.closed = Some(reason);
                     break;

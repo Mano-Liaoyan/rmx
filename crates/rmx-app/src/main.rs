@@ -16,6 +16,7 @@ mod highlight;
 mod options;
 mod pacer;
 mod pane;
+mod rdp_options;
 mod remote;
 mod sftp_files;
 mod shell;
