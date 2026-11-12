@@ -252,22 +252,6 @@ pub struct MultiClipboards {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
-pub struct Resolution {
-    #[prost(int32, tag = "1")]
-    pub width: i32,
-    #[prost(int32, tag = "2")]
-    pub height: i32,
-}
-
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct DisplayResolution {
-    #[prost(int32, tag = "1")]
-    pub display: i32,
-    #[prost(message, optional, tag = "2")]
-    pub resolution: Option<Resolution>,
-}
-
-#[derive(Clone, PartialEq, prost::Message)]
 pub struct SwitchDisplay {
     #[prost(int32, tag = "1")]
     pub display: i32,
@@ -402,11 +386,7 @@ pub mod misc {
         CloseReason(String),
         #[prost(bool, tag = "10")]
         RefreshVideo(bool),
-        /// For peers before 1.2.4.
-        #[prost(message, tag = "24")]
-        ChangeResolution(Resolution),
-        #[prost(message, tag = "36")]
-        ChangeDisplayResolution(DisplayResolution),
+        // No `ChangeResolution` (24) or `ChangeDisplayResolution` (36): see `Session::input`.
     }
 }
 

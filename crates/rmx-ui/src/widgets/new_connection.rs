@@ -464,7 +464,8 @@ fn field(
 }
 
 /// How a remote desktop fits its pane: the rows VNC and RDP share.
-fn display_options(ui: &mut Ui, draft: &mut ConnectionDraft) {
+/// The scale, and whether the remote size follows the pane where the protocol can resize.
+fn display_options(ui: &mut Ui, draft: &mut ConnectionDraft, resizable: bool) {
     row(ui, "Scale", |ui| {
         let mut selected = draft.scale as usize;
         let options = ["Fit", "1:1, scrolling"];
@@ -472,6 +473,9 @@ fn display_options(ui: &mut Ui, draft: &mut ConnectionDraft) {
             draft.scale = [ScaleChoice::Fit, ScaleChoice::Native][selected];
         }
     });
+    if !resizable {
+        return;
+    }
     row(ui, "Remote size", |ui| {
         let mut selected = usize::from(!draft.follow_size);
         let options = ["Follow the pane", "Keep"];
@@ -623,7 +627,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 },
                 Protocol::Rdp => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                    display_options(ui, draft);
+                    display_options(ui, draft, true);
                     row(ui, "Security", |ui| {
                         let mut selected = draft.rdp_security as usize;
                         let options = ["Negotiate", "NLA", "TLS"];
@@ -669,7 +673,8 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 },
                 Protocol::RustDesk => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                    display_options(ui, draft);
+                    // A RustDesk peer's resolution is its own; see rmx-rustdesk's session.
+                    display_options(ui, draft, false);
                     row(ui, "Quality", |ui| {
                         let mut selected = draft.rdp_quality as usize;
                         let options = ["Best", "Balanced", "Fast"];
@@ -698,7 +703,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 },
                 Protocol::Vnc => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
-                    display_options(ui, draft);
+                    display_options(ui, draft, true);
                     row(ui, "Colors", |ui| {
                         let mut selected = draft.vnc_colors as usize;
                         let options = ["Full", "16-bit", "8-bit"];

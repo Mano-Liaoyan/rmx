@@ -1231,9 +1231,8 @@ async fn run_rustdesk(
 ) -> Result<(), String> {
     use rmx_rustdesk::ConnectError;
 
-    let ConnectPlan {
-        endpoint, jumps, holds, scale, follow_size, rdp_quality, rustdesk_server, rustdesk_key, ..
-    } = plan;
+    let ConnectPlan { endpoint, jumps, holds, scale, rdp_quality, rustdesk_server, rustdesk_key, .. } =
+        plan;
     let Endpoint { host, port, password, .. } = endpoint;
     let target = rustdesk_target(&host, port, rustdesk_server, rustdesk_key);
     reporter.send(LinkEvent::Target(match &target {
@@ -1301,7 +1300,8 @@ async fn run_rustdesk(
         _ = &mut *cancel => return Ok(()),
         result = setup => result?,
     };
-    pump_display(reporter, DisplayKind::RustDesk, handle, scale, follow_size, tunnel, cancel).await;
+    // Never `follow_size`: a RustDesk peer's resolution is not the client's to change.
+    pump_display(reporter, DisplayKind::RustDesk, handle, scale, false, tunnel, cancel).await;
     Ok(())
 }
 
