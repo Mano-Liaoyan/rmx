@@ -4,7 +4,7 @@ members = ["crates/*", "xtask"]
 default-members = ["crates/rmx-app"]
 
 [workspace.package]
-version = "0.1.12"
+version = "0.1.13"
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -39,6 +39,9 @@ opt-level = 3
 [profile.release.package.rmx-layout]
 opt-level = 3
 [profile.release.package.rmx-rustdesk]
+opt-level = 3
+# The RustDesk video decoder: a quarter faster than at "s".
+[profile.release.package.vp9-mt]
 opt-level = 3
 [profile.release.package.alacritty_terminal]
 opt-level = 3

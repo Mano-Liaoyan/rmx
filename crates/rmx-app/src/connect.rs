@@ -21,13 +21,13 @@ use rmx_ssh::{
 use rmx_terminal::{
     CloseReason, Sink, Terminal, Theme, TransportReader, TransportWriter, WindowSize,
 };
+use rmx_transfer::rustls;
 use rmx_transfer::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };
 use rmx_transfer::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rmx_transfer::{
     DialedStream, FtpConfig, FtpDialer, FtpFs, FtpTls, RemoteFs, SftpFs, SftpOptions, TunnelStream,
-    rustls,
 };
 use rmx_ui::Protocol;
 use rmx_ui::widgets::{
@@ -1303,7 +1303,6 @@ async fn run_rustdesk(
         jumps,
         holds,
         scale,
-        follow_size,
         rdp_quality,
         rustdesk_server,
         rustdesk_key,
@@ -1344,14 +1343,12 @@ async fn run_rustdesk(
                         rmx_rustdesk::Identity::Verified => {},
                         rmx_rustdesk::Identity::Unverified => {
                             log::warn!(
-                                "the RustDesk peer at {host} is encrypted but its identity was \
-                                 not checked"
+                                "the RustDesk peer at {host} is encrypted but its identity was not checked"
                             )
                         },
                         rmx_rustdesk::Identity::Unencrypted => {
                             log::warn!(
-                                "the RustDesk session with {host} is not encrypted, as RustDesk \
-                                 serves direct connections"
+                                "the RustDesk session with {host} is not encrypted, as RustDesk serves direct connections"
                             )
                         },
                     }
@@ -1391,7 +1388,8 @@ async fn run_rustdesk(
         _ = &mut *cancel => return Ok(()),
         result = setup => result?,
     };
-    pump_display(reporter, DisplayKind::RustDesk, handle, scale, follow_size, tunnel, cancel).await;
+    // Never `follow_size`: a RustDesk peer's resolution is not the client's to change.
+    pump_display(reporter, DisplayKind::RustDesk, handle, scale, false, tunnel, cancel).await;
     Ok(())
 }
 

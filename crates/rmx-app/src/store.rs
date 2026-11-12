@@ -1157,7 +1157,7 @@ impl Actor {
             if draft.scale == ScaleChoice::Native {
                 settings.insert(OPTION_SCALE.to_owned(), "native".to_owned());
             }
-            if !draft.follow_size {
+            if !draft.follow_size && draft.protocol != Protocol::RustDesk {
                 settings.insert(OPTION_RESIZE.to_owned(), "keep".to_owned());
             }
         }

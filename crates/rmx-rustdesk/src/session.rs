@@ -14,8 +14,8 @@ use tokio::sync::mpsc;
 
 use crate::input::{InputMapper, Platform};
 use crate::proto::{
-    self, BoolOption, Clipboard, ClipboardFormat, DisplayResolution, ImageQuality, Message,
-    OptionMessage, PeerInfo, PreferCodec, Resolution, SupportedDecoding, message, misc,
+    self, BoolOption, Clipboard, ClipboardFormat, ImageQuality, Message, OptionMessage, PeerInfo,
+    PreferCodec, SupportedDecoding, message, misc,
 };
 use crate::stream::{Connection, Reader, Writer};
 use crate::video::{self, Codec, Feed, Request};
@@ -81,7 +81,6 @@ pub(crate) fn start(
     tokio::spawn(write(writer, send_rx));
     let session = Session {
         mapper: InputMapper::new(Platform::of(&info.platform)),
-        display: info.current_display,
         feed: feed_tx,
         send: send_tx,
     };
@@ -101,8 +100,6 @@ async fn write(mut writer: Writer, mut queue: mpsc::Receiver<Message>) {
 
 struct Session {
     mapper: InputMapper,
-    /// The index of the peer display being shown.
-    display: i32,
     feed: mpsc::Sender<Feed>,
     send: mpsc::Sender<Message>,
 }
@@ -162,7 +159,6 @@ impl Session {
     }
 
     async fn peer_info(&mut self, info: &PeerInfo) -> End {
-        self.display = info.current_display;
         let shown =
             usize::try_from(info.current_display).ok().and_then(|index| info.displays.get(index));
         let Some(display) = shown.or(info.displays.first()) else {
@@ -211,7 +207,6 @@ impl Session {
             message::Union::PeerInfo(info) => self.peer_info(&info).await,
             message::Union::Misc(misc) => match misc.union? {
                 misc::Union::SwitchDisplay(display) => {
-                    self.display = display.display;
                     self.mapper.set_origin(display.x, display.y);
                     self.resize(display.width, display.height).await
                 },
@@ -254,16 +249,11 @@ impl Session {
                     ..Default::default()
                 }))]
             },
-            InputEvent::Resize { width, height } => {
-                let resolution = Resolution {
-                    width: i32::try_from(width).unwrap_or(i32::MAX),
-                    height: i32::try_from(height).unwrap_or(i32::MAX),
-                };
-                vec![Message::misc(misc::Union::ChangeDisplayResolution(DisplayResolution {
-                    display: self.display,
-                    resolution: Some(resolution),
-                }))]
-            },
+            // The peer's resolution is never changed to fit the pane; the picture is scaled
+            // instead. RustDesk's own client only sets a resolution the user picks from the
+            // peer's list, and a request hangs a Wayland peer: it enumerates displays inside the
+            // connection's task while PipeWire captures, so video and input stop.
+            InputEvent::Resize { .. } => Vec::new(),
             event => self.mapper.translate(&event),
         };
         for message in messages {
