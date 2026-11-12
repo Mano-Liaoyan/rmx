@@ -208,7 +208,7 @@ impl Viewer {
             DisplayEvent::Resized { width, height } => self.screen = Screen::new(width, height),
             DisplayEvent::Update(update) => self.screen.apply(&update),
             DisplayEvent::Clipboard(text) => self.clipboard.push(text),
-            DisplayEvent::Bell => {},
+            DisplayEvent::Bell | DisplayEvent::Cursor(_) => {},
             DisplayEvent::Closed(reason) => self.closed = Some(reason),
         }
     }

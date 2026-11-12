@@ -62,6 +62,99 @@ pub enum Quality {
     Fast,
 }
 
+impl Quality {
+    /// What the preset asks the server for.
+    pub fn experience(self) -> Experience {
+        let all = Effects {
+            wallpaper: true,
+            full_window_drag: true,
+            menu_animations: true,
+            themes: true,
+            cursor_shadow: true,
+            font_smoothing: true,
+            desktop_composition: true,
+        };
+        match self {
+            Self::Best => Experience { color_depth: 32, connection: Connection::Lan, effects: all },
+            Self::Balanced => Experience {
+                color_depth: 32,
+                connection: Connection::Lan,
+                effects: Effects {
+                    full_window_drag: false,
+                    menu_animations: false,
+                    desktop_composition: false,
+                    ..all
+                },
+            },
+            Self::Fast => Experience {
+                color_depth: 16,
+                connection: Connection::BroadbandLow,
+                effects: Effects {
+                    wallpaper: false,
+                    full_window_drag: false,
+                    menu_animations: false,
+                    themes: false,
+                    cursor_shadow: false,
+                    font_smoothing: false,
+                    desktop_composition: false,
+                },
+            },
+        }
+    }
+}
+
+/// The picture and desktop effects a session asks the server for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Experience {
+    /// Bits per pixel of the older bitmap updates: 15, 16, 24 or 32. The graphics pipeline
+    /// always carries 32.
+    pub color_depth: u32,
+    pub connection: Connection,
+    pub effects: Effects,
+}
+
+/// The link the client claims to have, which servers use to pick their codecs and effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Connection {
+    Modem,
+    BroadbandLow,
+    Satellite,
+    BroadbandHigh,
+    Wan,
+    Lan,
+    /// Let the server measure the link.
+    Autodetect,
+}
+
+/// The desktop effects the server may show, each `true` when allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Effects {
+    pub wallpaper: bool,
+    /// Window contents while dragging, rather than an outline.
+    pub full_window_drag: bool,
+    pub menu_animations: bool,
+    /// Visual styles, rather than the classic look.
+    pub themes: bool,
+    pub cursor_shadow: bool,
+    /// ClearType.
+    pub font_smoothing: bool,
+    /// Aero: transparency and animations of the desktop window manager.
+    pub desktop_composition: bool,
+}
+
+/// Bulk compression of what the server sends, at the cost of CPU on both ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compression {
+    /// MPPC with an 8 KiB history (RDP 4.0).
+    K8,
+    /// MPPC with a 64 KiB history (RDP 5.0).
+    K64,
+    /// RDP 6.0 bulk compression.
+    Rdp6,
+    /// RDP 6.1 bulk compression.
+    Rdp61,
+}
+
 /// How to decide whether the server's TLS certificate is acceptable.
 ///
 /// RDP servers almost always present a self-signed certificate, so there is no chain to check.
@@ -121,6 +214,25 @@ pub struct RdpConfig {
     pub remotefx: bool,
     /// How much of the picture to trade for bandwidth.
     pub quality: Quality,
+    /// Color depth, link and effects chosen one by one, in place of what `quality` would ask.
+    pub experience: Option<Experience>,
+    /// Offer the graphics pipeline, which always carries 32-bit color. Without it the server
+    /// sends the older bitmap updates.
+    pub graphics_pipeline: bool,
+    /// Let the server compress bitmaps lossily.
+    pub lossy: bool,
+    /// Bulk compression to offer, if any.
+    pub compression: Option<Compression>,
+    /// How large the remote desktop draws its interface, in percent: 100 to 500.
+    pub scale_factor: u32,
+    /// Share the clipboard's text with the server.
+    pub clipboard: bool,
+    /// A program to run in place of the desktop's shell, and the directory it starts in.
+    pub start_program: String,
+    pub work_dir: String,
+    /// Report the pointer's shapes as [`DisplayEvent::Cursor`](rmx_display::DisplayEvent) for
+    /// the interface to show as its own cursor, rather than drawing them into the picture.
+    pub local_cursor: bool,
     /// The name this client gives the server.
     pub client_name: String,
     /// The bound of the [`DisplayHandle::events`] channel. A smaller value coalesces harder.
@@ -150,6 +262,15 @@ impl RdpConfig {
             keyboard_layout: 0x0409,
             remotefx: true,
             quality: Quality::default(),
+            experience: None,
+            graphics_pipeline: true,
+            lossy: true,
+            compression: None,
+            scale_factor: 100,
+            clipboard: true,
+            start_program: String::new(),
+            work_dir: String::new(),
+            local_cursor: true,
             client_name: "rmx".to_owned(),
             event_capacity: 8,
             connect_timeout: Duration::from_secs(30),
@@ -171,6 +292,15 @@ impl fmt::Debug for RdpConfig {
             .field("keyboard_layout", &self.keyboard_layout)
             .field("remotefx", &self.remotefx)
             .field("quality", &self.quality)
+            .field("experience", &self.experience)
+            .field("graphics_pipeline", &self.graphics_pipeline)
+            .field("lossy", &self.lossy)
+            .field("compression", &self.compression)
+            .field("scale_factor", &self.scale_factor)
+            .field("clipboard", &self.clipboard)
+            .field("start_program", &self.start_program)
+            .field("work_dir", &self.work_dir)
+            .field("local_cursor", &self.local_cursor)
             .field("client_name", &self.client_name)
             .field("event_capacity", &self.event_capacity)
             .field("connect_timeout", &self.connect_timeout)

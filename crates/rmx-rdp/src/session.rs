@@ -23,7 +23,7 @@ use ironrdp_pdu::gcc::{ConnectionType, KeyboardType};
 use ironrdp_pdu::rdp::capability_sets::{
     MajorPlatformType, RailSupportLevel, client_codecs_capabilities,
 };
-use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
+use ironrdp_pdu::rdp::client_info::{CompressionType, PerformanceFlags, TimezoneInfo};
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{
     ActiveStage, ActiveStageBuilder, ActiveStageOutput, GracefulDisconnectReason,
@@ -32,7 +32,7 @@ use ironrdp_tokio::bytes::BytesMut;
 use ironrdp_tokio::{
     MovableTokioFramed, NetworkClient, connect_begin, connect_finalize, mark_as_upgraded,
 };
-use rmx_display::{DisplayEvent, DisplayHandle, InputEvent};
+use rmx_display::{CursorImage, DisplayEvent, DisplayHandle, InputEvent, RemoteCursor};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadHalf, WriteHalf};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until, timeout};
@@ -41,7 +41,7 @@ use tokio_rustls::client::TlsStream;
 use crate::clipboard::{Action as ClipboardAction, ClipboardHandle};
 use crate::input::InputMapper;
 use crate::outbox::{Frame, Outbox, Rect};
-use crate::{Quality, RdpConfig, RdpError, Security, tls};
+use crate::{Compression, Connection, Experience, RdpConfig, RdpError, Security, tls};
 
 /// Network frames waiting to be decoded. Beyond this, reading stops and the server is throttled.
 const FRAME_QUEUE: usize = 8;
@@ -62,6 +62,7 @@ pub(crate) async fn run<S>(
     let clipboard = ClipboardHandle::default();
     let event_capacity = config.event_capacity.max(1);
     let limit = config.connect_timeout;
+    let scale_factor = (config.scale_factor != 100).then(|| config.scale_factor.clamp(100, 500));
     let established = tokio::select! {
         result = timeout(limit, handshake(stream, config, &clipboard)) => {
             result.unwrap_or(Err(RdpError::Timeout))
@@ -93,6 +94,7 @@ pub(crate) async fn run<S>(
     let writer = tokio::spawn(write_frames(write_half, write_rx, net_tx));
 
     let mut session = Session::new(result, write_tx, clipboard);
+    session.scale_factor = scale_factor;
     let outcome = session.drive(net_rx, input_rx, &events_tx).await;
     session.finish(outcome, &events_tx).await;
 
@@ -112,15 +114,19 @@ where
     let server_name = config.server_name.clone();
     let connector_config = connector_config(&config)?;
 
+    let mut dynamic =
+        DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    if config.graphics_pipeline {
+        dynamic.attach_dynamic_channel(GraphicsPipelineClient::new(Box::new(Pipeline), None));
+    }
     let mut connector = ClientConnector::new(connector_config, SocketAddr::from(([0, 0, 0, 0], 0)))
-        .with_static_channel(
-            DrdynvcClient::new()
-                .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())))
-                .with_dynamic_channel(GraphicsPipelineClient::new(Box::new(Pipeline), None)),
-        )
-        .with_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
+        .with_static_channel(dynamic);
+    // Without the channel nothing crosses the clipboard either way.
+    if config.clipboard {
+        connector.attach_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
             clipboard.backend(),
         )));
+    }
 
     let mut framed = MovableTokioFramed::new(stream);
     let should_upgrade =
@@ -175,14 +181,17 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
     let codec_settings: &[&str] = if config.remotefx { &[] } else { &["remotefx:off"] };
     let codecs = client_codecs_capabilities(codec_settings)
         .map_err(|error| RdpError::Handshake(format!("codec configuration: {error}")))?;
-    let (color_depth, connection_type, performance_flags) = quality_settings(config.quality);
+    let experience = config.experience.unwrap_or_else(|| config.quality.experience());
+    let (color_depth, connection_type, performance_flags) = experience_settings(&experience);
+    let scale_factor = config.scale_factor.clamp(100, 500);
     Ok(Config {
         desktop_size: DesktopSize { width: config.width, height: config.height },
         monitor_layout: None,
-        desktop_scale_factor: 0,
+        // Zero leaves the scale out, as the server then picks its own.
+        desktop_scale_factor: if scale_factor == 100 { 0 } else { scale_factor },
         desktop_physical_size: None,
         desktop_orientation: None,
-        device_scale_factor: None,
+        device_scale_factor: (scale_factor != 100).then(|| device_scale_factor(scale_factor)),
         monitor_extended_layout: None,
         relative_mouse_input: false,
         enable_tls,
@@ -201,11 +210,11 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         keyboard_layout: config.keyboard_layout,
         connection_type,
         ime_file_name: String::new(),
-        bitmap: Some(BitmapConfig { lossy_compression: true, color_depth, codecs }),
+        bitmap: Some(BitmapConfig { lossy_compression: config.lossy, color_depth, codecs }),
         dig_product_id: String::new(),
         client_dir: String::new(),
-        alternate_shell: String::new(),
-        work_dir: String::new(),
+        alternate_shell: config.start_program.clone(),
+        work_dir: config.work_dir.clone(),
         remote_application_mode: false,
         rail_support_level: RailSupportLevel::empty(),
         platform: MajorPlatformType::UNIX,
@@ -217,16 +226,36 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         performance_flags,
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
-        compression_type: None,
-        // There is no separate cursor plane on the interface, so the pointer is drawn into
-        // the framebuffer here, keeping it visible on every server.
+        compression_type: config.compression.map(|compression| match compression {
+            Compression::K8 => CompressionType::K8,
+            Compression::K64 => CompressionType::K64,
+            Compression::Rdp6 => CompressionType::Rdp6,
+            Compression::Rdp61 => CompressionType::Rdp61,
+        }),
+        // The pointer's shapes come from the server either way. Drawn into the picture, it trails
+        // the local cursor by the round trip; shown as the local cursor, it does not lag.
         enable_server_pointer: true,
-        pointer_software_rendering: true,
+        pointer_software_rendering: !config.local_cursor,
         multitransport_flags: None,
         // The graphics pipeline always carries 32-bit color, so a server whose listener caps the
         // older bitmap updates at 16-bit (the Windows Server default) still sends full color.
-        support_dyn_vc_gfx_protocol: true,
+        support_dyn_vc_gfx_protocol: config.graphics_pipeline,
     })
+}
+
+/// A pointer decoded for accelerated rendering, as the local cursor takes it.
+fn cursor_image(pointer: &ironrdp_graphics::pointer::DecodedPointer) -> RemoteCursor {
+    let (width, height) = (u32::from(pointer.width), u32::from(pointer.height));
+    if width == 0 || height == 0 || pointer.bitmap_data.len() != (width * height * 4) as usize {
+        return RemoteCursor::Default;
+    }
+    RemoteCursor::Image(std::sync::Arc::new(CursorImage {
+        width,
+        height,
+        hotspot_x: u32::from(pointer.hotspot_x).min(width - 1),
+        hotspot_y: u32::from(pointer.hotspot_y).min(height - 1),
+        rgba: pointer.bitmap_data.clone(),
+    }))
 }
 
 /// The graphics pipeline's handler. [`ActiveStage`] composites what the pipeline decodes into
@@ -236,24 +265,43 @@ struct Pipeline;
 
 impl GraphicsPipelineHandler for Pipeline {}
 
-/// The color depth, connection type and desktop effects a [`Quality`] asks for.
-fn quality_settings(quality: Quality) -> (u32, ConnectionType, PerformanceFlags) {
-    match quality {
-        Quality::Best => (
-            32,
-            ConnectionType::Lan,
-            PerformanceFlags::ENABLE_FONT_SMOOTHING | PerformanceFlags::ENABLE_DESKTOP_COMPOSITION,
-        ),
-        Quality::Balanced => (32, ConnectionType::Lan, PerformanceFlags::default()),
-        Quality::Fast => (
-            16,
-            ConnectionType::BroadbandLow,
-            PerformanceFlags::DISABLE_WALLPAPER
-                | PerformanceFlags::DISABLE_FULLWINDOWDRAG
-                | PerformanceFlags::DISABLE_MENUANIMATIONS
-                | PerformanceFlags::DISABLE_THEMING
-                | PerformanceFlags::DISABLE_CURSOR_SHADOW,
-        ),
+/// The color depth, connection type and desktop effects an [`Experience`] asks for.
+fn experience_settings(experience: &Experience) -> (u32, ConnectionType, PerformanceFlags) {
+    let color_depth = match experience.color_depth {
+        15 | 16 | 24 | 32 => experience.color_depth,
+        _ => 32,
+    };
+    let connection = match experience.connection {
+        Connection::Modem => ConnectionType::Modem,
+        Connection::BroadbandLow => ConnectionType::BroadbandLow,
+        Connection::Satellite => ConnectionType::Satellite,
+        Connection::BroadbandHigh => ConnectionType::BroadbandHigh,
+        Connection::Wan => ConnectionType::Wan,
+        Connection::Lan => ConnectionType::Lan,
+        Connection::Autodetect => ConnectionType::Autodetect,
+    };
+    let effects = &experience.effects;
+    let mut flags = PerformanceFlags::empty();
+    for (allowed, flag) in [
+        (effects.wallpaper, PerformanceFlags::DISABLE_WALLPAPER),
+        (effects.full_window_drag, PerformanceFlags::DISABLE_FULLWINDOWDRAG),
+        (effects.menu_animations, PerformanceFlags::DISABLE_MENUANIMATIONS),
+        (effects.themes, PerformanceFlags::DISABLE_THEMING),
+        (effects.cursor_shadow, PerformanceFlags::DISABLE_CURSOR_SHADOW),
+    ] {
+        flags.set(flag, !allowed);
+    }
+    flags.set(PerformanceFlags::ENABLE_FONT_SMOOTHING, effects.font_smoothing);
+    flags.set(PerformanceFlags::ENABLE_DESKTOP_COMPOSITION, effects.desktop_composition);
+    (color_depth, connection, flags)
+}
+
+/// The device scale factor nearest `percent`: RDP knows only 100, 140 and 180.
+fn device_scale_factor(percent: u32) -> u32 {
+    match percent {
+        ..120 => 100,
+        120..160 => 140,
+        _ => 180,
     }
 }
 
@@ -327,6 +375,8 @@ struct Session {
     suppress_output_support: bool,
     /// A resize asked for before the display control channel was ready.
     pending_resize: Option<(u32, u32)>,
+    /// The interface scale the desktop keeps across resizes, if not the server's own.
+    scale_factor: Option<u32>,
     /// Set once the server has been asked to close, until this time.
     disconnecting: Option<Instant>,
 }
@@ -381,6 +431,7 @@ impl Session {
             refresh_rect_support,
             suppress_output_support,
             pending_resize: None,
+            scale_factor: None,
             disconnecting: None,
         }
     }
@@ -537,7 +588,7 @@ impl Session {
         let Some((width, height)) = self.pending_resize else {
             return Ok(());
         };
-        if let Some(frame) = self.stage.encode_resize(width, height, None, None) {
+        if let Some(frame) = self.stage.encode_resize(width, height, self.scale_factor, None) {
             self.pending_resize = None;
             self.write_frame(frame.map_err(session_error)?);
         }
@@ -589,6 +640,11 @@ impl Session {
                 ActiveStageOutput::ResponseFrame(frame) => self.write_frame(frame),
                 ActiveStageOutput::GraphicsUpdate(rect) => {
                     self.outbox.mark_dirty(Rect::from(&rect))
+                },
+                ActiveStageOutput::PointerDefault => self.outbox.cursor(RemoteCursor::Default),
+                ActiveStageOutput::PointerHidden => self.outbox.cursor(RemoteCursor::Hidden),
+                ActiveStageOutput::PointerBitmap(pointer) => {
+                    self.outbox.cursor(cursor_image(&pointer));
                 },
                 ActiveStageOutput::Terminate(reason) => {
                     return Ok(Some(self.termination_outcome(reason)));
@@ -689,6 +745,7 @@ fn session_error(error: ironrdp_session::SessionError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Quality;
 
     fn config(quality: Quality) -> Config {
         let mut config = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
@@ -721,6 +778,48 @@ mod tests {
                 | PerformanceFlags::DISABLE_THEMING
         ));
         assert!(flags.contains(PerformanceFlags::ENABLE_DESKTOP_COMPOSITION));
+    }
+
+    #[test]
+    fn a_chosen_experience_replaces_the_quality() {
+        let mut rdp = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
+        let mut experience = Quality::Best.experience();
+        experience.color_depth = 24;
+        experience.connection = Connection::Wan;
+        experience.effects.wallpaper = false;
+        rdp.experience = Some(experience);
+        let config = connector_config(&rdp).unwrap();
+        assert_eq!(config.bitmap.unwrap().color_depth, 24);
+        assert_eq!(config.connection_type, ConnectionType::Wan);
+        assert!(config.performance_flags.contains(PerformanceFlags::DISABLE_WALLPAPER));
+        assert!(config.performance_flags.contains(PerformanceFlags::ENABLE_FONT_SMOOTHING));
+    }
+
+    #[test]
+    fn the_session_options_reach_the_connector() {
+        let mut rdp = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
+        rdp.graphics_pipeline = false;
+        rdp.lossy = false;
+        rdp.compression = Some(Compression::Rdp61);
+        rdp.scale_factor = 150;
+        rdp.start_program = "notepad.exe".to_owned();
+        rdp.local_cursor = false;
+        let config = connector_config(&rdp).unwrap();
+        assert!(!config.support_dyn_vc_gfx_protocol);
+        assert!(!config.bitmap.unwrap().lossy_compression);
+        assert_eq!(config.compression_type, Some(CompressionType::Rdp61));
+        assert_eq!(config.desktop_scale_factor, 150);
+        assert_eq!(config.device_scale_factor, Some(140));
+        assert_eq!(config.alternate_shell, "notepad.exe");
+        assert!(config.pointer_software_rendering);
+    }
+
+    #[test]
+    fn the_default_scale_is_left_to_the_server() {
+        let config = config(Quality::default());
+        assert_eq!(config.desktop_scale_factor, 0);
+        assert_eq!(config.device_scale_factor, None);
+        assert!(!config.pointer_software_rendering);
     }
 
     #[test]

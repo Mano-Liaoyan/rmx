@@ -964,6 +964,7 @@ impl Actor {
             follow_size: settings.get(OPTION_RESIZE).is_none_or(|value| value != "keep"),
             rdp_security,
             rdp_quality: rdp_quality(&settings),
+            rdp: crate::rdp_options::load(&settings),
             vnc_colors: vnc_colors(&settings),
             rustdesk_server: settings.get(OPTION_RENDEZVOUS).cloned(),
             rustdesk_key: settings.get(OPTION_SERVER_KEY).cloned(),
@@ -1096,6 +1097,7 @@ impl Actor {
             if let Some(quality) = rdp_quality_option(draft.rdp_quality) {
                 settings.insert(OPTION_QUALITY.to_owned(), quality.to_owned());
             }
+            crate::rdp_options::save(&draft.rdp, draft.rdp_quality, &mut settings);
         }
         if draft.protocol == Protocol::RustDesk {
             if let Some(quality) = rdp_quality_option(draft.rdp_quality) {
@@ -1203,6 +1205,7 @@ impl Actor {
             _ => RdpSecurity::Negotiate,
         };
         draft.rdp_quality = rdp_quality(&settings);
+        draft.rdp = crate::rdp_options::load(&settings);
         draft.vnc_colors = vnc_colors(&settings);
         draft.ftps = settings.get(OPTION_FTPS).is_some_and(|value| value == "1");
         draft.domain = settings.get(OPTION_DOMAIN).cloned().unwrap_or_default();
@@ -1508,6 +1511,7 @@ fn rdp_quality_option(quality: RdpQuality) -> Option<&'static str> {
         RdpQuality::Best => Some("best"),
         RdpQuality::Balanced => None,
         RdpQuality::Fast => Some("fast"),
+        RdpQuality::Custom => Some("custom"),
     }
 }
 
@@ -1525,6 +1529,7 @@ fn rdp_quality(settings: &BTreeMap<String, String>) -> RdpQuality {
     match settings.get(OPTION_QUALITY).map(String::as_str) {
         Some("best") => RdpQuality::Best,
         Some("fast") => RdpQuality::Fast,
+        Some("custom") => RdpQuality::Custom,
         _ => RdpQuality::Balanced,
     }
 }
@@ -2014,7 +2019,7 @@ mod tests {
         let saved = |key: &str, value: Option<&str>| {
             value.map(|value| BTreeMap::from([(key.to_owned(), value.to_owned())])).unwrap_or_default()
         };
-        for quality in [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast] {
+        for quality in [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast, RdpQuality::Custom] {
             assert_eq!(rdp_quality(&saved(OPTION_QUALITY, rdp_quality_option(quality))), quality);
         }
         for colors in [VncColors::Full, VncColors::Bits16, VncColors::Bits8] {

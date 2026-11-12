@@ -19,6 +19,38 @@ pub struct FrameUpdate {
     pub pixels: Vec<u8>,
 }
 
+/// A pointer shape the remote desktop asks for, to show as the local cursor over its picture.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CursorImage {
+    pub width: u32,
+    pub height: u32,
+    /// The point of the image that is the pointer's position.
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+    /// Tightly packed RGBA8 rows, top to bottom, alpha not premultiplied.
+    pub rgba: Vec<u8>,
+}
+
+impl std::fmt::Debug for CursorImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CursorImage")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("hotspot", &(self.hotspot_x, self.hotspot_y))
+            .finish_non_exhaustive()
+    }
+}
+
+/// How the local cursor should look over the remote picture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteCursor {
+    /// The system's ordinary arrow.
+    Default,
+    /// No cursor at all, as when the remote hides it while typing.
+    Hidden,
+    Image(std::sync::Arc<CursorImage>),
+}
+
 /// Something a session reports to the interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DisplayEvent {
@@ -28,6 +60,9 @@ pub enum DisplayEvent {
     Update(FrameUpdate),
     /// The remote clipboard now holds this text.
     Clipboard(String),
+    /// The remote pointer changed shape. Sessions that leave the pointer in the picture never
+    /// send this.
+    Cursor(RemoteCursor),
     Bell,
     /// The session ended, with the reason if it failed.
     Closed(Option<String>),
