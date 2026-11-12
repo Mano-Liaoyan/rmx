@@ -88,6 +88,7 @@ impl Inbox {
 pub enum DisplayKind {
     Vnc,
     Rdp,
+    RustDesk,
 }
 
 /// What a session gives the pane once it is up.

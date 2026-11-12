@@ -38,6 +38,8 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.rmx-layout]
 opt-level = 3
+[profile.release.package.rmx-rustdesk]
+opt-level = 3
 [profile.release.package.alacritty_terminal]
 opt-level = 3
 [profile.release.package.vte]

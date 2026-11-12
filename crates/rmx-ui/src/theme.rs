@@ -63,7 +63,7 @@ pub struct Palette {
     /// The color of a floating surface's shadow.
     pub shadow: Color32,
     /// What tells the kinds of connection apart at a glance, in the order of [`Protocol::ALL`].
-    protocols: [Color32; 7],
+    protocols: [Color32; 8],
     /// In the order of [`Token`].
     syntax: [Color32; 7],
 }
@@ -118,6 +118,7 @@ pub const LIGHT: Palette = Palette {
         rgb(0x1596a8),
         rgb(0xd9772b),
         rgb(0x8a63d2),
+        rgb(0xc4502c),
         rgb(0xb5890d),
         rgb(0xc9557f),
     ],
@@ -159,6 +160,7 @@ pub const DARK: Palette = Palette {
         rgb(0x3fc1d4),
         rgb(0xf2994a),
         rgb(0xb18cf5),
+        rgb(0xf07a5a),
         rgb(0xe8c15a),
         rgb(0xeb8dac),
     ],

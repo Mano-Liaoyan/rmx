@@ -52,7 +52,7 @@ pub enum RdpSecurity {
     Tls,
 }
 
-/// How much of an RDP picture to trade for bandwidth.
+/// How much of an RDP or RustDesk picture to trade for bandwidth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RdpQuality {
     /// Full color and every desktop effect.
@@ -107,8 +107,12 @@ pub struct ConnectionDraft {
     pub follow_size: bool,
     /// RDP: how the server may authenticate.
     pub rdp_security: RdpSecurity,
-    /// RDP: how much picture to trade for bandwidth.
+    /// RDP and RustDesk: how much picture to trade for bandwidth.
     pub rdp_quality: RdpQuality,
+    /// RustDesk: the rendezvous server, `host[:port]`; empty for RustDesk's public one.
+    pub rustdesk_server: String,
+    /// RustDesk: the rendezvous server's public key; empty for the public server's.
+    pub rustdesk_key: String,
     /// VNC: how many colors to ask for.
     pub vnc_colors: VncColors,
     /// FTP: whether to upgrade with `AUTH TLS`.
@@ -152,6 +156,8 @@ impl ConnectionDraft {
             follow_size: true,
             rdp_security: RdpSecurity::default(),
             rdp_quality: RdpQuality::default(),
+            rustdesk_server: String::new(),
+            rustdesk_key: String::new(),
             vnc_colors: VncColors::default(),
             ftps: false,
         }
@@ -164,6 +170,14 @@ impl ConnectionDraft {
             _ => !self.host.is_empty() && self.port.parse::<u16>().is_ok(),
         }
     }
+}
+
+/// Whether a RustDesk host is an address to connect to directly, rather than a peer's ID.
+///
+/// IDs are digits and letters, so a dot or a colon means a host name or an IP address.
+pub fn is_rustdesk_address(host: &str) -> bool {
+    let host = host.trim();
+    host.contains('.') || host.contains(':')
 }
 
 /// A serial port this machine has.
@@ -493,10 +507,15 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
             choice("Stop bits", "cd-stop", &["1", "2"], &mut draft.stop_bits);
             choice("Flow control", "cd-flow", &["None", "XON/XOFF", "RTS/CTS"], &mut draft.flow_control);
         } else {
-            row(ui, "Host", |ui| {
+            let (label, hint) = if protocol == Protocol::RustDesk {
+                ("ID or host", "123 456 789, or an address")
+            } else {
+                ("Host", "")
+            };
+            row(ui, label, |ui| {
                 let width = ui.available_width() - 88.;
                 text_input(ui, Id::unique("cd-host"), &mut draft.host, InputOptions {
-                    hint: "",
+                    hint,
                     width: Some(width),
                     ..Default::default()
                 });
@@ -605,6 +624,35 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                     "Password",
                     &mut draft.password,
                     "",
+                    true,
+                );
+            },
+            Protocol::RustDesk => {
+                field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
+                display_options(ui, draft);
+                row(ui, "Quality", |ui| {
+                    let mut selected = draft.rdp_quality as usize;
+                    let options = ["Best", "Balanced", "Fast"];
+                    if segmented(ui, Id::unique("cd-quality"), &options, &mut selected).changed() {
+                        draft.rdp_quality =
+                            [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast][selected];
+                    }
+                });
+                section(ui);
+                let hint = "rs-ny.rustdesk.com";
+                field(ui, "cd-rd-server", "Server", &mut draft.rustdesk_server, hint, false);
+                let hint = "The public server's key";
+                field(ui, "cd-rd-key", "Server key", &mut draft.rustdesk_key, hint, false);
+                if is_rustdesk_address(&draft.host) {
+                    warning(ui, "By address the peer is reached directly, and its identity is not checked.");
+                }
+                section(ui);
+                field(
+                    ui,
+                    "cd-password",
+                    "Password",
+                    &mut draft.password,
+                    "Empty to ask the person at the peer",
                     true,
                 );
             },

@@ -1,0 +1,29 @@
+[package]
+name = "rmx-rustdesk"
+description = "A RustDesk protocol client producing display updates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rmx-display = { path = "../rmx-display" }
+
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+blake2 = { version = "0.11", default-features = false }
+bytes = { version = "1", default-features = false, features = ["std"] }
+crypto_box = { version = "0.9", default-features = false, features = ["salsa20", "std"] }
+crypto_secretbox = { version = "0.1", default-features = false, features = ["salsa20", "std"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+log = { version = "0.4", default-features = false }
+prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
+ring = "0.17"
+ruzstd = { version = "0.8", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
+vp9-mt = "0.1.1"
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

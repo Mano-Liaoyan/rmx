@@ -20,7 +20,6 @@
 
 mod clipboard;
 mod input;
-mod keymap;
 mod outbox;
 mod session;
 mod tls;

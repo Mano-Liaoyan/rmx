@@ -18,7 +18,7 @@ use tokio::time::{Instant, sleep_until};
 use vnc::client::VncClient;
 use vnc::{DesktopLayout, PixelFormat, Rect as VncRect, ResizeError, VncError, VncEvent, X11Event};
 
-use crate::coalesce::{InvalidRect, Outbox, Rect};
+use rmx_display::outbox::{InvalidRect, Outbox, Rect};
 use crate::input;
 
 /// Asks for changes at most this often, once the server is producing them.

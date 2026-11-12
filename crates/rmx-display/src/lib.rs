@@ -4,6 +4,9 @@
 //! updates to a texture, so the channels are bounded: a slow reader applies backpressure, and
 //! a session that falls behind should coalesce updates rather than queue them.
 
+pub mod keymap;
+pub mod outbox;
+
 use tokio::sync::mpsc;
 
 /// A rectangle of new pixels, as tightly packed BGRA8 rows, top to bottom.

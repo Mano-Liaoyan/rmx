@@ -1,23 +1,23 @@
-//! Keeps the latest picture and decides what the interface still has to be told.
+//! Keeps the latest picture of a remote desktop and decides what the interface still has to be told.
 //!
 //! Nothing here does I/O or waits, so the backpressure behaviour can be tested exhaustively.
 
 use std::mem;
 
-use rmx_display::{DisplayEvent, FrameUpdate};
+use crate::{DisplayEvent, FrameUpdate};
 
 const BYTES_PER_PIXEL: usize = 4;
 
 /// How many separate regions are remembered before the closest ones are merged.
-pub(crate) const MAX_DAMAGE_RECTS: usize = 32;
+pub const MAX_DAMAGE_RECTS: usize = 32;
 
 /// A region of the remote desktop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Rect {
-    pub(crate) x: u32,
-    pub(crate) y: u32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Rect {
@@ -70,7 +70,7 @@ impl Rect {
 /// [`MAX_DAMAGE_RECTS`] regions are returned. Merging may cover pixels that did not change,
 /// which is harmless because the pixels sent for a region are always read from the current
 /// picture. `new`, grown by what it absorbed, comes last.
-pub(crate) fn coalesce(mut pending: Vec<Rect>, new: Rect) -> Vec<Rect> {
+pub fn coalesce(mut pending: Vec<Rect>, new: Rect) -> Vec<Rect> {
     if new.is_empty() {
         return pending;
     }
@@ -119,14 +119,14 @@ fn cheapest_pair(rects: &[Rect]) -> (usize, usize) {
 
 /// A rectangle that does not fit the desktop, or pixels that do not fit their rectangle.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct InvalidRect;
+pub struct InvalidRect;
 
 /// The latest picture of the remote desktop, plus what the interface has not been told.
 ///
 /// The pending state has a fixed bound: a clipboard, a size, a bell and at most
 /// [`MAX_DAMAGE_RECTS`] regions.
 #[derive(Debug, Default)]
-pub(crate) struct Outbox {
+pub struct Outbox {
     width: u32,
     height: u32,
     picture: Vec<u8>,
@@ -141,7 +141,7 @@ impl Outbox {
     /// The desktop has this size now. Returns whether that is a change.
     ///
     /// Regions still owed refer to the old picture, so they are forgotten.
-    pub(crate) fn resize(&mut self, width: u32, height: u32) -> bool {
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
         if (width, height) == (self.width, self.height) {
             return false;
         }
@@ -155,7 +155,7 @@ impl Outbox {
     }
 
     /// Whether a new update could go straight to the interface without overtaking anything.
-    pub(crate) fn is_idle(&self) -> bool {
+    pub fn is_idle(&self) -> bool {
         self.damage.is_empty()
             && !self.resized
             && self.clipboard.is_none()
@@ -164,17 +164,17 @@ impl Outbox {
     }
 
     /// Whether pixels are still owed.
-    pub(crate) fn has_damage(&self) -> bool {
+    pub fn has_damage(&self) -> bool {
         !self.damage.is_empty()
     }
 
     /// Whether [`next_event`](Self::next_event) has something to return.
-    pub(crate) fn has_pending(&self) -> bool {
+    pub fn has_pending(&self) -> bool {
         !self.is_idle()
     }
 
     /// Paints `update` into the picture without marking it as owed.
-    pub(crate) fn paint(&mut self, update: &FrameUpdate) -> Result<(), InvalidRect> {
+    pub fn paint(&mut self, update: &FrameUpdate) -> Result<(), InvalidRect> {
         let rect = Rect { x: update.x, y: update.y, width: update.width, height: update.height };
         self.check(rect)?;
         if update.pixels.len() != byte_len(rect.width, rect.height) {
@@ -189,7 +189,7 @@ impl Outbox {
     }
 
     /// Copies a region of the picture onto another, as CopyRect asks.
-    pub(crate) fn copy(&mut self, dst: Rect, src: Rect) -> Result<(), InvalidRect> {
+    pub fn copy(&mut self, dst: Rect, src: Rect) -> Result<(), InvalidRect> {
         if (dst.width, dst.height) != (src.width, src.height) {
             return Err(InvalidRect);
         }
@@ -208,33 +208,33 @@ impl Outbox {
     }
 
     /// Marks `rect` as owed to the interface.
-    pub(crate) fn add_damage(&mut self, rect: Rect) {
+    pub fn add_damage(&mut self, rect: Rect) {
         self.damage = coalesce(mem::take(&mut self.damage), rect);
     }
 
     /// Remembers the newest remote clipboard; an older one not yet delivered is obsolete.
-    pub(crate) fn set_clipboard(&mut self, text: String) {
+    pub fn set_clipboard(&mut self, text: String) {
         self.clipboard = Some(text);
     }
 
-    pub(crate) fn ring_bell(&mut self) {
+    pub fn ring_bell(&mut self) {
         self.bell = true;
     }
 
     /// Ends the session. [`next_event`](Self::next_event) reports this after everything else.
-    pub(crate) fn close(&mut self, reason: Option<String>) {
+    pub fn close(&mut self, reason: Option<String>) {
         self.closed = Some(reason);
     }
 
     /// Forgets the pixels still owed, for a session the user has ended.
-    pub(crate) fn discard_damage(&mut self) {
+    pub fn discard_damage(&mut self) {
         self.damage.clear();
     }
 
     /// The next event for the interface, for when the channel has room.
     ///
     /// A size change goes before any update, so updates never reach a stale surface.
-    pub(crate) fn next_event(&mut self) -> Option<DisplayEvent> {
+    pub fn next_event(&mut self) -> Option<DisplayEvent> {
         if mem::take(&mut self.resized) {
             return Some(DisplayEvent::Resized { width: self.width, height: self.height });
         }
