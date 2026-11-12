@@ -43,7 +43,11 @@ impl PromptState {
     }
 
     /// A dialog with these contents.
-    pub fn new(title: impl Into<String>, detail: impl Into<String>, fields: Vec<PromptField>) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        detail: impl Into<String>,
+        fields: Vec<PromptField>,
+    ) -> Self {
         Self {
             title: title.into(),
             detail: detail.into(),
@@ -55,7 +59,10 @@ impl PromptState {
     }
 
     fn take_answers(&mut self) -> Vec<Sensitive> {
-        self.fields.iter_mut().map(|field| Sensitive::new(std::mem::take(&mut field.value))).collect()
+        self.fields
+            .iter_mut()
+            .map(|field| Sensitive::new(std::mem::take(&mut field.value)))
+            .collect()
     }
 }
 
@@ -83,10 +90,12 @@ fn prompt_body(ui: &mut Ui, id: Id, state: &mut PromptState) -> Option<UiAction>
             if !field.label.is_empty() {
                 ui.label(RichText::new(&field.label).color(p.foreground).size(TEXT_SM));
             }
-            let response = text_input(ui, id.with(index), &mut field.value, InputOptions {
-                password: field.secret,
-                ..Default::default()
-            });
+            let response = text_input(
+                ui,
+                id.with(index),
+                &mut field.value,
+                InputOptions { password: field.secret, ..Default::default() },
+            );
             if focus && index == 0 {
                 response.request_focus();
             }

@@ -14,11 +14,10 @@ use std::{mem, ptr};
 use log::{info, warn};
 use rmx_display::FrameUpdate;
 
-use crate::SizeInfo;
-use crate::gl;
 use crate::gl::types::*;
 use crate::renderer::shader::{ShaderProgram, ShaderVersion};
 use crate::renderer::{Error, Frame, GlExtensions, Renderer};
+use crate::{SizeInfo, gl};
 
 mod dirty;
 mod layout;
@@ -422,7 +421,8 @@ impl RemoteTexture {
         self.id
     }
 
-    /// Hand over new pixels. Cheap: the pixels move and are copied elsewhere, or at [`Self::upload`].
+    /// Hand over new pixels. Cheap: the pixels move and are copied elsewhere, or at
+    /// [`Self::upload`].
     pub fn submit(&mut self, update: FrameUpdate) {
         match &mut self.transport {
             Transport::Persistent(persistent) => persistent.stream.submit(update),

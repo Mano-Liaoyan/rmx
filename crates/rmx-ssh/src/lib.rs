@@ -6,20 +6,18 @@
 //! through two async traits, so the UI and the database can supply the answers
 //! without this crate depending on them:
 //!
-//! * [`Prompter`] asks for passwords, key passphrases and keyboard-interactive
-//!   responses.
-//! * [`HostKeyVerifier`] decides whether a server's host key is trusted.
-//!   [`KnownHostsVerifier`] implements it on an OpenSSH `known_hosts` file.
+//! * [`Prompter`] asks for passwords, key passphrases and keyboard-interactive responses.
+//! * [`HostKeyVerifier`] decides whether a server's host key is trusted. [`KnownHostsVerifier`]
+//!   implements it on an OpenSSH `known_hosts` file.
 //!
 //! From an [`SshClient`]:
 //!
-//! * [`SshClient::open_shell`] returns a [`ShellReader`] and [`ShellWriter`],
-//!   bounded byte streams for an async terminal driver.
-//! * [`SshClient::open_direct_tcpip`] and [`SshClient::open_sftp`] return an
-//!   [`SshStream`] implementing `AsyncRead + AsyncWrite`, which is how other
-//!   protocols are tunnelled.
-//! * [`SshClient::forward_local`], [`SshClient::forward_remote`] and
-//!   [`SshClient::forward_dynamic`] start port forwards.
+//! * [`SshClient::open_shell`] returns a [`ShellReader`] and [`ShellWriter`], bounded byte streams
+//!   for an async terminal driver.
+//! * [`SshClient::open_direct_tcpip`] and [`SshClient::open_sftp`] return an [`SshStream`]
+//!   implementing `AsyncRead + AsyncWrite`, which is how other protocols are tunnelled.
+//! * [`SshClient::forward_local`], [`SshClient::forward_remote`] and [`SshClient::forward_dynamic`]
+//!   start port forwards.
 //! * [`SshClient::closed`] reports why the connection ended.
 //!
 //! [`ssh_config`] parses `~/.ssh/config` for import.

@@ -93,7 +93,9 @@ pub enum Error {
 fn kind_mismatch(local: VaultKind) -> &'static str {
     match local {
         VaultKind::Plain => "Not synced: the remote copy is encrypted, this database is not",
-        VaultKind::Encrypted => "Not synced: the remote copy is unencrypted, this database is encrypted",
+        VaultKind::Encrypted => {
+            "Not synced: the remote copy is unencrypted, this database is encrypted"
+        },
     }
 }
 

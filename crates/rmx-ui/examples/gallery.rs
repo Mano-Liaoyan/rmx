@@ -27,11 +27,11 @@ use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurfac
 use rmx_ui::theme::{self, CONTROL_HEIGHT, PANE_BAR_HEIGHT, SIDEBAR_WIDTH, STRIP_HEIGHT};
 use rmx_ui::widgets::{
     ButtonKind, ContextMenu, HostKeyStatus, HostKeyView, InputOptions, MenuItem,
-    NewConnectionState, NodeKind, PaneBarView, PaneStatus, Reveal, SessionDot, QuickItem, QuickOpenState,
-    TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState, VaultState, VaultView,
-    button, button_full, context_menu, host_key_body, host_key_dialog, icon_button,
-    new_connection_body, new_connection_dialog, pane_bar, quick_open, quick_open_body,
-    segmented, sidebar, text_input, title_bar, vault_unlock,
+    NewConnectionState, NodeKind, PaneBarView, PaneStatus, QuickItem, QuickOpenState, Reveal,
+    SessionDot, TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState, VaultState,
+    VaultView, button, button_full, context_menu, host_key_body, host_key_dialog, icon_button,
+    new_connection_body, new_connection_dialog, pane_bar, quick_open, quick_open_body, segmented,
+    sidebar, text_input, title_bar, vault_unlock,
 };
 use rmx_ui::{Chrome, NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction, icons};
 use winit::application::ApplicationHandler;
@@ -249,7 +249,12 @@ impl Gallery {
             })
             .collect();
         let bar = Rect::from_min_size(screen.min, vec2(screen.width(), STRIP_HEIGHT));
-        let view = TitleBarView { tabs: &tabs, maximized: false, sidebar_open: true, sidebar_width: SIDEBAR_WIDTH };
+        let view = TitleBarView {
+            tabs: &tabs,
+            maximized: false,
+            sidebar_open: true,
+            sidebar_width: SIDEBAR_WIDTH,
+        };
         let action = title_bar(ui, bar, &view, &mut self.tabs, now);
         self.note(action);
 
@@ -331,22 +336,26 @@ impl Gallery {
         });
         let width = Some(320.);
         ui.horizontal(|ui| {
-            text_input(ui, Id::unique("g-a"), &mut self.search, InputOptions {
-                hint: "Empty input",
-                width,
-                ..Default::default()
-            });
-            text_input(ui, Id::unique("g-b"), &mut self.filled, InputOptions {
-                width,
-                ..Default::default()
-            });
+            text_input(
+                ui,
+                Id::unique("g-a"),
+                &mut self.search,
+                InputOptions { hint: "Empty input", width, ..Default::default() },
+            );
+            text_input(
+                ui,
+                Id::unique("g-b"),
+                &mut self.filled,
+                InputOptions { width, ..Default::default() },
+            );
         });
         ui.horizontal(|ui| {
-            text_input(ui, Id::unique("g-c"), &mut self.password, InputOptions {
-                password: true,
-                width,
-                ..Default::default()
-            });
+            text_input(
+                ui,
+                Id::unique("g-c"),
+                &mut self.password,
+                InputOptions { password: true, width, ..Default::default() },
+            );
             ui.allocate_ui(vec2(320., CONTROL_HEIGHT), |ui| {
                 segmented(
                     ui,
@@ -411,13 +420,14 @@ fn quick_items() -> Vec<QuickItem<'static>> {
 }
 
 fn menu_items() -> Vec<MenuItem> {
-    let entry = |glyph, label: &str, shortcut: Option<&str>, command: u64, danger| MenuItem::Action {
-        glyph: Some(glyph),
-        label: label.into(),
-        shortcut: shortcut.map(Into::into),
-        action: UiAction::TreeOpen(NodeId(command)),
-        danger,
-    };
+    let entry =
+        |glyph, label: &str, shortcut: Option<&str>, command: u64, danger| MenuItem::Action {
+            glyph: Some(glyph),
+            label: label.into(),
+            shortcut: shortcut.map(Into::into),
+            action: UiAction::TreeOpen(NodeId(command)),
+            danger,
+        };
     vec![
         entry(icons::SQUARE_TERMINAL, "Connect", Some("Enter"), 1, false),
         entry(icons::COPY, "Duplicate", None, 2, false),

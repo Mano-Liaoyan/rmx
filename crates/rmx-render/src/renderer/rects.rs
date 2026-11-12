@@ -7,12 +7,9 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::cell::Flags;
 
-use crate::RenderableCell;
-use crate::Rgb;
-use crate::SizeInfo;
 use crate::gl::types::*;
 use crate::renderer::shader::{ShaderError, ShaderProgram, ShaderVersion};
-use crate::{gl, renderer};
+use crate::{RenderableCell, Rgb, SizeInfo, gl, renderer};
 
 // tabbed: rects of panes drawn in a frame.
 mod tabbed;

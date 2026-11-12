@@ -40,7 +40,10 @@ pub fn overlay_rect(area: Rect, overlay: &PaneOverlay<'_>) -> Rect {
     } else {
         let height = BANNER_HEIGHT.min(area.height());
         let width = (area.width() - 2. * MARGIN).max(1.);
-        Rect::from_min_size(pos2(area.left() + MARGIN, area.bottom() - height - MARGIN), vec2(width, height))
+        Rect::from_min_size(
+            pos2(area.left() + MARGIN, area.bottom() - height - MARGIN),
+            vec2(width, height),
+        )
     }
 }
 

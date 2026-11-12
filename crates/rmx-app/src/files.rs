@@ -4,16 +4,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use rmx_layout::PaneId;
 use bytes::Bytes;
+use rmx_layout::PaneId;
 use rmx_transfer::{
-    DirStream, Entry, EntryKind, Error as FsError, ListOptions, LocalFs, OverwritePolicy, ProgressUpdate,
-    QueueConfig, RemoteFs, TransferId, TransferQueue, TransferRequest, TransferState, WriteStart, read_all,
+    DirStream, Entry, EntryKind, Error as FsError, ListOptions, LocalFs, OverwritePolicy,
+    ProgressUpdate, QueueConfig, RemoteFs, TransferId, TransferQueue, TransferRequest,
+    TransferState, WriteStart, read_all,
 };
 #[cfg(feature = "bench")]
 use rmx_ui::egui;
 use rmx_ui::widgets::{
-    DiffView, FileColumnView, Highlight, FileKind, FileRow, FilesBody, FilesView, TextView, TransferRow, TransferRowState,
+    DiffView, FileColumnView, FileKind, FileRow, FilesBody, FilesView, Highlight, TextView,
+    TransferRow, TransferRowState,
 };
 use rmx_ui::{FileSide, FilesAction};
 use tokio::runtime::Handle;
@@ -62,22 +64,57 @@ pub struct FilesLink {
 
 /// News from the tasks behind a file pane.
 pub enum FilesEvent {
-    Listing { side: FileSide, generation: u64, rows: Arc<Vec<FileRow>>, done: bool },
-    ListingFailed { side: FileSide, generation: u64, reason: String },
+    Listing {
+        side: FileSide,
+        generation: u64,
+        rows: Arc<Vec<FileRow>>,
+        done: bool,
+    },
+    ListingFailed {
+        side: FileSide,
+        generation: u64,
+        reason: String,
+    },
     /// A link turned out to lead to a directory, or not.
-    Link { side: FileSide, path: String, directory: bool },
+    Link {
+        side: FileSide,
+        path: String,
+        directory: bool,
+    },
     Progress(Box<ProgressUpdate>),
     /// Making, renaming or removing something in the column is over.
-    Changed { side: FileSide, directory: String, error: Option<String> },
+    Changed {
+        side: FileSide,
+        directory: String,
+        error: Option<String>,
+    },
     /// A file asked for has been read, or could not be.
-    Opened { token: u64, side: FileSide, result: Result<Box<TextFile>, String> },
+    Opened {
+        token: u64,
+        side: FileSide,
+        result: Result<Box<TextFile>, String>,
+    },
     /// Two texts asked for have been compared, or could not be.
-    Compared { token: u64, side: FileSide, result: Result<Box<Compared>, String> },
-    Saved { document: u64, result: Result<Saved, String> },
+    Compared {
+        token: u64,
+        side: FileSide,
+        result: Result<Box<Compared>, String>,
+    },
+    Saved {
+        document: u64,
+        result: Result<Saved, String>,
+    },
     /// The colors of the open file, as of the latest request.
-    Highlighted { document: u64, token: u64, highlight: Option<Highlight> },
+    Highlighted {
+        document: u64,
+        token: u64,
+        highlight: Option<Highlight>,
+    },
     /// The file has changed since it was read: this is what was to be written over it.
-    SaveConflict { document: u64, text: String },
+    SaveConflict {
+        document: u64,
+        text: String,
+    },
 }
 
 /// What tells whether a file has changed since it was last looked at.
@@ -159,7 +196,9 @@ fn encode(text: &str, crlf: bool, bom: bool) -> Vec<u8> {
 /// Where each line of `text` starts.
 fn line_starts(text: &str) -> Vec<u32> {
     let mut starts = vec![0];
-    starts.extend(text.bytes().enumerate().filter(|(_, byte)| *byte == b'\n').map(|(at, _)| at as u32 + 1));
+    starts.extend(
+        text.bytes().enumerate().filter(|(_, byte)| *byte == b'\n').map(|(at, _)| at as u32 + 1),
+    );
     if text.ends_with('\n') {
         starts.pop();
     }
@@ -167,7 +206,12 @@ fn line_starts(text: &str) -> Vec<u32> {
 }
 
 /// Read the text file at `path`, off the main thread.
-async fn read_text(fs: Arc<dyn RemoteFs>, side: FileSide, path: String, title: String) -> Result<Box<TextFile>, String> {
+async fn read_text(
+    fs: Arc<dyn RemoteFs>,
+    side: FileSide,
+    path: String,
+    title: String,
+) -> Result<Box<TextFile>, String> {
     let entry = fs.stat(&path).await.map_err(|err| err.to_string())?;
     if entry.kind != EntryKind::File {
         return Err(NOT_TEXT.to_owned());
@@ -175,7 +219,9 @@ async fn read_text(fs: Arc<dyn RemoteFs>, side: FileSide, path: String, title: S
     if entry.size.is_some_and(|size| size > OPEN_LIMIT) {
         return Err("This file is too large to open here".to_owned());
     }
-    let data = read_all(fs.as_ref(), &path, 0, Some(OPEN_LIMIT + 1)).await.map_err(|err| err.to_string())?;
+    let data = read_all(fs.as_ref(), &path, 0, Some(OPEN_LIMIT + 1))
+        .await
+        .map_err(|err| err.to_string())?;
     if data.len() as u64 > OPEN_LIMIT {
         return Err("This file is too large to open here".to_owned());
     }
@@ -205,11 +251,20 @@ async fn read_text(fs: Arc<dyn RemoteFs>, side: FileSide, path: String, title: S
 }
 
 /// Line two texts up, off the main thread.
-async fn compared(names: [String; 2], titles: [String; 2], texts: [Arc<str>; 2], same_bytes: bool) -> Result<Box<Compared>, String> {
+async fn compared(
+    names: [String; 2],
+    titles: [String; 2],
+    texts: [Arc<str>; 2],
+    same_bytes: bool,
+) -> Result<Box<Compared>, String> {
     tokio::task::spawn_blocking(move || {
         let highlights = [highlight(&names[0], &texts[0]), highlight(&names[1], &texts[1])];
         let found = compare(&texts[0], &texts[1]);
-        let note = found.changes.is_empty().then_some(if same_bytes { "Identical" } else { "Only line endings differ" });
+        let note = found.changes.is_empty().then_some(if same_bytes {
+            "Identical"
+        } else {
+            "Only line endings differ"
+        });
         Box::new(Compared { id: next_body(), titles, texts, found, note, highlights })
     })
     .await
@@ -218,7 +273,8 @@ async fn compared(names: [String; 2], titles: [String; 2], texts: [Arc<str>; 2],
 
 /// Write `data` over the file at `path`.
 async fn write_file(fs: &dyn RemoteFs, path: &str, data: Vec<u8>) -> Result<(), String> {
-    let mut writer = fs.write_range(path, WriteStart::Truncate).await.map_err(|err| err.to_string())?;
+    let mut writer =
+        fs.write_range(path, WriteStart::Truncate).await.map_err(|err| err.to_string())?;
     let data = Bytes::from(data);
     let mut at = 0;
     while at < data.len() {
@@ -288,7 +344,11 @@ fn row_of(entry: Entry) -> FileRow {
 fn sort_rows(rows: &mut [FileRow]) {
     // Stable: what is already in order is a single run for it to merge the new batch into.
     rows.sort_by(|a, b| {
-        (a.kind != FileKind::Dir, &a.sort, &a.name).cmp(&(b.kind != FileKind::Dir, &b.sort, &b.name))
+        (a.kind != FileKind::Dir, &a.sort, &a.name).cmp(&(
+            b.kind != FileKind::Dir,
+            &b.sort,
+            &b.name,
+        ))
     });
 }
 
@@ -303,7 +363,11 @@ fn parent(path: &str) -> String {
 
 /// `directory`, then `name`, with one slash between them.
 fn join(directory: &str, name: &str) -> String {
-    if directory.ends_with('/') { format!("{directory}{name}") } else { format!("{directory}/{name}") }
+    if directory.ends_with('/') {
+        format!("{directory}{name}")
+    } else {
+        format!("{directory}/{name}")
+    }
 }
 
 /// What to change in a directory of a column.
@@ -329,12 +393,19 @@ async fn remove_folder(fs: &dyn RemoteFs, path: String) -> Result<(), String> {
 }
 
 /// Make the `change` in `directory`, off the main thread.
-async fn apply_change(fs: Arc<dyn RemoteFs>, directory: &str, change: Change) -> Result<(), String> {
+async fn apply_change(
+    fs: Arc<dyn RemoteFs>,
+    directory: &str,
+    change: Change,
+) -> Result<(), String> {
     match change {
-        Change::NewFolder(name) => fs.mkdir(&join(directory, &name)).await.map_err(|err| err.to_string()),
-        Change::Rename(from, to) => {
-            fs.rename(&join(directory, &from), &join(directory, &to)).await.map_err(|err| err.to_string())
+        Change::NewFolder(name) => {
+            fs.mkdir(&join(directory, &name)).await.map_err(|err| err.to_string())
         },
+        Change::Rename(from, to) => fs
+            .rename(&join(directory, &from), &join(directory, &to))
+            .await
+            .map_err(|err| err.to_string()),
         Change::Remove(names) => {
             for (name, kind) in names {
                 let path = join(directory, &name);
@@ -436,10 +507,7 @@ impl FilesPane {
             }
         });
         let mut files = Self {
-            columns: [
-                column("Local".to_owned(), local_start, local),
-                column(title, start, fs),
-            ],
+            columns: [column("Local".to_owned(), local_start, local), column(title, start, fs)],
             queue,
             transfers: Vec::new(),
             next_number: 0,
@@ -539,7 +607,9 @@ impl FilesPane {
             FilesAction::Delete { side, names } => {
                 let rows = self.rows(side);
                 let kinds = names.iter().filter_map(|name| {
-                    rows.iter().find(|row| row.name == *name).map(|row| (name.to_string(), row.kind))
+                    rows.iter()
+                        .find(|row| row.name == *name)
+                        .map(|row| (name.to_string(), row.kind))
                 });
                 let names = kinds.collect();
                 self.change(side, Change::Remove(names));
@@ -622,7 +692,11 @@ impl FilesPane {
         let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
         self.runtime.spawn_blocking(move || {
             let highlight = highlight(&name, &text);
-            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Highlighted { document, token, highlight }));
+            let _ = proxy.send_event(AppEvent::Files(
+                pane,
+                tab,
+                FilesEvent::Highlighted { document, token, highlight },
+            ));
         });
     }
 
@@ -652,16 +726,24 @@ impl FilesPane {
         let fs = self.column(side).fs.clone();
         self.runtime.spawn(async move {
             let result = read_text(fs, side, path, title).await;
-            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Opened { token, side, result }));
+            let _ = proxy.send_event(AppEvent::Files(
+                pane,
+                tab,
+                FilesEvent::Opened { token, side, result },
+            ));
         });
     }
 
     /// Start comparing a file of each column.
     fn compare_files(&mut self, local: &str, remote: &str) {
         let token = next_body();
-        self.opening = Some((token, if local == remote { local.to_owned() } else { format!("{local}, {remote}") }));
+        self.opening = Some((
+            token,
+            if local == remote { local.to_owned() } else { format!("{local}, {remote}") },
+        ));
         let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
-        let path = |side| join(self.path(side), if side == FileSide::Local { local } else { remote });
+        let path =
+            |side| join(self.path(side), if side == FileSide::Local { local } else { remote });
         let (left_path, right_path) = (path(FileSide::Local), path(FileSide::Remote));
         let titles = [
             format!("{}  {left_path}", self.column(FileSide::Local).title),
@@ -678,12 +760,17 @@ impl FilesPane {
                 (Err(reason), _) => (FileSide::Local, Err(reason)),
                 (_, Err(reason)) => (FileSide::Remote, Err(reason)),
                 (Ok(left), Ok(right)) => {
-                    let same = left.text == right.text && left.crlf == right.crlf && left.bom == right.bom;
+                    let same =
+                        left.text == right.text && left.crlf == right.crlf && left.bom == right.bom;
                     let names = [left.path.clone(), right.path.clone()];
                     (FileSide::Remote, compared(names, titles, [left.text, right.text], same).await)
                 },
             };
-            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Compared { token, side, result }));
+            let _ = proxy.send_event(AppEvent::Files(
+                pane,
+                tab,
+                FilesEvent::Compared { token, side, result },
+            ));
         });
     }
 
@@ -699,17 +786,25 @@ impl FilesPane {
         let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
         self.runtime.spawn(async move {
             let result = compared(names, titles, [saved, text.into()], same).await;
-            let _ = proxy.send_event(AppEvent::Files(pane, tab, FilesEvent::Compared { token, side, result }));
+            let _ = proxy.send_event(AppEvent::Files(
+                pane,
+                tab,
+                FilesEvent::Compared { token, side, result },
+            ));
         });
     }
 
     /// Write `text` to the open file. Unless `force`, not over a change someone else made.
     fn save(&mut self, text: String, force: bool) {
         let (pane, tab, proxy) = (self.pane, self.generation, self.proxy.clone());
-        let Some(file) = self.document.as_mut().filter(|file| !file.saving && file.lines.is_none()) else { return };
+        let Some(file) = self.document.as_mut().filter(|file| !file.saving && file.lines.is_none())
+        else {
+            return;
+        };
         file.saving = true;
         file.error = None;
-        let (document, path, stamp, crlf, bom) = (file.id, file.path.clone(), file.stamp, file.crlf, file.bom);
+        let (document, path, stamp, crlf, bom) =
+            (file.id, file.path.clone(), file.stamp, file.crlf, file.bom);
         let side = file.side;
         let fs = self.columns[side.index()].fs.clone();
         self.runtime.spawn(async move {
@@ -897,15 +992,15 @@ impl FilesPane {
             },
             FilesEvent::Progress(update) => {
                 for progress in &update.transfers {
-                    let Some(transfer) = self.transfers.iter_mut().find(|t| t.id == progress.id) else {
+                    let Some(transfer) = self.transfers.iter_mut().find(|t| t.id == progress.id)
+                    else {
                         continue;
                     };
                     let done = progress.bytes_done;
                     let total = progress.bytes_total;
-                    transfer.row.fraction =
-                        (total > 0).then(|| (done as f64 / total as f64) as f32).or(
-                            (progress.state == TransferState::Done).then_some(1.),
-                        );
+                    transfer.row.fraction = (total > 0)
+                        .then(|| (done as f64 / total as f64) as f32)
+                        .or((progress.state == TransferState::Done).then_some(1.));
                     let (state, word): (TransferRowState, String) = match &progress.state {
                         TransferState::Queued => (TransferRowState::Queued, "Queued".to_owned()),
                         TransferState::Running => (TransferRowState::Running, "Copying".to_owned()),
@@ -913,7 +1008,9 @@ impl FilesPane {
                         TransferState::Failed(reason) => {
                             (TransferRowState::Failed, format!("Failed: {reason}"))
                         },
-                        TransferState::Cancelled => (TransferRowState::Cancelled, "Cancelled".to_owned()),
+                        TransferState::Cancelled => {
+                            (TransferRowState::Cancelled, "Cancelled".to_owned())
+                        },
                     };
                     transfer.row.state = state;
                     transfer.row.detail = if progress.files_total > 1 {
@@ -1090,7 +1187,8 @@ mod tests {
 
     #[test]
     fn line_endings_and_a_byte_order_mark_come_back_as_they_were() {
-        for original in ["a\nb\n", "a\r\nb\r\n", "\u{FEFF}a\r\nb", "mixed\r\nends\n", "no end", ""] {
+        for original in ["a\nb\n", "a\r\nb\r\n", "\u{FEFF}a\r\nb", "mixed\r\nends\n", "no end", ""]
+        {
             let (text, crlf, bom) = decode(original.as_bytes().to_vec()).unwrap();
             assert_eq!(encode(&text, crlf, bom), original.as_bytes(), "{original:?}");
         }
@@ -1105,7 +1203,11 @@ mod tests {
     #[test]
     fn what_is_not_text_is_refused() {
         assert_eq!(decode(b"ELF\0binary".to_vec()), None);
-        assert_eq!(decode(vec![0xC4, 0xE3, 0xBA, 0xC3]), None, "GBK, which would not survive a save");
+        assert_eq!(
+            decode(vec![0xC4, 0xE3, 0xBA, 0xC3]),
+            None,
+            "GBK, which would not survive a save"
+        );
         assert!(decode("中文".as_bytes().to_vec()).is_some());
     }
 

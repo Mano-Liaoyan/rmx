@@ -117,7 +117,8 @@ impl Running {
             // The last window stays with nothing in it, which is how it comes back. But only
             // once there has been something in it: before that, nothing is what it starts with.
             .filter(|win| {
-                !win.workspace.tabs().is_empty() || (self.windows.len() == 1 && core.opened_first_tab)
+                !win.workspace.tabs().is_empty()
+                    || (self.windows.len() == 1 && core.opened_first_tab)
             })
             .map(|win| {
                 let (width, height) = win.logical_size();
@@ -273,7 +274,9 @@ impl Running {
                 self.core.ui.gate = Gate::from(&phase);
                 if let store::Phase::Unlocked { unencrypted, key_file } = &phase {
                     self.core.ui.unencrypted = *unencrypted;
-                    self.core.ui.vault_key_file = key_file.as_ref().map_or_else(String::new, |path| path.display().to_string());
+                    self.core.ui.vault_key_file = key_file
+                        .as_ref()
+                        .map_or_else(String::new, |path| path.display().to_string());
                 }
                 self.core.ui.asking_hidden =
                     self.core.ui.locked() && matches!(self.core.answer, Some((_, Some(_))));
@@ -329,7 +332,8 @@ impl Running {
             },
             VaultEvent::Vaults { current, others } => {
                 self.core.ui.vault_path = current.display().to_string();
-                self.core.ui.vault_others = others.iter().map(|path| path.display().to_string()).collect();
+                self.core.ui.vault_others =
+                    others.iter().map(|path| path.display().to_string()).collect();
             },
             VaultEvent::Notice(text, bad) => self.core.ui.status_note = Some((text, bad)),
             VaultEvent::PasswordOutcome(title, detail, bad) => {

@@ -230,11 +230,14 @@ pub fn connection_tree(
     let focused = ui.memory(|m| m.has_focus(id));
     if focused {
         ui.memory_mut(|m| {
-            m.set_focus_lock_filter(id, egui::EventFilter {
-                vertical_arrows: true,
-                horizontal_arrows: true,
-                ..Default::default()
-            });
+            m.set_focus_lock_filter(
+                id,
+                egui::EventFilter {
+                    vertical_arrows: true,
+                    horizontal_arrows: true,
+                    ..Default::default()
+                },
+            );
         });
         action = handle_keys(ui, tree, state);
     }
@@ -301,8 +304,9 @@ pub fn connection_tree(
             let mut button = |ui: &mut Ui, salt: &str, glyph: char, tip: &str| {
                 right -= 22.;
                 let cell = Rect::from_center_size(pos2(right + 11., center), Vec2::splat(22.));
-                let response =
-                    ui.interact(cell, id.with((node.id.0, salt)), Sense::click()).on_hover_text(tip);
+                let response = ui
+                    .interact(cell, id.with((node.id.0, salt)), Sense::click())
+                    .on_hover_text(tip);
                 paint_icon_button(ui, cell, glyph, 13., &response);
                 response.clicked()
             };
@@ -547,7 +551,8 @@ pub fn sidebar(
     let p = palette(ui);
     ui.painter().rect_filled(rect, 0., p.sidebar);
 
-    let switcher = Rect::from_min_size(rect.min + vec2(8., 8.), vec2(rect.width() - 16., CONTROL_HEIGHT));
+    let switcher =
+        Rect::from_min_size(rect.min + vec2(8., 8.), vec2(rect.width() - 16., CONTROL_HEIGHT));
     let opened = ui.interact(switcher, id.with("vault"), Sense::click());
     if opened.hovered() {
         ui.painter().rect_filled(switcher, CornerRadius::same(RADIUS_SM), p.hover);
@@ -555,12 +560,34 @@ pub fn sidebar(
     let y = switcher.center().y;
     let mark = Rect::from_center_size(pos2(switcher.left() + 16., y), Vec2::splat(18.));
     ui.painter().rect_filled(mark, CornerRadius::same(RADIUS_SM), p.brand);
-    let initial: String = vault.chars().next().map(|first| first.to_uppercase().collect()).unwrap_or_default();
-    ui.painter().text(mark.center(), egui::Align2::CENTER_CENTER, initial, fonts::medium(TEXT_XS), p.brand_fg);
+    let initial: String =
+        vault.chars().next().map(|first| first.to_uppercase().collect()).unwrap_or_default();
+    ui.painter().text(
+        mark.center(),
+        egui::Align2::CENTER_CENTER,
+        initial,
+        fonts::medium(TEXT_XS),
+        p.brand_fg,
+    );
     let room = switcher.width() - 56.;
-    elided_at(ui.painter(), switcher.left() + 32., y, vault, fonts::medium(TEXT_SM), p.foreground, room);
-    crate::draw::icon(ui.painter(), pos2(switcher.right() - 14., y), icons::CHEVRON_DOWN, 13., p.muted_fg);
-    let vault_menu = opened.clicked().then(|| UiAction::VaultMenu(switcher.left_bottom() + vec2(0., 4.)));
+    elided_at(
+        ui.painter(),
+        switcher.left() + 32.,
+        y,
+        vault,
+        fonts::medium(TEXT_SM),
+        p.foreground,
+        room,
+    );
+    crate::draw::icon(
+        ui.painter(),
+        pos2(switcher.right() - 14., y),
+        icons::CHEVRON_DOWN,
+        13.,
+        p.muted_fg,
+    );
+    let vault_menu =
+        opened.clicked().then(|| UiAction::VaultMenu(switcher.left_bottom() + vec2(0., 4.)));
 
     let header = Rect::from_min_size(
         pos2(switcher.left(), switcher.bottom() + 6.),
@@ -568,11 +595,16 @@ pub fn sidebar(
     );
     let input = header.with_max_x(header.right() - CONTROL_HEIGHT - 6.);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(input));
-    let response = text_input(&mut child, id.with("search"), &mut state.search, InputOptions {
-        hint: "Search or user@host",
-        glyph: Some(icons::SEARCH),
-        ..Default::default()
-    });
+    let response = text_input(
+        &mut child,
+        id.with("search"),
+        &mut state.search,
+        InputOptions {
+            hint: "Search or user@host",
+            glyph: Some(icons::SEARCH),
+            ..Default::default()
+        },
+    );
     if response.changed() {
         tree.set_query(&state.search);
         state.scroll = 0.;

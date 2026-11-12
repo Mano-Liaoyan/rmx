@@ -7,7 +7,9 @@ use std::sync::OnceLock;
 
 use rmx_ui::theme::Token;
 use rmx_ui::widgets::{Highlight, HighlightLine, TokenRun};
-use syntect::parsing::{ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxDefinition, SyntaxReference, SyntaxSet};
+use syntect::parsing::{
+    ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxDefinition, SyntaxReference, SyntaxSet,
+};
 
 /// The longest text that is colored: it takes a while, and nobody reads that much of it.
 const TEXT_LIMIT: usize = 2 * 1024 * 1024;
@@ -100,10 +102,12 @@ fn alias(name: &str) -> Option<&'static str> {
 fn syntax_for<'a>(set: &'a SyntaxSet, name: &str, first_line: &str) -> Option<&'a SyntaxReference> {
     let base = name.rsplit('/').next().unwrap_or(name).trim_start_matches('.').to_lowercase();
     let extension = base.rsplit('.').next().unwrap_or(&base);
-    let found = [extension, base.as_str()].into_iter().find_map(|candidate| {
-        set.find_syntax_by_extension(alias(candidate).unwrap_or(candidate))
-    });
-    found.or_else(|| set.find_syntax_by_first_line(first_line)).filter(|syntax| syntax.name != "Plain Text")
+    let found = [extension, base.as_str()]
+        .into_iter()
+        .find_map(|candidate| set.find_syntax_by_extension(alias(candidate).unwrap_or(candidate)));
+    found
+        .or_else(|| set.find_syntax_by_first_line(first_line))
+        .filter(|syntax| syntax.name != "Plain Text")
 }
 
 /// Add the run from `start` to `end` of a line to `out`, which keeps runs of one token together.
@@ -153,21 +157,33 @@ mod tests {
     fn tokens(name: &str, text: &str) -> Vec<(String, Token)> {
         let found = highlight(name, text).expect("a language it knows");
         let line = found.line(0).expect("a line");
-        line.1.iter().map(|run| (text[run.start as usize..run.end as usize].to_owned(), run.token)).collect()
+        line.1
+            .iter()
+            .map(|run| (text[run.start as usize..run.end as usize].to_owned(), run.token))
+            .collect()
     }
 
     #[test]
     fn code_is_told_apart_by_what_it_is() {
         let found = tokens("a.py", "def f(): return 'x' # note\n");
         assert!(found.contains(&("def".to_owned(), Token::Keyword)), "{found:?}");
-        assert!(found.iter().any(|(text, token)| text.contains('x') && *token == Token::String), "{found:?}");
-        assert!(found.iter().any(|(text, token)| text.contains("note") && *token == Token::Comment), "{found:?}");
+        assert!(
+            found.iter().any(|(text, token)| text.contains('x') && *token == Token::String),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|(text, token)| text.contains("note") && *token == Token::Comment),
+            "{found:?}"
+        );
     }
 
     #[test]
     fn config_files_have_their_keys_and_comments_marked() {
         let found = tokens("Cargo.toml", "name = \"rmx\"\n");
-        assert!(found.iter().any(|(text, token)| text == "name" && *token == Token::Keyword), "{found:?}");
+        assert!(
+            found.iter().any(|(text, token)| text == "name" && *token == Token::Keyword),
+            "{found:?}"
+        );
         assert!(found.iter().any(|(_, token)| *token == Token::String), "{found:?}");
         assert_eq!(tokens(".env", "# secret\n")[0].1, Token::Comment);
     }

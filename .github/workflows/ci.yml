@@ -17,15 +17,25 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Formatting, with the stable rustfmt and the options in rustfmt.toml.
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable
+      - run: cargo fmt --all --check
+
   # Lints and every test that needs no container, on the platform the tests are written for.
   linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfontconfig1-dev libfreetype-dev libssl-dev
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfontconfig1-dev libfreetype-dev libssl-dev libwayland-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The bench build compiles code a normal build leaves out.
+      - run: cargo clippy --workspace --all-targets --locked --features rmx-app/bench -- -D warnings
       - run: cargo test --workspace --locked
 
   # That the application still compiles and links elsewhere.

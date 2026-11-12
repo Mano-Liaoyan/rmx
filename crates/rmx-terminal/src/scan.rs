@@ -220,10 +220,10 @@ mod tests {
 
     #[test]
     fn decodes_percent_escapes_and_empty_host() {
-        assert_eq!(scan(&["\x1b]7;file:///tmp/a%20b/%E4%B8%AD%zz\x07".as_bytes()]), [directory(
-            None,
-            "/tmp/a b/中%zz"
-        )]);
+        assert_eq!(
+            scan(&["\x1b]7;file:///tmp/a%20b/%E4%B8%AD%zz\x07".as_bytes()]),
+            [directory(None, "/tmp/a b/中%zz")]
+        );
     }
 
     #[test]

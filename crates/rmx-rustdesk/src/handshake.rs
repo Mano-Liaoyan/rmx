@@ -270,7 +270,8 @@ fn platform() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::{SignedId, login_response::Union as LoginUnion};
+    use crate::proto::SignedId;
+    use crate::proto::login_response::Union as LoginUnion;
     use ring::signature::{Ed25519KeyPair, KeyPair};
 
     /// A peer's half of the handshake, as `rustdesk/src/server.rs` does it.

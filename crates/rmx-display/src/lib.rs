@@ -56,7 +56,10 @@ pub enum RemoteCursor {
 pub enum DisplayEvent {
     /// The session is up, or the remote desktop changed size. All pixels are unknown until
     /// updates cover them.
-    Resized { width: u32, height: u32 },
+    Resized {
+        width: u32,
+        height: u32,
+    },
     Update(FrameUpdate),
     /// The remote clipboard now holds this text.
     Clipboard(String),
@@ -87,15 +90,30 @@ pub mod buttons {
 /// Something the interface sends to a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputEvent {
-    Key { key: Key, pressed: bool },
+    Key {
+        key: Key,
+        pressed: bool,
+    },
     /// The pointer is at `x`, `y` in remote pixels with these `buttons` held.
-    Pointer { x: u32, y: u32, buttons: u8 },
+    Pointer {
+        x: u32,
+        y: u32,
+        buttons: u8,
+    },
     /// Wheel notches at `x`, `y`; positive scrolls up or right.
-    Wheel { x: u32, y: u32, vertical: i16, horizontal: i16 },
+    Wheel {
+        x: u32,
+        y: u32,
+        vertical: i16,
+        horizontal: i16,
+    },
     /// The local clipboard now holds this text.
     Clipboard(String),
     /// Ask for the remote desktop to take this size, where the protocol can.
-    Resize { width: u32, height: u32 },
+    Resize {
+        width: u32,
+        height: u32,
+    },
     /// End the session.
     Disconnect,
 }

@@ -208,7 +208,8 @@ pub const TEXT_LG: f32 = 15.;
 pub const FLOAT_IN: f64 = 0.1;
 /// The scale a floating surface appears from.
 pub const FLOAT_SCALE: f32 = 0.95;
-/// How long a context menu takes to pop in from the pointer, in seconds, and the scale it grows from.
+/// How long a context menu takes to pop in from the pointer, in seconds, and the scale it grows
+/// from.
 pub const MENU_IN: f64 = 0.14;
 pub const MENU_SCALE: f32 = 0.92;
 /// How long tabs take to slide, in milliseconds.
@@ -274,7 +275,8 @@ fn style(mode: ThemeMode) -> Style {
         active: widget(p.accent, p.border, p.foreground),
         open: widget(p.accent, p.border, p.foreground),
     };
-    visuals.selection = Selection { bg_fill: p.brand.gamma_multiply(0.45), stroke: Stroke::new(1., p.foreground) };
+    visuals.selection =
+        Selection { bg_fill: p.brand.gamma_multiply(0.45), stroke: Stroke::new(1., p.foreground) };
     visuals.text_cursor = TextCursorStyle {
         stroke: Stroke::new(1.5, p.foreground),
         blink: false,

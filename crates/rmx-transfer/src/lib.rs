@@ -3,9 +3,9 @@
 //! * [`RemoteFs`] is the common asynchronous file-system interface. [`LocalFs`], [`SftpFs`] and
 //!   [`FtpFs`] implement it. Directory listings are delivered through [`DirStream`] in batches, so
 //!   a consumer can show a 100,000-entry directory as it arrives, without waiting for all of it.
-//! * [`TransferQueue`] runs copies between any two backends with bounded concurrency,
-//!   rate-limited progress, cancellation, automatic and manual retry, resume of partial files,
-//!   recursive directory copy and an [`OverwritePolicy`].
+//! * [`TransferQueue`] runs copies between any two backends with bounded concurrency, rate-limited
+//!   progress, cancellation, automatic and manual retry, resume of partial files, recursive
+//!   directory copy and an [`OverwritePolicy`].
 //!
 //! No SSH client lives here. [`SftpFs::connect`] takes any `AsyncRead + AsyncWrite` stream, such as
 //! an SSH channel running the `sftp` subsystem, and [`FtpFs::connect_with`] takes an [`FtpDialer`]
@@ -14,9 +14,7 @@
 //! ```no_run
 //! use std::sync::Arc;
 //!
-//! use rmx_transfer::{
-//!     LocalFs, OverwritePolicy, QueueConfig, TransferQueue, TransferRequest,
-//! };
+//! use rmx_transfer::{LocalFs, OverwritePolicy, QueueConfig, TransferQueue, TransferRequest};
 //!
 //! # async fn run() {
 //! let local = Arc::new(LocalFs::new());
@@ -58,5 +56,6 @@ pub use queue::{
 };
 pub use sftp::{SftpFs, SftpOptions};
 
-/// Re-exported so callers can build [`FtpTls`] without depending on matching `rustls` versions.
+/// Re-exported so callers can build [`FtpTls`] without depending on matching `rustls`
+/// versions.
 pub use rustls;

@@ -5,10 +5,8 @@ use crossfont::{GlyphKey, RasterizedGlyph};
 
 use alacritty_terminal::term::cell::Flags;
 
-use crate::RenderableCell;
-use crate::SizeInfo;
-use crate::gl;
 use crate::gl::types::*;
+use crate::{RenderableCell, SizeInfo, gl};
 
 mod atlas;
 mod builtin_font;

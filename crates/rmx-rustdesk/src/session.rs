@@ -12,8 +12,6 @@ use log::{debug, info, warn};
 use rmx_display::{DisplayEvent, InputEvent};
 use tokio::sync::mpsc;
 
-use crate::ConnectError;
-use crate::Quality;
 use crate::input::{InputMapper, Platform};
 use crate::proto::{
     self, BoolOption, Clipboard, ClipboardFormat, DisplayResolution, ImageQuality, Message,
@@ -21,6 +19,7 @@ use crate::proto::{
 };
 use crate::stream::{Connection, Reader, Writer};
 use crate::video::{self, Codec, Feed, Request};
+use crate::{ConnectError, Quality};
 
 /// How many decoded-frame batches may wait for the video thread before reading stops.
 const VIDEO_QUEUE: usize = 4;

@@ -9,8 +9,7 @@ use crossfont::{
 use log::{error, info};
 use unicode_width::UnicodeWidthChar;
 
-use crate::font::Delta;
-use crate::font::{Font, FontDescription};
+use crate::font::{Delta, Font, FontDescription};
 use crate::gl::types::*;
 
 use super::builtin_font;

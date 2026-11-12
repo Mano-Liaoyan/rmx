@@ -2,8 +2,7 @@
 //! bottom left corner.
 
 use super::RectShaderProgram;
-use crate::SizeInfo;
-use crate::gl;
+use crate::{SizeInfo, gl};
 
 impl RectShaderProgram {
     /// Align line patterns with cells whose grid starts at `[x, y]`, the window pixel where

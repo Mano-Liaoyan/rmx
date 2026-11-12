@@ -22,10 +22,28 @@ fn offer(ui: &mut Ui, at: Rect, glyph: char, label: &str, keys: &str) -> bool {
         Color32::TRANSPARENT
     };
     let painter = ui.painter();
-    painter.rect(at, CornerRadius::same(RADIUS), fill, Stroke::new(1., p.border), StrokeKind::Inside);
+    painter.rect(
+        at,
+        CornerRadius::same(RADIUS),
+        fill,
+        Stroke::new(1., p.border),
+        StrokeKind::Inside,
+    );
     icon(painter, pos2(at.left() + 19., at.center().y), glyph, 14., p.muted_fg);
-    painter.text(pos2(at.left() + 34., at.center().y), Align2::LEFT_CENTER, label, fonts::regular(TEXT_SM), p.foreground);
-    painter.text(pos2(at.right() - 12., at.center().y), Align2::RIGHT_CENTER, keys, fonts::regular(TEXT_SM), p.muted_fg);
+    painter.text(
+        pos2(at.left() + 34., at.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        fonts::regular(TEXT_SM),
+        p.foreground,
+    );
+    painter.text(
+        pos2(at.right() - 12., at.center().y),
+        Align2::RIGHT_CENTER,
+        keys,
+        fonts::regular(TEXT_SM),
+        p.muted_fg,
+    );
     response.clicked()
 }
 

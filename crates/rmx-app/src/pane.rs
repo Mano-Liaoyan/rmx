@@ -131,15 +131,23 @@ impl PaneContent {
 pub enum Link {
     /// Nothing to connect to: a local shell.
     Local,
-    Connecting { stage: String },
+    Connecting {
+        stage: String,
+    },
     Live,
     /// The session is over, for this reason.
-    Closed { reason: String },
+    Closed {
+        reason: String,
+    },
     /// Connecting did not work, for this reason.
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     /// Reopened from the last session, and connecting takes someone: this says what for. It
     /// stays this way until asked, so that many of them do not make for many dialogs at startup.
-    Awaiting { why: String },
+    Awaiting {
+        why: String,
+    },
 }
 
 /// What a pane connected to a saved connection knows about it.

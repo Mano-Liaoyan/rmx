@@ -1,9 +1,10 @@
 //! Embedded fonts, and the system CJK fallback.
 //!
 //! Geist (OFL) and Lucide (ISC) are subset and embedded; their licenses sit next to them in
-//! `assets/`. The icon font also carries RustDesk's mark from Simple Icons, which is CC0. No CJK font is embedded: [`CjkFallback`] finds one on a background thread and maps
-//! it, and egui picks it up on a later frame, so the interface draws from the first frame on and
-//! the UI thread never touches the disk.
+//! `assets/`. The icon font also carries RustDesk's mark from Simple Icons, which is CC0. No CJK
+//! font is embedded: [`CjkFallback`] finds one on a background thread and maps it, and egui picks
+//! it up on a later frame, so the interface draws from the first frame on and the UI thread never
+//! touches the disk.
 
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
@@ -176,7 +177,10 @@ type Bytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
 /// The first of `candidates` that `map` can read and that is a font: egui aborts on a file it
 /// cannot parse, and doing without CJK glyphs is never worth that.
-fn first_usable(candidates: &[(String, u32)], map: impl Fn(&str) -> Option<Bytes>) -> Option<(Bytes, u32)> {
+fn first_usable(
+    candidates: &[(String, u32)],
+    map: impl Fn(&str) -> Option<Bytes>,
+) -> Option<(Bytes, u32)> {
     candidates.iter().find_map(|(path, index)| {
         let blob = map(path)?;
         if !is_font((*blob).as_ref(), *index) {
@@ -207,7 +211,8 @@ fn ask_fontconfig() -> Vec<(String, u32)> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
-    output.map_or_else(|_| Vec::new(), |output| pick_faces(&String::from_utf8_lossy(&output.stdout)))
+    output
+        .map_or_else(|_| Vec::new(), |output| pick_faces(&String::from_utf8_lossy(&output.stdout)))
 }
 
 /// The usable faces of `fc-list` output, best first.
@@ -351,8 +356,8 @@ mod tests {
 
     #[test]
     fn only_outline_fonts_are_candidates() {
-        let listing = "/usr/share/fonts/misc/18x18ja.pcf.gz\t0\tMisc Fixed\tRegular\n\
-                       /fonts/a.OTF\t0\tSome Font\tRegular\n";
+        let listing = "/usr/share/fonts/misc/18x18ja.pcf.gz\t0\tMisc \
+                       Fixed\tRegular\n/fonts/a.OTF\t0\tSome Font\tRegular\n";
         assert_eq!(pick_faces(listing), [("/fonts/a.OTF".to_owned(), 0)]);
         assert!(pick_faces("/fonts/a.pcf\t0\tX\tRegular\n").is_empty());
     }

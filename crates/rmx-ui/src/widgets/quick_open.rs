@@ -143,14 +143,19 @@ pub fn quick_open_body(
     ui.spacing_mut().item_spacing.y = 0.;
 
     let input_id = id.with("input");
-    let input = text_input(ui, input_id, &mut state.query, InputOptions {
-        hint: "Search",
-        glyph: Some(icons::SEARCH),
-        width: Some(WIDTH),
-        borderless: true,
-        height: Some(INPUT),
-        ..Default::default()
-    });
+    let input = text_input(
+        ui,
+        input_id,
+        &mut state.query,
+        InputOptions {
+            hint: "Search",
+            glyph: Some(icons::SEARCH),
+            width: Some(WIDTH),
+            borderless: true,
+            height: Some(INPUT),
+            ..Default::default()
+        },
+    );
     if !input.has_focus() {
         input.request_focus();
     }

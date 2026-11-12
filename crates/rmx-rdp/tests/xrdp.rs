@@ -193,7 +193,8 @@ fn watch(mut events: mpsc::Receiver<DisplayEvent>) -> Arc<Mutex<Seen>> {
                         "tightly packed BGRA8"
                     );
                     assert!(update.width > 0 && update.height > 0);
-                    seen.lit |= update.pixels.as_chunks::<4>().0.iter().any(|px| px[..3] != [0, 0, 0]);
+                    seen.lit |=
+                        update.pixels.as_chunks::<4>().0.iter().any(|px| px[..3] != [0, 0, 0]);
                     seen.updates += 1;
                 },
                 DisplayEvent::Clipboard(text) => seen.clipboard.push(text),

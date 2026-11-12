@@ -19,8 +19,8 @@ use rmx_render::probe::{self, Phase};
 use rmx_render::renderer::platform;
 use rmx_render::renderer::rects::{RenderLines, RenderRect};
 use rmx_render::{
-    Frame, GlyphCache, RasterizedGlyphs, RemoteLayout, RemoteTexture, Renderer, Rgb, ScaleMode, SizeInfo,
-    UploadPath,
+    Frame, GlyphCache, RasterizedGlyphs, RemoteLayout, RemoteTexture, Renderer, Rgb, ScaleMode,
+    SizeInfo, UploadPath,
 };
 use rmx_terminal::{IntoRects, Terminal, Theme};
 use rmx_ui::{Chrome, PixelRect, ThemeMode};
@@ -207,7 +207,8 @@ struct Glyphs {
 
 fn find_fonts(scale: f64) -> Result<Glyphs, String> {
     let rasterizer = Rasterizer::new().map_err(|err| err.to_string())?;
-    let mut cache = GlyphCache::new(rasterizer, &scaled_font(scale)).map_err(|err| err.to_string())?;
+    let mut cache =
+        GlyphCache::new(rasterizer, &scaled_font(scale)).map_err(|err| err.to_string())?;
     let common = cache.rasterize_common();
     mark("fonts");
     Ok(Glyphs { cache, common, scale })
@@ -357,7 +358,9 @@ impl Gfx {
             gutter: gutter(mode),
             history: DamageHistory::default(),
             #[cfg(feature = "bench")]
-            presentation: (key == 1).then(|| crate::bench::present::Presentation::attach(&window)).flatten(),
+            presentation: (key == 1)
+                .then(|| crate::bench::present::Presentation::attach(&window))
+                .flatten(),
             #[cfg(feature = "bench")]
             control: crate::bench::control(),
             #[cfg(feature = "bench")]
@@ -537,7 +540,10 @@ impl Gfx {
                 let probe = probe::enter(Phase::Snapshot);
 
                 pane.stale = !terminal.refresh();
-                #[allow(clippy::drop_non_drop, reason = "the probe only has a destructor when measuring")]
+                #[allow(
+                    clippy::drop_non_drop,
+                    reason = "the probe only has a destructor when measuring"
+                )]
                 drop(probe);
                 stale += u32::from(pane.stale);
 
@@ -695,7 +701,13 @@ impl Gfx {
     }
 
     /// Where a desktop of `remote` pixels lands in `rect`, for a pane at `rest`.
-    pub fn remote_layout(&self, mode: ScaleMode, remote: [u32; 2], rect: Rect, rest: Rect) -> RemoteLayout {
+    pub fn remote_layout(
+        &self,
+        mode: ScaleMode,
+        remote: [u32; 2],
+        rect: Rect,
+        rest: Rect,
+    ) -> RemoteLayout {
         let (_, height) = self.window_size();
         let size = self.remote_size(rest);
         let frame = Frame::new(&size, [rect.x, rect.y, rect.w, rect.h], height);
@@ -802,7 +814,14 @@ impl Gfx {
         let top = size.padding_y() + cursor.line as f32 * cell_h;
         let thickness = (cell_h * CURSOR_THICKNESS / 2.).round().max(1.);
         self.rects.extend([
-            RenderRect::new(left, top + cell_h - thickness, width as f32 * cell_w, thickness, fg, 1.),
+            RenderRect::new(
+                left,
+                top + cell_h - thickness,
+                width as f32 * cell_w,
+                thickness,
+                fg,
+                1.,
+            ),
             RenderRect::new(left + before as f32 * cell_w, top, thickness, cell_h, fg, 1.),
         ]);
     }

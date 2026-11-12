@@ -89,36 +89,68 @@ impl FileSide {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FilesAction {
     /// Go into the directory or link `name` of the column.
-    Open { side: FileSide, name: Arc<str> },
-    Up { side: FileSide },
+    Open {
+        side: FileSide,
+        name: Arc<str>,
+    },
+    Up {
+        side: FileSide,
+    },
     /// Go to the directory the user typed.
-    Goto { side: FileSide, path: String },
-    Refresh { side: FileSide },
+    Goto {
+        side: FileSide,
+        path: String,
+    },
+    Refresh {
+        side: FileSide,
+    },
     /// Copy `names` of the column to the other one.
-    Transfer { from: FileSide, names: Vec<Arc<str>> },
+    Transfer {
+        from: FileSide,
+        names: Vec<Arc<str>>,
+    },
     Cancel(u64),
     Retry(u64),
     ClearFinished,
     /// Make the folder `name` in the column.
-    NewFolder { side: FileSide, name: String },
+    NewFolder {
+        side: FileSide,
+        name: String,
+    },
     /// Call `from`, in the column, `to`.
-    Rename { side: FileSide, from: Arc<str>, to: String },
+    Rename {
+        side: FileSide,
+        from: Arc<str>,
+        to: String,
+    },
     /// Remove `names` from the column.
-    Delete { side: FileSide, names: Vec<Arc<str>> },
+    Delete {
+        side: FileSide,
+        names: Vec<Arc<str>>,
+    },
     /// Pick the policy at this index of [`CONFLICT_POLICIES`](crate::widgets::CONFLICT_POLICIES).
     Policy(usize),
     /// Compare the file `local` of the first column with the file `remote` of the second.
-    Compare { local: Arc<str>, remote: Arc<str> },
+    Compare {
+        local: Arc<str>,
+        remote: Arc<str>,
+    },
     /// Write this over the open file, unless it has changed since it was read.
-    Save { text: String },
+    Save {
+        text: String,
+    },
     /// Write what was being saved over the open file, even though it has changed.
     SaveAnyway,
     /// Show how this differs from the open file as it was read.
-    DiffEdits { text: String },
+    DiffEdits {
+        text: String,
+    },
     /// Go back from what is shown instead of the columns.
     CloseBody,
     /// Color this, what the open file now says.
-    Highlight { text: String },
+    Highlight {
+        text: String,
+    },
 }
 
 /// The kinds of connection.
@@ -389,7 +421,8 @@ mod tests {
 
     #[test]
     fn typed_secrets_do_not_appear_in_debug_output() {
-        let action = UiAction::VaultUnlock { password: Sensitive::new("hunter2"), key_file: String::new() };
+        let action =
+            UiAction::VaultUnlock { password: Sensitive::new("hunter2"), key_file: String::new() };
         assert!(!format!("{action:?}").contains("hunter2"));
 
         let mut draft = ConnectionDraft::new(Protocol::Ssh);

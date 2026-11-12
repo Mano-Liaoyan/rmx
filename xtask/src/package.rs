@@ -11,12 +11,14 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 
 const IMAGE: &str = "localhost/rmx-package-build:1";
 
-/// Unpack the source, build, and pack the packages onto stdout, which is why the log goes to stderr.
-const IN_CONTAINER: &str = "mkdir /src && tar -x --no-same-owner -C /src && cd /src \
-    && bash packaging/build.sh >&2 && cd /out && tar -c *";
+/// Unpack the source, build, and pack the packages onto stdout, which is why the log goes to
+/// stderr.
+const IN_CONTAINER: &str = "mkdir /src && tar -x --no-same-owner -C /src && cd /src && bash \
+                            packaging/build.sh >&2 && cd /out && tar -c *";
 
 pub fn package() -> Result<(), String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().ok_or("xtask has no parent directory")?;
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).parent().ok_or("xtask has no parent directory")?;
     let dist = root.join("target/dist");
     fs::create_dir_all(&dist).map_err(|err| format!("could not make {}: {err}", dist.display()))?;
 
@@ -46,7 +48,17 @@ pub fn package() -> Result<(), String> {
     let mut build = spawn(
         Command::new(engine)
             // Passing just the name hands on the host's value, if it has one.
-            .args(["run", "--rm", "-i", "--env", "CARGO_BUILD_JOBS", IMAGE, "sh", "-c", IN_CONTAINER])
+            .args([
+                "run",
+                "--rm",
+                "-i",
+                "--env",
+                "CARGO_BUILD_JOBS",
+                IMAGE,
+                "sh",
+                "-c",
+                IN_CONTAINER,
+            ])
             .stdin(source)
             .stdout(Stdio::piped()),
     )?;
@@ -65,7 +77,8 @@ pub fn package() -> Result<(), String> {
 
     check("packing the source", pack.wait())?;
     check("the container build", build.wait())?;
-    let unpacked = unpack.wait_with_output().map_err(|err| format!("unpacking the packages: {err}"))?;
+    let unpacked =
+        unpack.wait_with_output().map_err(|err| format!("unpacking the packages: {err}"))?;
     check("unpacking the packages", Ok(unpacked.status))?;
     for name in String::from_utf8_lossy(&unpacked.stdout).lines() {
         println!("{}", dist.join(name).display());
@@ -85,7 +98,8 @@ fn source_files(root: &Path) -> Result<Vec<u8>, String> {
     }
     let mut files = Vec::with_capacity(output.stdout.len());
     for path in output.stdout.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
-        let name = std::str::from_utf8(path).map_err(|err| format!("source path is not UTF-8: {err}"))?;
+        let name =
+            std::str::from_utf8(path).map_err(|err| format!("source path is not UTF-8: {err}"))?;
         if root.join(name).symlink_metadata().is_ok() {
             files.extend_from_slice(path);
             files.push(0);

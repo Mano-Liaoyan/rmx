@@ -13,7 +13,12 @@ fn main() {
         (3, 3),
         Profile::Core,
         Fallbacks::All,
-        ["GL_ARB_blend_func_extended", "GL_KHR_robustness", "GL_KHR_debug", "GL_ARB_buffer_storage"],
+        [
+            "GL_ARB_blend_func_extended",
+            "GL_KHR_robustness",
+            "GL_KHR_debug",
+            "GL_ARB_buffer_storage",
+        ],
     )
     .write_bindings(GlobalGenerator, &mut file)
     .unwrap();

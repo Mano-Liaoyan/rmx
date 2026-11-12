@@ -3,13 +3,10 @@
 
 use crossfont::Metrics;
 
-use crate::RenderableCell;
-use crate::Rgb;
-use crate::SizeInfo;
-use crate::gl;
 use crate::renderer::rects::{RectRenderer, RenderRect};
 use crate::renderer::text::{TextRenderApi, TextRenderer};
 use crate::renderer::{Renderer, TextRendererProvider};
+use crate::{RenderableCell, Rgb, SizeInfo, gl};
 
 pub use crate::renderer::text::glyph_cache::{Glyph, LoadGlyph};
 

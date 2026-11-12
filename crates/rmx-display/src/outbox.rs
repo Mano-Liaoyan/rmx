@@ -1,4 +1,5 @@
-//! Keeps the latest picture of a remote desktop and decides what the interface still has to be told.
+//! Keeps the latest picture of a remote desktop and decides what the interface still has to be
+//! told.
 //!
 //! Nothing here does I/O or waits, so the backpressure behaviour can be tested exhaustively.
 

@@ -47,16 +47,15 @@ impl Server {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().display().to_string();
         sh(&format!(
-            "cd {path} && \
-             openssl ecparam -name prime256v1 -genkey -noout -out ca.key 2>/dev/null && \
-             openssl req -x509 -new -key ca.key -days 2 -subj /CN=rmx-test-ca \
-               -addext basicConstraints=critical,CA:TRUE -out ca.pem 2>/dev/null && \
-             openssl ecparam -name prime256v1 -genkey -noout -out key.pem 2>/dev/null && \
-             openssl req -new -key key.pem -subj /CN=localhost -out leaf.csr 2>/dev/null && \
-             printf 'basicConstraints=CA:FALSE\\nsubjectAltName=DNS:localhost\\n' > leaf.ext && \
-             openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
-               -extfile leaf.ext -out cert.pem 2>/dev/null && \
-             chmod 755 . && chmod 644 key.pem cert.pem ca.pem"
+            "cd {path} && openssl ecparam -name prime256v1 -genkey -noout -out ca.key 2>/dev/null \
+             && openssl req -x509 -new -key ca.key -days 2 -subj /CN=rmx-test-ca -addext \
+             basicConstraints=critical,CA:TRUE -out ca.pem 2>/dev/null && openssl ecparam -name \
+             prime256v1 -genkey -noout -out key.pem 2>/dev/null && openssl req -new -key key.pem \
+             -subj /CN=localhost -out leaf.csr 2>/dev/null && printf \
+             'basicConstraints=CA:FALSE\\nsubjectAltName=DNS:localhost\\n' > leaf.ext && openssl \
+             x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 -extfile \
+             leaf.ext -out cert.pem 2>/dev/null && chmod 755 . && chmod 644 key.pem cert.pem \
+             ca.pem"
         ));
         let pem = std::fs::read(dir.path().join("ca.pem")).unwrap();
         let certificate = rustls_pemfile::certs(&mut pem.as_slice()).next().unwrap().unwrap();
@@ -65,13 +64,13 @@ impl Server {
         let password = random_secret();
         let (low, high) = (port + 1, port + 32);
         let config = format!(
-            "listen=YES\nlisten_ipv6=NO\nlisten_address=127.0.0.1\nlisten_port={port}\n\
-             background=NO\nanonymous_enable=NO\nlocal_enable=YES\nwrite_enable=YES\n\
-             local_umask=022\ncheck_shell=NO\nseccomp_sandbox=NO\nuse_localtime=NO\n\
-             pasv_enable=YES\npasv_address=127.0.0.1\npasv_min_port={low}\npasv_max_port={high}\n\
-             ssl_enable=YES\nallow_anon_ssl=NO\nforce_local_data_ssl=NO\n\
-             force_local_logins_ssl=NO\nrsa_cert_file=/ephemeral/cert.pem\n\
-             rsa_private_key_file=/ephemeral/key.pem\n"
+            "listen=YES\nlisten_ipv6=NO\nlisten_address=127.0.0.1\nlisten_port={port}\\
+             nbackground=NO\nanonymous_enable=NO\nlocal_enable=YES\nwrite_enable=YES\\
+             nlocal_umask=022\ncheck_shell=NO\nseccomp_sandbox=NO\nuse_localtime=NO\\
+             npasv_enable=YES\npasv_address=127.0.0.1\npasv_min_port={low}\npasv_max_port={high}\\
+             nssl_enable=YES\nallow_anon_ssl=NO\nforce_local_data_ssl=NO\\
+             nforce_local_logins_ssl=NO\nrsa_cert_file=/ephemeral/cert.pem\nrsa_private_key_file=/\
+             ephemeral/key.pem\n"
         );
         std::fs::write(dir.path().join("vsftpd.conf"), config).unwrap();
         let script = format!(
@@ -304,7 +303,10 @@ async fn ftps_runs_through_a_tunnel_stream() {
 #[ignore = "needs podman or docker and pulls an Alpine image"]
 async fn ftp_lists_100k_entries_in_batches() {
     let server = Server::start();
-    server.container.exec("mkdir /srv/data/big && cd /srv/data/big && seq -w 1 100000 | xargs touch && chown -R rmxftp /srv/data/big");
+    server.container.exec(
+        "mkdir /srv/data/big && cd /srv/data/big && seq -w 1 100000 | xargs touch && chown -R \
+         rmxftp /srv/data/big",
+    );
     let fs = FtpFs::connect(server.config(false)).await.unwrap();
     let started = Instant::now();
     let mut stream = fs

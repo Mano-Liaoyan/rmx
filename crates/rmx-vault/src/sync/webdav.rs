@@ -9,8 +9,7 @@ use ureq::Agent;
 use ureq::http::Response;
 use url::Url;
 
-use super::http;
-use super::{RemoteObject, RemoteVersion, SyncBackend};
+use super::{RemoteObject, RemoteVersion, SyncBackend, http};
 use crate::error::BackendError;
 use crate::secret::Secret;
 
@@ -43,7 +42,8 @@ impl fmt::Debug for WebDavConfig {
 /// Syncs through one file on a WebDAV server.
 ///
 /// The server must honor `If-Match` and report strong ETags, as Apache `mod_dav` does and
-/// Nextcloud is documented to. A server that ignores `If-Match` cannot be detected and would lose concurrent pushes.
+/// Nextcloud is documented to. A server that ignores `If-Match` cannot be detected and would lose
+/// concurrent pushes.
 pub struct WebDavBackend {
     agent: Agent,
     url: Url,

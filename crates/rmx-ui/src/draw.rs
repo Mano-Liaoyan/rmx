@@ -69,7 +69,8 @@ pub(crate) fn sun(painter: &Painter, center: Pos2, size: f32, color: Color32) {
         let along = vec2(angle.cos(), angle.sin());
         // The diagonal rays are a little shorter, as in Lucide.
         let (inner, outer) = if step % 2 == 0 { (8., 10.) } else { (7.4, 8.8) };
-        painter.line_segment([center + along * inner * unit, center + along * outer * unit], stroke);
+        painter
+            .line_segment([center + along * inner * unit, center + along * outer * unit], stroke);
     }
 }
 
@@ -86,10 +87,15 @@ pub(crate) fn moon(painter: &Painter, center: Pos2, size: f32, color: Color32) {
         let angle = std::f32::consts::TAU * f32::from(step) / f32::from(STEPS);
         middle + vec2(angle.cos(), angle.sin()) * r
     };
-    let mut points: Vec<Pos2> =
-        (0..=STEPS).map(|step| around(center, radius, step)).filter(|at| at.distance(bite) >= bite_radius).collect();
+    let mut points: Vec<Pos2> = (0..=STEPS)
+        .map(|step| around(center, radius, step))
+        .filter(|at| at.distance(bite) >= bite_radius)
+        .collect();
     points.extend(
-        (0..=STEPS).rev().map(|step| around(bite, bite_radius, step)).filter(|at| at.distance(center) <= radius),
+        (0..=STEPS)
+            .rev()
+            .map(|step| around(bite, bite_radius, step))
+            .filter(|at| at.distance(center) <= radius),
     );
     painter.add(Shape::closed_line(points, stroke));
 }
@@ -99,7 +105,17 @@ pub(crate) fn file_icon(painter: &Painter, center: Pos2, size: f32, color: Color
     let unit = size / 24.;
     let at = |x: f32, y: f32| center + vec2((x - 12.) * unit, (y - 12.) * unit);
     let stroke = Stroke::new(1.25, color);
-    let outline = vec![at(6., 2.), at(15., 2.), at(20., 7.), at(20., 20.), at(18., 22.), at(6., 22.), at(4., 20.), at(4., 4.), at(6., 2.)];
+    let outline = vec![
+        at(6., 2.),
+        at(15., 2.),
+        at(20., 7.),
+        at(20., 20.),
+        at(18., 22.),
+        at(6., 22.),
+        at(4., 20.),
+        at(4., 4.),
+        at(6., 2.),
+    ];
     painter.add(Shape::line(outline, stroke));
     painter.add(Shape::line(vec![at(14., 2.5), at(14., 8.), at(19.5, 8.)], stroke));
 }

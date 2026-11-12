@@ -679,24 +679,27 @@ pub fn report(main_us: &[u32], warmup: usize) -> String {
         analysis.margins_dropped.iter().filter(|&&margin| margin >= floor).count()
     });
     let mut report = format!(
-        "present_frames={}\npresent_presented={}\npresent_discarded={}\npresent_unresolved={}\n\
-         present_dropped={}\npresent_dropped_after_warmup={}\npresent_late={}\n\
-         present_missed_refreshes={}\npresent_idle_gaps={}\npresent_same_refresh={}\npresent_gaps={}\n\
-         present_interval_p50_us={}\npresent_interval_p99_us={}\npresent_interval_max_us={}\n\
-         present_latency_p50_us={}\npresent_latency_p99_us={}\npresent_latency_max_us={}\n\
-         present_refresh_ns={}\npresent_msc={}\npresent_vsync={vsync}\npresent_hw_clock={hw_clock}\n\
-         present_hw_completion={hw_completion}\npresent_zero_copy={zero_copy}\npresent_clock={}\n\
-         present_wrong_refresh={}\npresent_monitor={}\npresent_fullscreen={}\npresent_size={}x{}\n\
-present_gpu_measured={}\npresent_gpu_frames={}\npresent_gpu_skipped={}\n\
-         present_gpu_p50_us={}\npresent_gpu_p99_us={}\npresent_gpu_max_us={}\n\
-         present_gpu_clock_suspect={}\npresent_gpu_clock_bias_us={}\npresent_probe_p50_us={}\npresent_probe_p99_us={}\n\
-         present_probe_max_us={}\npresent_dropped_gpu_after_deadline={}\n\
-         present_dropped_gpu_before_deadline={}\npresent_dropped_gpu_unknown={}\n\
-         present_dropped_started_after_deadline={}\npresent_dropped_committed_after_deadline={}\n\
-         present_dropped_ready_before_deadline={}\npresent_dropped_as_ready_as_a_shown_frame={ready_as_on_time}\n\
-         present_margin_shown_us_min/p1/p50/p99/max={}\npresent_margin_dropped_us_min/p1/p50/p99/max={}\n\
-         present_deadline=the refresh after the last shown frame and at or after the frame's content was pending, \
-         on the grid of that frame's timestamp; KWin's own latch point, some time before it, is not visible\n",
+        "present_frames={}\npresent_presented={}\npresent_discarded={}\npresent_unresolved={}\\
+         npresent_dropped={}\npresent_dropped_after_warmup={}\npresent_late={}\\
+         npresent_missed_refreshes={}\npresent_idle_gaps={}\npresent_same_refresh={}\\
+         npresent_gaps={}\npresent_interval_p50_us={}\npresent_interval_p99_us={}\\
+         npresent_interval_max_us={}\npresent_latency_p50_us={}\npresent_latency_p99_us={}\\
+         npresent_latency_max_us={}\npresent_refresh_ns={}\npresent_msc={}\npresent_vsync={vsync}\\
+         npresent_hw_clock={hw_clock}\npresent_hw_completion={hw_completion}\\
+         npresent_zero_copy={zero_copy}\npresent_clock={}\npresent_wrong_refresh={}\\
+         npresent_monitor={}\npresent_fullscreen={}\npresent_size={}x{}\npresent_gpu_measured={}\\
+         npresent_gpu_frames={}\npresent_gpu_skipped={}\npresent_gpu_p50_us={}\\
+         npresent_gpu_p99_us={}\npresent_gpu_max_us={}\npresent_gpu_clock_suspect={}\\
+         npresent_gpu_clock_bias_us={}\npresent_probe_p50_us={}\npresent_probe_p99_us={}\\
+         npresent_probe_max_us={}\npresent_dropped_gpu_after_deadline={}\\
+         npresent_dropped_gpu_before_deadline={}\npresent_dropped_gpu_unknown={}\\
+         npresent_dropped_started_after_deadline={}\npresent_dropped_committed_after_deadline={}\\
+         npresent_dropped_ready_before_deadline={}\\
+         npresent_dropped_as_ready_as_a_shown_frame={ready_as_on_time}\\
+         npresent_margin_shown_us_min/p1/p50/p99/max={}\npresent_margin_dropped_us_min/p1/p50/p99/\
+         max={}\npresent_deadline=the refresh after the last shown frame and at or after the \
+         frame's content was pending, on the grid of that frame's timestamp; KWin's own latch \
+         point, some time before it, is not visible\n",
         results.frames.len(),
         analysis.presented,
         analysis.discarded,
@@ -772,7 +775,8 @@ fn long_gaps(
                 .collect();
             text.push_str(&format!(
                 "present_long_gap frame={index} refreshes={} dropped={} at_ms={:.1} \
-                 pending_after_last_swap_ms={:.1} redraw_after_last_swap_ms={:.1} main_us={} gpu_us={} events=[{}]\n",
+                 pending_after_last_swap_ms={:.1} redraw_after_last_swap_ms={:.1} main_us={} \
+                 gpu_us={} events=[{}]\n",
                 row.gap,
                 u32::from(row.dropped),
                 ms(frame.swapped_ns, first),
@@ -813,7 +817,8 @@ fn csv(frames: &[Record], analysis: &Analysis, main_us: &[u32]) -> String {
         let main = main_us.get(index).map_or(String::new(), u32::to_string);
         let margin = row.margin_us.map_or(String::new(), |margin| margin.to_string());
         text.push_str(&format!(
-            "{index},{},{},{},{},{},{},{},{},{},{},{outcome},{},{},{},{},{},{main},{},{},{},{},{},{margin},{}\n",
+            "{index},{},{},{},{},{},{},{},{},{},{},{outcome},{},{},{},{},{},{main},{},{},{},{},{},\
+             {margin},{}\n",
             frame.submit_ns,
             frame.swapped_ns,
             frame.pending_ns,

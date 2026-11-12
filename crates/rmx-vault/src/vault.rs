@@ -147,7 +147,11 @@ impl Vault {
         Ok(vault)
     }
 
-    pub(crate) fn install_session(&mut self, conn: Connection, key: Option<VaultKey>) -> Result<()> {
+    pub(crate) fn install_session(
+        &mut self,
+        conn: Connection,
+        key: Option<VaultKey>,
+    ) -> Result<()> {
         let mut clock = HlcClock::new(self.local.node_id()?);
         if let Some(seen) = merge::max_hlc(&conn, "main")? {
             clock.observe(seen);
@@ -572,12 +576,13 @@ fn open_connection(path: &Path, key: Option<&VaultKey>) -> Result<Connection> {
         conn.execute_batch(&statement)?;
     }
     conn.busy_timeout(Duration::from_secs(5))?;
-    conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
-        .map_err(|e| match (is_not_a_database(&e), key) {
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(())).map_err(|e| {
+        match (is_not_a_database(&e), key) {
             (true, Some(_)) => Error::WrongKey,
             (true, None) => Error::NotAVault,
             (false, _) => e.into(),
-        })?;
+        }
+    })?;
     conn.execute_batch("PRAGMA secure_delete = ON;")?;
     Ok(conn)
 }

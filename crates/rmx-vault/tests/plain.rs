@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{MemoryBackend, creds, fast_kdf};
-use rmx_vault::{Credential, Credentials, Error, Folder, Id, Secret, SyncBackend, Vault, VaultKind};
+use rmx_vault::{
+    Credential, Credentials, Error, Folder, Id, Secret, SyncBackend, Vault, VaultKind,
+};
 
 const MARKER: &str = "plaintext-marker-b2c9";
 
@@ -16,7 +18,8 @@ fn folder(name: &str) -> Folder {
 }
 
 fn names(vault: &mut Vault) -> Vec<String> {
-    let mut names: Vec<String> = vault.list::<Folder>().unwrap().into_iter().map(|f| f.name).collect();
+    let mut names: Vec<String> =
+        vault.list::<Folder>().unwrap().into_iter().map(|f| f.name).collect();
     names.sort();
     names
 }
@@ -31,9 +34,7 @@ fn a_plain_vault_is_an_ordinary_sqlite_file_and_says_so() {
     let path = dir.path().join("v.rmxdb");
     let mut vault = plain(&path);
     assert_eq!(vault.kind(), VaultKind::Plain);
-    vault
-        .put(&Credential { secret: Secret::new(MARKER), ..Default::default() })
-        .unwrap();
+    vault.put(&Credential { secret: Secret::new(MARKER), ..Default::default() }).unwrap();
     let snapshot = dir.path().join("snap");
     vault.snapshot(&snapshot).unwrap();
     drop(vault);
@@ -41,7 +42,10 @@ fn a_plain_vault_is_an_ordinary_sqlite_file_and_says_so() {
     assert_eq!(VaultKind::of_file(&path).unwrap(), Some(VaultKind::Plain));
     let bytes = std::fs::read(&snapshot).unwrap();
     assert_eq!(&bytes[..16], b"SQLite format 3\0");
-    assert!(bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()), "it must not look encrypted");
+    assert!(
+        bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+        "it must not look encrypted"
+    );
 }
 
 #[test]
@@ -75,7 +79,8 @@ fn another_programs_sqlite_file_is_not_a_vault() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("other.db");
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('hello');").unwrap();
+    conn.execute_batch("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('hello');")
+        .unwrap();
     drop(conn);
     assert!(matches!(Vault::open_plain(&path), Err(Error::NotAVault)));
 }
@@ -178,7 +183,8 @@ fn an_encrypted_copy_refuses_a_plain_remote() {
 #[test]
 fn the_message_says_which_side_is_which() {
     let plain_local = Error::KindMismatch { local: VaultKind::Plain, remote: VaultKind::Encrypted };
-    let encrypted_local = Error::KindMismatch { local: VaultKind::Encrypted, remote: VaultKind::Plain };
+    let encrypted_local =
+        Error::KindMismatch { local: VaultKind::Encrypted, remote: VaultKind::Plain };
     assert!(plain_local.to_string().contains("remote copy is encrypted"));
     assert!(encrypted_local.to_string().contains("remote copy is unencrypted"));
 }

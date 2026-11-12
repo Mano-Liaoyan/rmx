@@ -1,7 +1,8 @@
 //! The context menu.
 
 use egui::{
-    Align2, Color32, Context, CornerRadius, Id, Key, Margin, Modifiers, Pos2, Rect, Sense, pos2, vec2,
+    Align2, Color32, Context, CornerRadius, Id, Key, Margin, Modifiers, Pos2, Rect, Sense, pos2,
+    vec2,
 };
 
 use crate::action::UiAction;
@@ -138,7 +139,12 @@ pub fn context_menu(
     chosen
 }
 
-fn menu_row(ui: &mut egui::Ui, id: Id, item: &MenuItem, selected: bool) -> (Option<UiAction>, bool) {
+fn menu_row(
+    ui: &mut egui::Ui,
+    id: Id,
+    item: &MenuItem,
+    selected: bool,
+) -> (Option<UiAction>, bool) {
     let p = palette(ui);
     let MenuItem::Action { glyph, label, shortcut, action, danger } = item else {
         let (rect, _) = ui.allocate_exact_size(vec2(WIDTH, 9.), Sense::hover());

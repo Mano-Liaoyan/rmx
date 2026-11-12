@@ -82,8 +82,23 @@ impl Panels {
     pub fn read(text: &str) -> Self {
         let values: Vec<f32> = text.split(' ').filter_map(|part| part.parse().ok()).collect();
         // A file from before the queue could be folded has one value fewer.
-        let (Some(&[sidebar, files_split, files_queue, files_size, files_date, sw, sh, nw, nh, snippets_list]), true) =
-            (values.first_chunk::<10>(), values.len() <= 11)
+        let (
+            Some(
+                &[
+                    sidebar,
+                    files_split,
+                    files_queue,
+                    files_size,
+                    files_date,
+                    sw,
+                    sh,
+                    nw,
+                    nh,
+                    snippets_list,
+                ],
+            ),
+            true,
+        ) = (values.first_chunk::<10>(), values.len() <= 11)
         else {
             return Self::default();
         };
@@ -118,12 +133,20 @@ pub struct Handle {
 
 /// Draw the pill of a handle along `band` at `along`, `level` shown: from 0 hidden, through 1
 /// hovered, to 2 dragged.
-pub fn paint_pill(painter: &egui::Painter, band: Rect, vertical: bool, along: f32, level: f32, p: &Palette) {
+pub fn paint_pill(
+    painter: &egui::Painter,
+    band: Rect,
+    vertical: bool,
+    along: f32,
+    level: f32,
+    p: &Palette,
+) {
     if level <= 0. {
         return;
     }
     let grow = (level - 1.).clamp(0., 1.);
-    let (start, span) = if vertical { (band.top(), band.height()) } else { (band.left(), band.width()) };
+    let (start, span) =
+        if vertical { (band.top(), band.height()) } else { (band.left(), band.width()) };
     let length = PILL_LENGTH.min(span / 4.) * (1. + (PILL_GROWTH - 1.) * grow);
     let middle = along.clamp(start + length / 2., start + span - length / 2.);
     let center = band.center();
@@ -143,7 +166,11 @@ pub fn resize_handle(ui: &mut Ui, band: Rect, id: Id, vertical: bool, edge: f32)
     let response = ui.interact(band, id, Sense::click_and_drag());
     let hot = response.hovered() || response.dragged();
     if hot {
-        ui.ctx().set_cursor_icon(if vertical { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
+        ui.ctx().set_cursor_icon(if vertical {
+            CursorIcon::ResizeHorizontal
+        } else {
+            CursorIcon::ResizeVertical
+        });
     }
 
     let across = |pos: Pos2| if vertical { pos.x } else { pos.y };
@@ -155,14 +182,21 @@ pub fn resize_handle(ui: &mut Ui, band: Rect, id: Id, vertical: bool, edge: f32)
         let grab = origin.map_or(0., |origin| across(origin) - edge);
         ctx.data_mut(|data| data.insert_temp(grab_id, grab));
     }
-    let to = response.interact_pointer_pos().filter(|_| response.dragged()).map(|pos| {
-        across(pos) - ctx.data(|data| data.get_temp::<f32>(grab_id)).unwrap_or(0.)
-    });
+    let to = response
+        .interact_pointer_pos()
+        .filter(|_| response.dragged())
+        .map(|pos| across(pos) - ctx.data(|data| data.get_temp::<f32>(grab_id)).unwrap_or(0.));
 
     if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()).filter(|_| hot) {
         ctx.data_mut(|data| data.insert_temp(along_id, along(pos)));
     }
-    let target = if response.dragged() { 2. } else if hot { 1. } else { 0. };
+    let target = if response.dragged() {
+        2.
+    } else if hot {
+        1.
+    } else {
+        0.
+    };
     let level = ctx.animate_value_with_time(id.with("pill"), target, PILL_SECS);
     if level > 0. {
         let eased = if level <= 1. { Curve::EASE_OUT.at(level) } else { level };
@@ -256,7 +290,11 @@ mod tests {
         assert_eq!(Panels::read(&folded.spell()), folded);
         let before_folding = Panels { sidebar: 300., ..Panels::default() };
         let old = before_folding.spell();
-        assert_eq!(Panels::read(old.rsplit_once(' ').unwrap().0), before_folding, "older files still read");
+        assert_eq!(
+            Panels::read(old.rsplit_once(' ').unwrap().0),
+            before_folding,
+            "older files still read"
+        );
     }
 
     #[test]

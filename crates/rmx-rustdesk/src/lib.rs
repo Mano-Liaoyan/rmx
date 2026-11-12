@@ -9,14 +9,14 @@
 //!
 //! # What is supported
 //!
-//! - Reaching a peer by ID, through the relay or straight on the same network, and by address
-//!   at its direct access port. UDP and TCP hole punching and WebRTC are not attempted.
-//! - Encryption at both key exchange versions, with the peer's identity checked against the key
-//!   of the rendezvous server. RustDesk serves a direct connection unencrypted and with no
-//!   identity, and so does this client; only the password is protected, as a salted proof.
+//! - Reaching a peer by ID, through the relay or straight on the same network, and by address at
+//!   its direct access port. UDP and TCP hole punching and WebRTC are not attempted.
+//! - Encryption at both key exchange versions, with the peer's identity checked against the key of
+//!   the rendezvous server. RustDesk serves a direct connection unencrypted and with no identity,
+//!   and so does this client; only the password is protected, as a salted proof.
 //! - Password login, two-factor codes, and sessions the person at the peer approves.
-//! - Video, keyboard (by key position), pointer, wheel and text clipboard. No audio, file
-//!   transfer or remote cursor shape: the cursor is drawn locally.
+//! - Video, keyboard (by key position), pointer, wheel and text clipboard. No audio, file transfer
+//!   or remote cursor shape: the cursor is drawn locally.
 
 mod codec;
 mod crypto;
