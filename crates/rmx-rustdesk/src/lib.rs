@@ -195,8 +195,14 @@ pub async fn connect(dialer: &dyn Dial, config: Config) -> Result<Session, Conne
 
     let option = session::options(config.quality);
     let session_id = u64::from_le_bytes(crypto::random_key()[..8].try_into().expect("8 bytes"));
+    // The name the peer is reached by: its ID, or for a direct connection its address. A peer
+    // turns a login away as "Offline" when this is neither its ID nor an address.
+    let peer_name = match &config.target {
+        Target::Id { .. } => peer_id.clone().unwrap_or_default(),
+        Target::Direct { host, port } => direct_name(host, *port),
+    };
     let login = handshake::Login {
-        peer_id: peer_id.as_deref().unwrap_or_default(),
+        peer_id: &peer_name,
         my_id: &config.client_name,
         my_name: &config.client_name,
         option,
@@ -211,6 +217,18 @@ pub async fn connect(dialer: &dyn Dial, config: Config) -> Result<Session, Conne
     let platform = info.platform.clone();
     session::start(connection, info, early, input_rx, events_tx)?;
     Ok(Session { display: DisplayHandle { events, input }, identity, relayed, platform })
+}
+
+/// A direct connection's address as a peer accepts it in a login: `host:port`, an IPv6 address
+/// in brackets. RustDesk takes an IP address with or without a port, but a host name only with
+/// one, so the port is always there.
+fn direct_name(host: &str, port: u16) -> String {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 #[cfg(test)]
