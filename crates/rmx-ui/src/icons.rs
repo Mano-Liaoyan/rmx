@@ -1,6 +1,10 @@
 //! Codepoints of the Lucide icons kept in `assets/lucide-subset.ttf`.
 //!
 //! Generated with the subset; adding an icon means subsetting the font again.
+//!
+//! [`RUSTDESK`] is no Lucide icon: it is RustDesk's mark from Simple Icons
+//! (`simple-icons/icons/rustdesk.svg`, CC0-1.0), added to the subset afterwards as a glyph
+//! fitted to the same 2-to-22 box of the 24-unit grid. A new subset has to add it again.
 
 /// Lucide `arrow-left`.
 pub const ARROW_LEFT: char = '\u{E048}';
@@ -50,6 +54,8 @@ pub const MINUS: char = '\u{E11C}';
 pub const MONITOR: char = '\u{E11D}';
 /// Lucide `monitor-cog`.
 pub const MONITOR_COG: char = '\u{E603}';
+/// RustDesk's mark, from Simple Icons; see the module documentation.
+pub const RUSTDESK: char = '\u{F000}';
 /// Lucide `panel-left`.
 pub const PANEL_LEFT: char = '\u{E12A}';
 /// Lucide `pencil`.
