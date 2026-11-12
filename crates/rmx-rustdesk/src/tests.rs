@@ -41,6 +41,9 @@ impl Dial for PipeDialer {
 struct Peer {
     connection: Connection,
     password: &'static str,
+    /// Whether it secures the connection, as RustDesk does for connections through its
+    /// rendezvous server but not at its direct access port.
+    secure: bool,
 }
 
 impl Peer {
@@ -48,13 +51,25 @@ impl Peer {
         self.connection.send(&Message::of(union)).await.unwrap();
     }
 
+    /// The next message with something in it, as RustDesk ignores empty ones.
     async fn receive(&mut self) -> Option<message::Union> {
-        let frame = self.connection.receive().await.ok()??;
-        proto::decode::<Message>(&frame)?.union
+        loop {
+            let frame = self.connection.receive().await.ok()??;
+            if let Some(union) = proto::decode::<Message>(&frame)?.union {
+                return Some(union);
+            }
+        }
     }
 
     async fn serve(mut self) {
-        // The identity handshake.
+        if self.secure {
+            self.identify().await;
+        }
+        self.serve_login().await;
+    }
+
+    /// The identity handshake.
+    async fn identify(&mut self) {
         let identity = Ed25519KeyPair::from_seed_unchecked(&[1; 32]).unwrap();
         let ephemeral = crypto_box::SecretKey::from([2; 32]);
         let ours = ephemeral.public_key();
@@ -78,8 +93,9 @@ impl Peer {
             picked: pk.kx_version,
         };
         self.connection.set_cipher(Cipher::responder(&key, &transcript));
+    }
 
-        // The login.
+    async fn serve_login(mut self) {
         let hash = Hash { salt: "pepper".into(), challenge: "riddle".into() };
         self.send(message::Union::Hash(hash.clone())).await;
         let Some(message::Union::LoginRequest(request)) = self.receive().await else {
@@ -125,9 +141,9 @@ impl Peer {
     }
 }
 
-fn start(password: &'static str) -> PipeDialer {
+fn start(password: &'static str, secure: bool) -> PipeDialer {
     let (client, server) = tokio::io::duplex(1 << 20);
-    tokio::spawn(Peer { connection: Connection::new(server), password }.serve());
+    tokio::spawn(Peer { connection: Connection::new(server), password, secure }.serve());
     PipeDialer(Mutex::new(Some(client)))
 }
 
@@ -147,9 +163,15 @@ async fn next_event(events: &mut tokio::sync::mpsc::Receiver<DisplayEvent>) -> D
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_logs_in_shows_the_desktop_and_carries_input() {
-    let dialer = start("secret");
-    let session = crate::connect(&dialer, config(Some("secret"))).await.unwrap();
-    assert_eq!(session.identity, Identity::Unverified);
+    for (secure, identity) in [(false, Identity::Unencrypted), (true, Identity::Unverified)] {
+        let dialer = start("secret", secure);
+        let session = crate::connect(&dialer, config(Some("secret"))).await.unwrap();
+        assert_eq!(session.identity, identity);
+        carries_input(session).await;
+    }
+}
+
+async fn carries_input(session: crate::Session) {
     assert_eq!(session.platform, "Linux");
     let mut display = session.display;
     assert_eq!(
@@ -179,7 +201,7 @@ async fn a_session_logs_in_shows_the_desktop_and_carries_input() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_password_is_reported() {
-    let dialer = start("secret");
+    let dialer = start("secret", false);
     assert_eq!(
         crate::connect(&dialer, config(Some("guess"))).await.err(),
         Some(ConnectError::WrongPassword)
@@ -188,7 +210,7 @@ async fn a_wrong_password_is_reported() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_password_is_reported_as_needing_one() {
-    let dialer = start("secret");
+    let dialer = start("secret", false);
     assert_eq!(
         crate::connect(&dialer, config(None)).await.err(),
         Some(ConnectError::PasswordRequired)

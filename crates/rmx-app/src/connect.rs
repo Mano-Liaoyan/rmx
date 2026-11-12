@@ -1263,8 +1263,14 @@ async fn run_rustdesk(
             config.quality = quality;
             let (title, label) = match rmx_rustdesk::connect(&dialer, config).await {
                 Ok(session) => {
-                    if session.identity == rmx_rustdesk::Identity::Unverified {
-                        log::warn!("the RustDesk peer at {host} is encrypted but its identity was not checked");
+                    match session.identity {
+                        rmx_rustdesk::Identity::Verified => {},
+                        rmx_rustdesk::Identity::Unverified => {
+                            log::warn!("the RustDesk peer at {host} is encrypted but its identity was not checked")
+                        },
+                        rmx_rustdesk::Identity::Unencrypted => {
+                            log::warn!("the RustDesk session with {host} is not encrypted, as RustDesk serves direct connections")
+                        },
                     }
                     return Ok::<_, String>((session.display, tunnel));
                 },

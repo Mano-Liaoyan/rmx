@@ -4,6 +4,9 @@
 //! The client answers with a session key sealed to that ephemeral key, and from then on every
 //! frame is encrypted. The peer then sends a salt and a challenge, and the client logs in with
 //! a proof that it knows the password.
+//!
+//! A peer reached at its direct access port skips the first part: RustDesk serves those
+//! connections unsecured, so its first message is already the salt and challenge.
 
 use std::time::Duration;
 
@@ -38,22 +41,40 @@ const NO_PASSWORD_ACCESS: &str = "No Password Access";
 pub enum Identity {
     /// The rendezvous server vouched for the peer's key and the peer proved it holds it.
     Verified,
-    /// The connection is encrypted, but nothing proved who is at the other end: a direct
-    /// connection, or a rendezvous server that sent no key.
+    /// The connection is encrypted, but nothing proved who is at the other end: a rendezvous
+    /// server that sent no key.
     Unverified,
+    /// The peer did not offer to encrypt, as RustDesk does not on its direct access port. The
+    /// password still only goes as a salted proof, but the session itself is in the clear.
+    Unencrypted,
 }
 
 /// Secures `connection`. `peer_key` is the identity key the rendezvous server vouched for.
+///
+/// Also returns the peer's first message when it was not part of the handshake, which happens
+/// only when the peer does not encrypt; the login is to handle it.
 pub(crate) async fn secure(
     connection: &mut Connection,
     peer_id: Option<&str>,
     peer_key: Option<&Key>,
-) -> Result<Identity, ConnectError> {
+) -> Result<(Identity, Option<Message>), ConnectError> {
     let frame = connection.receive_within(STEP_TIMEOUT).await.map_err(peer_failure)?;
-    let Some(message::Union::SignedId(signed)) =
-        proto::decode::<Message>(&frame).and_then(|message| message.union)
-    else {
-        return Err(ConnectError::Failed("the peer did not identify itself".to_owned()));
+    let first = proto::decode::<Message>(&frame)
+        .ok_or_else(|| ConnectError::Failed("the peer sent something unreadable".to_owned()))?;
+    let signed = match first.union {
+        Some(message::Union::SignedId(signed)) => signed,
+        // A peer the server vouched for has to prove it; anything else could be someone
+        // pretending to be it.
+        _ if peer_key.is_some() => {
+            return Err(ConnectError::Failed("the peer did not identify itself".to_owned()));
+        },
+        _ => {
+            // As RustDesk's own client does: an empty message in case the peer is waiting for
+            // one, then the session in the clear.
+            connection.send(&Message::default()).await.map_err(peer_failure)?;
+            warn!("the RustDesk peer does not encrypt this connection");
+            return Ok((Identity::Unencrypted, Some(first)));
+        },
     };
 
     let (id_pk, identity) = match peer_key {
@@ -93,7 +114,7 @@ pub(crate) async fn secure(
     };
     connection.set_cipher(Cipher::negotiated(&offer.session_key, &transcript));
     info!("connection to the peer secured, key exchange version {picked}, {identity:?}");
-    Ok(identity)
+    Ok((identity, None))
 }
 
 /// What logging in needs besides the credentials.
@@ -107,16 +128,24 @@ pub(crate) struct Login<'a> {
 
 /// Logs in, and returns what the peer says about itself.
 ///
-/// Messages that arrive before the answer and are not part of the login are returned too, so
-/// the session can handle them.
+/// `first` is a message the peer already sent, as [`secure`] returns it. Messages that arrive
+/// before the answer and are not part of the login are returned too, so the session can handle
+/// them.
 pub(crate) async fn login(
     connection: &mut Connection,
     credentials: &Credentials,
     login: Login<'_>,
+    mut first: Option<Message>,
 ) -> Result<(PeerInfo, Vec<Message>), ConnectError> {
     let hash = loop {
-        let frame = connection.receive_within(STEP_TIMEOUT).await.map_err(peer_failure)?;
-        match proto::decode::<Message>(&frame).and_then(|message| message.union) {
+        let message = match first.take() {
+            Some(message) => Some(message),
+            None => {
+                let frame = connection.receive_within(STEP_TIMEOUT).await.map_err(peer_failure)?;
+                proto::decode::<Message>(&frame)
+            },
+        };
+        match message.and_then(|message| message.union) {
             Some(message::Union::Hash(hash)) => break hash,
             Some(message::Union::MessageBox(text)) => return Err(message_box(text)),
             Some(message::Union::Misc(proto::Misc {
@@ -320,8 +349,8 @@ mod tests {
             let mut peer = FakePeer::new(peer);
             let key = peer.identity_key();
             peer.identify("123", version).await;
-            let identity = secure(&mut client, Some("123"), Some(&key)).await.unwrap();
-            assert_eq!(identity, Identity::Verified);
+            let secured = secure(&mut client, Some("123"), Some(&key)).await.unwrap();
+            assert_eq!(secured, (Identity::Verified, None));
             peer.accept_key(version).await;
 
             let hash =
@@ -358,9 +387,35 @@ mod tests {
         let (mut client, peer) = pair();
         let mut peer = FakePeer::new(peer);
         peer.identify("123", 1).await;
-        assert_eq!(secure(&mut client, None, None).await, Ok(Identity::Unverified));
+        assert_eq!(secure(&mut client, None, None).await, Ok((Identity::Unverified, None)));
         assert!(client.is_encrypted());
         peer.accept_key(1).await;
+    }
+
+    /// RustDesk's direct access port serves connections unsecured: the peer's first message is
+    /// its login challenge.
+    #[tokio::test]
+    async fn a_direct_peer_that_does_not_encrypt_goes_straight_to_the_login() {
+        let (mut client, mut peer) = pair();
+        let hash =
+            Message::of(message::Union::Hash(Hash { salt: "s".into(), challenge: "c".into() }));
+        peer.send(&hash).await.unwrap();
+        assert_eq!(secure(&mut client, None, None).await, Ok((Identity::Unencrypted, Some(hash))));
+        assert!(!client.is_encrypted());
+        // The empty message RustDesk's client sends there too.
+        let frame = peer.receive().await.unwrap().unwrap();
+        assert_eq!(proto::decode::<Message>(&frame), Some(Message::default()));
+    }
+
+    #[tokio::test]
+    async fn a_peer_the_server_vouched_for_must_identify_itself() {
+        let (mut client, mut peer) = pair();
+        let hash = Message::of(message::Union::Hash(Hash::default()));
+        peer.send(&hash).await.unwrap();
+        assert_eq!(
+            secure(&mut client, Some("123"), Some(&[1; 32])).await,
+            Err(ConnectError::Failed("the peer did not identify itself".to_owned()))
+        );
     }
 
     #[tokio::test]
@@ -381,7 +436,7 @@ mod tests {
             peer.send(&Message::of(message::Union::LoginResponse(response))).await.unwrap();
             request
         });
-        let (info, _) = login(&mut client, &credentials, login_for()).await.unwrap();
+        let (info, _) = login(&mut client, &credentials, login_for(), None).await.unwrap();
         assert_eq!(info.platform, "Windows");
         let request = peer_task.await.unwrap();
         let expected = password_proof(&salted_password("pw", "salt"), "challenge");
@@ -407,7 +462,10 @@ mod tests {
                 peer.send(&Message::of(message::Union::LoginResponse(response))).await.unwrap();
                 let _ = peer.receive().await;
             });
-            assert_eq!(login(&mut client, &credentials, login_for()).await.err(), Some(expected));
+            assert_eq!(
+                login(&mut client, &credentials, login_for(), None).await.err(),
+                Some(expected)
+            );
         }
     }
 

@@ -644,7 +644,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                 let hint = "The public server's key";
                 field(ui, "cd-rd-key", "Server key", &mut draft.rustdesk_key, hint, false);
                 if is_rustdesk_address(&draft.host) {
-                    warning(ui, "By address the peer is reached directly, and its identity is not checked.");
+                    warning(ui, "By address RustDesk serves the session unencrypted, and the peer's identity is not checked. Use it over a network you trust, such as a VPN.");
                 }
                 section(ui);
                 field(
