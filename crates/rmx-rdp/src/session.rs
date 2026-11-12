@@ -3,8 +3,6 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use ironrdp_cliprdr::Cliprdr;
-use ironrdp_cliprdr::CliprdrClient;
 use ironrdp_connector::connection_activation::{
     ConnectionActivationSequence, ConnectionActivationState,
 };
@@ -13,10 +11,6 @@ use ironrdp_connector::{
     Credentials, DesktopSize, Sequence as _, ServerName,
 };
 use ironrdp_core::{MonotonicInstant, WriteBuf};
-use ironrdp_displaycontrol::client::DisplayControlClient;
-use ironrdp_displaycontrol::pdu::MonitorLayoutEntry;
-use ironrdp_dvc::DrdynvcClient;
-use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_pdu::Action;
 use ironrdp_pdu::gcc::{ConnectionType, KeyboardType};
@@ -38,7 +32,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until, timeout};
 use tokio_rustls::client::TlsStream;
 
-use crate::clipboard::{Action as ClipboardAction, ClipboardHandle};
+use crate::channels::{self, Link};
 use crate::input::InputMapper;
 use crate::outbox::{Frame, Outbox, Rect};
 use crate::{Compression, Connection, Experience, RdpConfig, RdpError, Security, tls};
@@ -59,12 +53,11 @@ pub(crate) async fn run<S>(
 ) where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let clipboard = ClipboardHandle::default();
+    let channels = channels::Active::new(&config);
     let event_capacity = config.event_capacity.max(1);
     let limit = config.connect_timeout;
-    let scale_factor = (config.scale_factor != 100).then(|| config.scale_factor.clamp(100, 500));
     let established = tokio::select! {
-        result = timeout(limit, handshake(stream, config, &clipboard)) => {
+        result = timeout(limit, handshake(stream, config, &channels)) => {
             result.unwrap_or(Err(RdpError::Timeout))
         }
         () = ready.closed() => return,
@@ -93,8 +86,7 @@ pub(crate) async fn run<S>(
     ));
     let writer = tokio::spawn(write_frames(write_half, write_rx, net_tx));
 
-    let mut session = Session::new(result, write_tx, clipboard);
-    session.scale_factor = scale_factor;
+    let mut session = Session::new(result, write_tx, channels);
     let outcome = session.drive(net_rx, input_rx, &events_tx).await;
     session.finish(outcome, &events_tx).await;
 
@@ -106,13 +98,13 @@ pub(crate) async fn run<S>(
 async fn handshake<S>(
     stream: S,
     config: RdpConfig,
-    clipboard: &ClipboardHandle,
+    channels: &channels::Active,
 ) -> Result<(ConnectionResult, MovableTokioFramed<TlsStream<S>>), RdpError>
 where
     S: AsyncRead + AsyncWrite + Send + Unpin,
 {
     let server_name = config.server_name.clone();
-    let mut connector = connector(&config, clipboard)?;
+    let mut connector = connector(&config, channels)?;
 
     let mut framed = MovableTokioFramed::new(stream);
     let should_upgrade =
@@ -143,21 +135,10 @@ where
 }
 
 /// The connector for `config`, with its channels registered.
-fn connector(config: &RdpConfig, clipboard: &ClipboardHandle) -> Result<ClientConnector, RdpError> {
-    let connector_config = connector_config(config)?;
-    let mut dynamic =
-        DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
-    if config.graphics_pipeline {
-        dynamic.attach_dynamic_channel(GraphicsPipelineClient::new(Box::new(Pipeline), None));
-    }
-    let mut connector = ClientConnector::new(connector_config, SocketAddr::from(([0, 0, 0, 0], 0)))
-        .with_static_channel(dynamic);
-    // Without the channel nothing crosses the clipboard either way.
-    if config.clipboard {
-        connector.attach_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
-            clipboard.backend(),
-        )));
-    }
+fn connector(config: &RdpConfig, channels: &channels::Active) -> Result<ClientConnector, RdpError> {
+    let mut connector =
+        ClientConnector::new(connector_config(config)?, SocketAddr::from(([0, 0, 0, 0], 0)));
+    channels.register(&config.channels, &mut connector);
     Ok(connector)
 }
 
@@ -189,7 +170,7 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
     let experience = config.experience.unwrap_or_else(|| config.quality.experience());
     let (color_depth, connection_type, performance_flags) = experience_settings(&experience);
     let scale_factor = config.scale_factor.clamp(100, 500);
-    Ok(Config {
+    let mut settings = Config {
         desktop_size: DesktopSize { width: config.width, height: config.height },
         monitor_layout: None,
         // Zero leaves the scale out, as the server then picks its own.
@@ -242,10 +223,11 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         enable_server_pointer: true,
         pointer_software_rendering: !config.local_cursor,
         multitransport_flags: None,
-        // The graphics pipeline always carries 32-bit color, so a server whose listener caps the
-        // older bitmap updates at 16-bit (the Windows Server default) still sends full color.
-        support_dyn_vc_gfx_protocol: config.graphics_pipeline,
-    })
+        // The channels say whether they need it.
+        support_dyn_vc_gfx_protocol: false,
+    };
+    config.channels.configure(&mut settings);
+    Ok(settings)
 }
 
 /// A pointer decoded for accelerated rendering, as the local cursor takes it.
@@ -262,13 +244,6 @@ fn cursor_image(pointer: &ironrdp_graphics::pointer::DecodedPointer) -> RemoteCu
         rgba: pointer.bitmap_data.clone(),
     }))
 }
-
-/// The graphics pipeline's handler. [`ActiveStage`] composites what the pipeline decodes into
-/// the session's image, so nothing here needs to act. Without an H.264 decoder the pipeline
-/// offers the server only its other codecs: RemoteFX Progressive, ClearCodec and planar.
-struct Pipeline;
-
-impl GraphicsPipelineHandler for Pipeline {}
 
 /// The color depth, connection type and desktop effects an [`Experience`] asks for.
 fn experience_settings(experience: &Experience) -> (u32, ConnectionType, PerformanceFlags) {
@@ -371,17 +346,12 @@ struct Session {
     outbox: Outbox,
     mapper: InputMapper,
     write: mpsc::UnboundedSender<Vec<u8>>,
-    clipboard: ClipboardHandle,
-    last_remote_text: Option<String>,
+    channels: channels::Active,
     activation: ironrdp_connector::connection_activation::ConnectionActivationFactory,
     /// A running Deactivation-Reactivation Sequence, during which graphics are not decoded.
     reactivating: Option<ConnectionActivationSequence>,
     refresh_rect_support: bool,
     suppress_output_support: bool,
-    /// A resize asked for before the display control channel was ready.
-    pending_resize: Option<(u32, u32)>,
-    /// The interface scale the desktop keeps across resizes, if not the server's own.
-    scale_factor: Option<u32>,
     /// Set once the server has been asked to close, until this time.
     disconnecting: Option<Instant>,
 }
@@ -390,7 +360,7 @@ impl Session {
     fn new(
         result: ConnectionResult,
         write: mpsc::UnboundedSender<Vec<u8>>,
-        clipboard: ClipboardHandle,
+        channels: channels::Active,
     ) -> Self {
         let ConnectionResult {
             io_channel_id,
@@ -429,14 +399,11 @@ impl Session {
             outbox,
             mapper: InputMapper::new(),
             write,
-            clipboard,
-            last_remote_text: None,
+            channels,
             activation: activation_factory,
             reactivating: None,
             refresh_rect_support,
             suppress_output_support,
-            pending_resize: None,
-            scale_factor: None,
             disconnecting: None,
         }
     }
@@ -509,6 +476,12 @@ impl Session {
         }
     }
 
+    /// The channels, with what they work with.
+    fn channels(&mut self) -> (&mut channels::Active, Link<'_>) {
+        let link = Link { stage: &mut self.stage, outbox: &mut self.outbox, write: &self.write };
+        (&mut self.channels, link)
+    }
+
     fn on_input(&mut self, event: InputEvent) -> Result<(), String> {
         match event {
             InputEvent::Disconnect => {
@@ -517,14 +490,12 @@ impl Session {
                 self.apply(self.stage.graceful_shutdown().map_err(session_error)?)?;
                 self.disconnecting = Some(Instant::now() + SHUTDOWN_GRACE);
             },
-            InputEvent::Clipboard(text) => self.set_clipboard(text)?,
-            InputEvent::Resize { width, height } => {
-                self.pending_resize = Some(MonitorLayoutEntry::adjust_display_size(width, height));
-                self.retry_resize()?;
-            },
             event => {
-                let events = self.mapper.translate(&event);
-                self.send_input(&events)?;
+                let (channels, mut link) = self.channels();
+                if let Some(event) = channels.on_input(event, &mut link)? {
+                    let events = self.mapper.translate(&event);
+                    self.send_input(&events)?;
+                }
             },
         }
         Ok(())
@@ -537,66 +508,6 @@ impl Session {
         let outputs =
             self.stage.process_fastpath_input(&mut self.image, events).map_err(session_error)?;
         self.apply(outputs)?;
-        Ok(())
-    }
-
-    fn set_clipboard(&mut self, text: String) -> Result<(), String> {
-        // The interface echoing the text the remote just sent is not a new local copy.
-        if self.last_remote_text.as_deref() == Some(text.as_str()) {
-            return Ok(());
-        }
-        self.clipboard.set_local_text(text);
-        self.advertise_clipboard()
-    }
-
-    fn advertise_clipboard(&mut self) -> Result<(), String> {
-        let formats = self.clipboard.formats();
-        let Some(channel) = self.stage.get_svc_processor_mut::<CliprdrClient>() else {
-            return Ok(());
-        };
-        let messages = channel.initiate_copy(&formats).map_err(|e| e.to_string())?;
-        let frame = self.stage.process_svc_processor_messages(messages).map_err(session_error)?;
-        self.write_frame(frame);
-        Ok(())
-    }
-
-    /// Carries out what the clipboard channel queued during the last frame.
-    fn run_clipboard_actions(&mut self) -> Result<(), String> {
-        for action in self.clipboard.take_actions() {
-            let messages = {
-                let Some(channel) = self.stage.get_svc_processor_mut::<CliprdrClient>() else {
-                    return Ok(());
-                };
-                match action {
-                    ClipboardAction::Advertise => {
-                        self.advertise_clipboard()?;
-                        continue;
-                    },
-                    ClipboardAction::Paste(format) => channel.initiate_paste(format),
-                    ClipboardAction::Reply(response) => channel.submit_format_data(response),
-                    ClipboardAction::Received(text) => {
-                        self.last_remote_text = Some(text.clone());
-                        self.outbox.clipboard(text);
-                        continue;
-                    },
-                }
-            }
-            .map_err(|e| e.to_string())?;
-            let frame =
-                self.stage.process_svc_processor_messages(messages).map_err(session_error)?;
-            self.write_frame(frame);
-        }
-        Ok(())
-    }
-
-    fn retry_resize(&mut self) -> Result<(), String> {
-        let Some((width, height)) = self.pending_resize else {
-            return Ok(());
-        };
-        if let Some(frame) = self.stage.encode_resize(width, height, self.scale_factor, None) {
-            self.pending_resize = None;
-            self.write_frame(frame.map_err(session_error)?);
-        }
         Ok(())
     }
 
@@ -633,8 +544,8 @@ impl Session {
                 self.write_frame(frame);
             }
         }
-        self.run_clipboard_actions()?;
-        self.retry_resize()?;
+        let (channels, mut link) = self.channels();
+        channels.after_frame(&mut link)?;
         Ok(None)
     }
 
@@ -663,7 +574,10 @@ impl Session {
                         "the server redirected the session, which is not supported".to_owned()
                     );
                 },
-                _ => {},
+                output => {
+                    let (channels, mut link) = self.channels();
+                    channels.on_output(output, &mut link);
+                },
             }
         }
         Ok(None)
@@ -743,12 +657,16 @@ impl Session {
     }
 }
 
-fn session_error(error: ironrdp_session::SessionError) -> String {
+pub(crate) fn session_error(error: ironrdp_session::SessionError) -> String {
     error.report().to_string()
 }
 
 #[cfg(test)]
 mod tests {
+    use ironrdp_displaycontrol::client::DisplayControlClient;
+    use ironrdp_dvc::DrdynvcClient;
+    use ironrdp_egfx::client::GraphicsPipelineClient;
+
     use super::*;
     use crate::Quality;
 
@@ -803,7 +721,7 @@ mod tests {
     #[test]
     fn the_session_options_reach_the_connector() {
         let mut rdp = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
-        rdp.graphics_pipeline = false;
+        rdp.channels.graphics_pipeline.enabled = false;
         rdp.lossy = false;
         rdp.compression = Some(Compression::Rdp61);
         rdp.scale_factor = 150;
@@ -839,7 +757,7 @@ mod tests {
     #[test]
     fn default_channels_register_what_they_always_have() {
         let rdp = RdpConfig::new("host", "user", "secret", (800, 600), [0; 32]);
-        let mut connector = connector(&rdp, &ClipboardHandle::default()).unwrap();
+        let mut connector = connector(&rdp, &channels::Active::new(&rdp)).unwrap();
         let mut statics: Vec<String> = connector
             .static_channels
             .values()

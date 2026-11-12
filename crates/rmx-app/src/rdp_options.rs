@@ -3,6 +3,9 @@
 //!
 //! Only what differs from the default is saved, under keys starting with [`PREFIX`], so a
 //! connection saved before a setting existed keeps behaving as it did.
+//!
+//! Each group of the form has one function here, listed in [`GROUPS`], which saves the group,
+//! reads it back and applies it.
 
 use std::collections::BTreeMap;
 
@@ -46,6 +49,81 @@ const COMPRESSIONS: [(RdpCompression, &str); 4] = [
     (RdpCompression::Rdp61, "rdp61"),
 ];
 
+/// The groups of settings, in the form's order.
+const GROUPS: [fn(Op<'_>); 5] = [picture, graphics, display, session, devices];
+
+type Settings = BTreeMap<String, String>;
+
+/// What a group is asked to do with its settings.
+enum Op<'a> {
+    /// Put the group's settings into `settings`, which holds none yet.
+    Save { advanced: &'a RdpAdvanced, quality: RdpQuality, settings: &'a mut Settings },
+    /// Read the group's settings from `settings` into `advanced`, which holds the defaults.
+    Load { settings: &'a Settings, advanced: &'a mut RdpAdvanced },
+    /// Have `config` ask for what the group says.
+    Apply { quality: RdpQuality, advanced: &'a RdpAdvanced, config: &'a mut RdpConfig },
+}
+
+/// Put `advanced` into `settings`, replacing what was there. The picture is saved only for a
+/// custom quality, as a preset says it already.
+pub fn save(advanced: &RdpAdvanced, quality: RdpQuality, settings: &mut Settings) {
+    settings.retain(|key, _| !key.starts_with(PREFIX));
+    for group in GROUPS {
+        group(Op::Save { advanced, quality, settings: &mut *settings });
+    }
+}
+
+/// What `settings` holds of an RDP connection's advanced settings.
+pub fn load(settings: &Settings) -> RdpAdvanced {
+    let mut advanced = RdpAdvanced::default();
+    for group in GROUPS {
+        group(Op::Load { settings, advanced: &mut advanced });
+    }
+    advanced
+}
+
+/// Have `config` ask for what `quality` and `advanced` say.
+pub fn apply(quality: RdpQuality, advanced: &RdpAdvanced, config: &mut RdpConfig) {
+    for group in GROUPS {
+        group(Op::Apply { quality, advanced, config: &mut *config });
+    }
+}
+
+fn put(settings: &mut Settings, key: &str, value: &str) {
+    settings.insert(key.to_owned(), value.to_owned());
+}
+
+/// Saves a flag unless it has its default value.
+fn put_flag(settings: &mut Settings, key: &str, value: bool, default: bool) {
+    if value != default {
+        put(settings, key, if value { "1" } else { "0" });
+    }
+}
+
+/// Saves text unless it is blank.
+fn put_text(settings: &mut Settings, key: &str, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        put(settings, key, value);
+    }
+}
+
+fn get<'a>(settings: &'a Settings, key: &str) -> Option<&'a str> {
+    settings.get(key).map(String::as_str)
+}
+
+fn flag(settings: &Settings, key: &str, default: bool) -> bool {
+    match get(settings, key) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => default,
+    }
+}
+
+fn text(settings: &Settings, key: &str) -> String {
+    get(settings, key).unwrap_or_default().to_owned()
+}
+
 /// Each effect's name in the saved list, with how to reach it.
 fn effect_fields(effects: &mut RdpEffects) -> [(&'static str, &mut bool); 7] {
     [
@@ -59,143 +137,155 @@ fn effect_fields(effects: &mut RdpEffects) -> [(&'static str, &mut bool); 7] {
     ]
 }
 
-/// Put `advanced` into `settings`, replacing what was there. The picture is saved only for a
-/// custom quality, as a preset says it already.
-pub fn save(advanced: &RdpAdvanced, quality: RdpQuality, settings: &mut BTreeMap<String, String>) {
-    settings.retain(|key, _| !key.starts_with(PREFIX));
-    let mut put = |key: &str, value: &str| {
-        settings.insert(key.to_owned(), value.to_owned());
-    };
+/// The quality, and the color depth, link and effects of a custom one.
+fn picture(op: Op<'_>) {
+    match op {
+        Op::Save { advanced, quality, settings } => {
+            if quality != RdpQuality::Custom {
+                return;
+            }
+            let picture = &advanced.picture;
+            put(settings, DEPTH, &picture.color_depth.bits().to_string());
+            if let Some((_, name)) = LINKS.iter().find(|(link, _)| *link == picture.connection) {
+                put(settings, LINK, name);
+            }
+            let mut effects = picture.effects;
+            let on: Vec<&str> = effect_fields(&mut effects)
+                .into_iter()
+                .filter(|(_, allowed)| **allowed)
+                .map(|(name, _)| name)
+                .collect();
+            let list = if on.is_empty() { "none".to_owned() } else { on.join(",") };
+            put(settings, EFFECTS, &list);
+        },
+        Op::Load { settings, advanced } => {
+            let picture = &mut advanced.picture;
+            if let Some(bits) = get(settings, DEPTH).and_then(|bits| bits.parse::<u32>().ok())
+                && let Some(depth) =
+                    RdpColorDepth::ALL.into_iter().find(|depth| depth.bits() == bits)
+            {
+                picture.color_depth = depth;
+            }
+            let link = get(settings, LINK);
+            if let Some((link, _)) = LINKS.iter().find(|(_, name)| Some(*name) == link) {
+                picture.connection = *link;
+            }
+            if let Some(list) = get(settings, EFFECTS) {
+                let on: Vec<&str> = list.split(',').map(str::trim).collect();
+                for (name, allowed) in effect_fields(&mut picture.effects) {
+                    *allowed = on.contains(&name);
+                }
+            }
+        },
+        Op::Apply { quality, advanced, config } => match quality {
+            RdpQuality::Best => config.quality = Quality::Best,
+            RdpQuality::Balanced => config.quality = Quality::Balanced,
+            RdpQuality::Fast => config.quality = Quality::Fast,
+            RdpQuality::Custom => config.experience = Some(experience(&advanced.picture)),
+        },
+    }
+}
+
+/// The graphics pipeline, codecs and compression.
+fn graphics(op: Op<'_>) {
     let defaults = RdpAdvanced::default();
-
-    if quality == RdpQuality::Custom {
-        let picture = &advanced.picture;
-        put(DEPTH, &picture.color_depth.bits().to_string());
-        if let Some((_, name)) = LINKS.iter().find(|(link, _)| *link == picture.connection) {
-            put(LINK, name);
-        }
-        let mut effects = picture.effects;
-        let on: Vec<&str> = effect_fields(&mut effects)
-            .into_iter()
-            .filter(|(_, allowed)| **allowed)
-            .map(|(name, _)| name)
-            .collect();
-        let list = if on.is_empty() { "none".to_owned() } else { on.join(",") };
-        put(EFFECTS, &list);
-    }
-    for (key, value, default) in [
-        (GFX, advanced.graphics_pipeline, defaults.graphics_pipeline),
-        (REMOTEFX, advanced.remotefx, defaults.remotefx),
-        (LOSSY, advanced.lossy, defaults.lossy),
-        (CLIPBOARD, advanced.clipboard, defaults.clipboard),
-    ] {
-        if value != default {
-            put(key, if value { "1" } else { "0" });
-        }
-    }
-    if let Some((_, name)) = COMPRESSIONS.iter().find(|(c, _)| *c == advanced.compression) {
-        put(COMPRESSION, name);
-    }
-    if advanced.scale != defaults.scale {
-        put(SCALE, &advanced.scale.to_string());
-    }
-    if !advanced.local_cursor {
-        put(POINTER, "picture");
-    }
-    for (key, value) in [
-        (KEYBOARD, &advanced.keyboard_layout),
-        (CLIENT, &advanced.client_name),
-        (PROGRAM, &advanced.start_program),
-        (WORK_DIR, &advanced.work_dir),
-    ] {
-        let value = value.trim();
-        if !value.is_empty() {
-            put(key, value);
-        }
+    match op {
+        Op::Save { advanced, settings, .. } => {
+            put_flag(settings, GFX, advanced.graphics_pipeline, defaults.graphics_pipeline);
+            put_flag(settings, REMOTEFX, advanced.remotefx, defaults.remotefx);
+            put_flag(settings, LOSSY, advanced.lossy, defaults.lossy);
+            if let Some((_, name)) = COMPRESSIONS.iter().find(|(c, _)| *c == advanced.compression) {
+                put(settings, COMPRESSION, name);
+            }
+        },
+        Op::Load { settings, advanced } => {
+            advanced.graphics_pipeline = flag(settings, GFX, defaults.graphics_pipeline);
+            advanced.remotefx = flag(settings, REMOTEFX, defaults.remotefx);
+            advanced.lossy = flag(settings, LOSSY, defaults.lossy);
+            let compression = get(settings, COMPRESSION);
+            advanced.compression = COMPRESSIONS
+                .iter()
+                .find(|(_, name)| Some(*name) == compression)
+                .map_or(RdpCompression::None, |(compression, _)| *compression);
+        },
+        Op::Apply { advanced, config, .. } => {
+            config.channels.graphics_pipeline.enabled = advanced.graphics_pipeline;
+            config.remotefx = advanced.remotefx;
+            config.lossy = advanced.lossy;
+            config.compression = match advanced.compression {
+                RdpCompression::None => None,
+                RdpCompression::K8 => Some(Compression::K8),
+                RdpCompression::K64 => Some(Compression::K64),
+                RdpCompression::Rdp6 => Some(Compression::Rdp6),
+                RdpCompression::Rdp61 => Some(Compression::Rdp61),
+            };
+        },
     }
 }
 
-/// What `settings` holds of an RDP connection's advanced settings.
-pub fn load(settings: &BTreeMap<String, String>) -> RdpAdvanced {
-    let get = |key: &str| settings.get(key).map(String::as_str);
-    let flag = |key: &str, default: bool| match get(key) {
-        Some("1") => true,
-        Some("0") => false,
-        _ => default,
-    };
-    let text = |key: &str| get(key).unwrap_or_default().to_owned();
+/// The remote scale and where the pointer is drawn.
+fn display(op: Op<'_>) {
     let defaults = RdpAdvanced::default();
-
-    let mut picture = RdpPicture::default();
-    if let Some(bits) = get(DEPTH).and_then(|bits| bits.parse::<u32>().ok())
-        && let Some(depth) = RdpColorDepth::ALL.into_iter().find(|depth| depth.bits() == bits)
-    {
-        picture.color_depth = depth;
-    }
-    if let Some((link, _)) = LINKS.iter().find(|(_, name)| Some(*name) == get(LINK)) {
-        picture.connection = *link;
-    }
-    if let Some(list) = get(EFFECTS) {
-        let on: Vec<&str> = list.split(',').map(str::trim).collect();
-        for (name, allowed) in effect_fields(&mut picture.effects) {
-            *allowed = on.contains(&name);
-        }
-    }
-
-    RdpAdvanced {
-        picture,
-        graphics_pipeline: flag(GFX, defaults.graphics_pipeline),
-        remotefx: flag(REMOTEFX, defaults.remotefx),
-        lossy: flag(LOSSY, defaults.lossy),
-        compression: COMPRESSIONS
-            .iter()
-            .find(|(_, name)| Some(*name) == get(COMPRESSION))
-            .map_or(RdpCompression::None, |(compression, _)| *compression),
-        scale: get(SCALE)
-            .and_then(|scale| scale.parse().ok())
-            .filter(|scale| RDP_SCALES.contains(scale))
-            .unwrap_or(defaults.scale),
-        local_cursor: get(POINTER) != Some("picture"),
-        clipboard: flag(CLIPBOARD, defaults.clipboard),
-        keyboard_layout: text(KEYBOARD),
-        client_name: text(CLIENT),
-        start_program: text(PROGRAM),
-        work_dir: text(WORK_DIR),
+    match op {
+        Op::Save { advanced, settings, .. } => {
+            if advanced.scale != defaults.scale {
+                put(settings, SCALE, &advanced.scale.to_string());
+            }
+            if !advanced.local_cursor {
+                put(settings, POINTER, "picture");
+            }
+        },
+        Op::Load { settings, advanced } => {
+            advanced.scale = get(settings, SCALE)
+                .and_then(|scale| scale.parse().ok())
+                .filter(|scale| RDP_SCALES.contains(scale))
+                .unwrap_or(defaults.scale);
+            advanced.local_cursor = get(settings, POINTER) != Some("picture");
+        },
+        Op::Apply { advanced, config, .. } => {
+            config.scale_factor = advanced.scale;
+            config.local_cursor = advanced.local_cursor;
+        },
     }
 }
 
-/// Have `config` ask for what `quality` and `advanced` say.
-pub fn apply(quality: RdpQuality, advanced: &RdpAdvanced, config: &mut RdpConfig) {
-    match quality {
-        RdpQuality::Best => config.quality = Quality::Best,
-        RdpQuality::Balanced => config.quality = Quality::Balanced,
-        RdpQuality::Fast => config.quality = Quality::Fast,
-        RdpQuality::Custom => config.experience = Some(experience(&advanced.picture)),
+/// The clipboard, keyboard, client name and start program.
+fn session(op: Op<'_>) {
+    let defaults = RdpAdvanced::default();
+    match op {
+        Op::Save { advanced, settings, .. } => {
+            put_flag(settings, CLIPBOARD, advanced.clipboard, defaults.clipboard);
+            put_text(settings, KEYBOARD, &advanced.keyboard_layout);
+            put_text(settings, CLIENT, &advanced.client_name);
+            put_text(settings, PROGRAM, &advanced.start_program);
+            put_text(settings, WORK_DIR, &advanced.work_dir);
+        },
+        Op::Load { settings, advanced } => {
+            advanced.clipboard = flag(settings, CLIPBOARD, defaults.clipboard);
+            advanced.keyboard_layout = text(settings, KEYBOARD);
+            advanced.client_name = text(settings, CLIENT);
+            advanced.start_program = text(settings, PROGRAM);
+            advanced.work_dir = text(settings, WORK_DIR);
+        },
+        Op::Apply { advanced, config, .. } => {
+            config.channels.clipboard.enabled = advanced.clipboard;
+            if let Some(layout) = parse_keyboard_layout(&advanced.keyboard_layout) {
+                config.keyboard_layout = layout;
+            }
+            let client = advanced.client_name.trim();
+            if !client.is_empty() {
+                // The server keeps 15 characters of it.
+                config.client_name = client.chars().take(15).collect();
+            }
+            config.start_program = advanced.start_program.trim().to_owned();
+            config.work_dir = advanced.work_dir.trim().to_owned();
+        },
     }
-    config.graphics_pipeline = advanced.graphics_pipeline;
-    config.remotefx = advanced.remotefx;
-    config.lossy = advanced.lossy;
-    config.compression = match advanced.compression {
-        RdpCompression::None => None,
-        RdpCompression::K8 => Some(Compression::K8),
-        RdpCompression::K64 => Some(Compression::K64),
-        RdpCompression::Rdp6 => Some(Compression::Rdp6),
-        RdpCompression::Rdp61 => Some(Compression::Rdp61),
-    };
-    config.scale_factor = advanced.scale;
-    config.local_cursor = advanced.local_cursor;
-    config.clipboard = advanced.clipboard;
-    if let Some(layout) = parse_keyboard_layout(&advanced.keyboard_layout) {
-        config.keyboard_layout = layout;
-    }
-    let client = advanced.client_name.trim();
-    if !client.is_empty() {
-        // The server keeps 15 characters of it.
-        config.client_name = client.chars().take(15).collect();
-    }
-    config.start_program = advanced.start_program.trim().to_owned();
-    config.work_dir = advanced.work_dir.trim().to_owned();
 }
+
+/// The local devices a session hands the server. The device channels fill it in; none exists
+/// yet.
+fn devices(_op: Op<'_>) {}
 
 fn experience(picture: &RdpPicture) -> Experience {
     let e = &picture.effects;
@@ -319,7 +409,7 @@ mod tests {
         assert_eq!(config.keyboard_layout, 0x040c);
         assert_eq!(config.client_name, "a-very-long-com");
         assert_eq!(config.scale_factor, 200);
-        assert!(!config.clipboard);
+        assert!(!config.channels.clipboard.enabled);
         assert!(config.local_cursor);
     }
 }

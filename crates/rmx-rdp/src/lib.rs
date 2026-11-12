@@ -18,7 +18,7 @@
 //! once too many are waiting, and whatever is dirty is delivered as soon as the channel frees
 //! up, even if the server has gone quiet, so the session always ends on the correct picture.
 
-mod clipboard;
+mod channels;
 mod input;
 mod outbox;
 mod session;
@@ -31,6 +31,8 @@ use std::time::Duration;
 use rmx_display::DisplayHandle;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot};
+
+pub use channels::{Channels, ClipboardOptions, DisplayControlOptions, GraphicsPipelineOptions};
 
 /// How the server may authenticate the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,23 +218,20 @@ pub struct RdpConfig {
     pub quality: Quality,
     /// Color depth, link and effects chosen one by one, in place of what `quality` would ask.
     pub experience: Option<Experience>,
-    /// Offer the graphics pipeline, which always carries 32-bit color. Without it the server
-    /// sends the older bitmap updates.
-    pub graphics_pipeline: bool,
     /// Let the server compress bitmaps lossily.
     pub lossy: bool,
     /// Bulk compression to offer, if any.
     pub compression: Option<Compression>,
     /// How large the remote desktop draws its interface, in percent: 100 to 500.
     pub scale_factor: u32,
-    /// Share the clipboard's text with the server.
-    pub clipboard: bool,
     /// A program to run in place of the desktop's shell, and the directory it starts in.
     pub start_program: String,
     pub work_dir: String,
     /// Report the pointer's shapes as [`DisplayEvent::Cursor`](rmx_display::DisplayEvent) for
     /// the interface to show as its own cursor, rather than drawing them into the picture.
     pub local_cursor: bool,
+    /// The virtual channels to open, and how.
+    pub channels: Channels,
     /// The name this client gives the server.
     pub client_name: String,
     /// The bound of the [`DisplayHandle::events`] channel. A smaller value coalesces harder.
@@ -263,14 +262,13 @@ impl RdpConfig {
             remotefx: true,
             quality: Quality::default(),
             experience: None,
-            graphics_pipeline: true,
             lossy: true,
             compression: None,
             scale_factor: 100,
-            clipboard: true,
             start_program: String::new(),
             work_dir: String::new(),
             local_cursor: true,
+            channels: Channels::default(),
             client_name: "rmx".to_owned(),
             event_capacity: 8,
             connect_timeout: Duration::from_secs(30),
@@ -293,14 +291,13 @@ impl fmt::Debug for RdpConfig {
             .field("remotefx", &self.remotefx)
             .field("quality", &self.quality)
             .field("experience", &self.experience)
-            .field("graphics_pipeline", &self.graphics_pipeline)
             .field("lossy", &self.lossy)
             .field("compression", &self.compression)
             .field("scale_factor", &self.scale_factor)
-            .field("clipboard", &self.clipboard)
             .field("start_program", &self.start_program)
             .field("work_dir", &self.work_dir)
             .field("local_cursor", &self.local_cursor)
+            .field("channels", &self.channels)
             .field("client_name", &self.client_name)
             .field("event_capacity", &self.event_capacity)
             .field("connect_timeout", &self.connect_timeout)
