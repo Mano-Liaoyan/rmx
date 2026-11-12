@@ -129,18 +129,20 @@ pub enum Protocol {
     Ftp,
     Vnc,
     Rdp,
+    RustDesk,
     Telnet,
     Serial,
 }
 
 impl Protocol {
     /// Every protocol, in the order the new-connection dialog offers them.
-    pub const ALL: [Protocol; 7] = [
+    pub const ALL: [Protocol; 8] = [
         Protocol::Ssh,
         Protocol::Sftp,
         Protocol::Ftp,
         Protocol::Vnc,
         Protocol::Rdp,
+        Protocol::RustDesk,
         Protocol::Telnet,
         Protocol::Serial,
     ];
@@ -153,6 +155,7 @@ impl Protocol {
             Protocol::Ftp => "FTP",
             Protocol::Vnc => "VNC",
             Protocol::Rdp => "RDP",
+            Protocol::RustDesk => "RustDesk",
             Protocol::Telnet => "Telnet",
             Protocol::Serial => "Serial",
         }
@@ -166,6 +169,7 @@ impl Protocol {
             Protocol::Ftp => icons::HARD_DRIVE_UPLOAD,
             Protocol::Vnc => icons::MONITOR,
             Protocol::Rdp => icons::MONITOR_COG,
+            Protocol::RustDesk => icons::MONITOR,
             Protocol::Telnet => icons::TERMINAL,
             Protocol::Serial => icons::CABLE,
         }
@@ -178,6 +182,8 @@ impl Protocol {
             Protocol::Ftp => Some(21),
             Protocol::Vnc => Some(5900),
             Protocol::Rdp => Some(3389),
+            // Only used to reach a peer by address; an ID goes through the rendezvous server.
+            Protocol::RustDesk => Some(21118),
             Protocol::Telnet => Some(23),
             Protocol::Serial => None,
         }

@@ -58,6 +58,8 @@ const OPTION_DATA_BITS: &str = "data_bits";
 const OPTION_PARITY: &str = "parity";
 const OPTION_STOP_BITS: &str = "stop_bits";
 const OPTION_FLOW: &str = "flow";
+const OPTION_RENDEZVOUS: &str = "rendezvous";
+const OPTION_SERVER_KEY: &str = "server_key";
 
 /// Something for the vault's thread to do.
 pub enum Request {
@@ -963,6 +965,8 @@ impl Actor {
             rdp_security,
             rdp_quality: rdp_quality(&settings),
             vnc_colors: vnc_colors(&settings),
+            rustdesk_server: settings.get(OPTION_RENDEZVOUS).cloned(),
+            rustdesk_key: settings.get(OPTION_SERVER_KEY).cloned(),
             ftps: settings.get(OPTION_FTPS).is_some_and(|value| value == "1"),
             serial: serial_config(&settings),
         })
@@ -1063,10 +1067,12 @@ impl Actor {
             OPTION_PARITY,
             OPTION_STOP_BITS,
             OPTION_FLOW,
+            OPTION_RENDEZVOUS,
+            OPTION_SERVER_KEY,
         ] {
             settings.remove(key);
         }
-        if matches!(draft.protocol, Protocol::Vnc | Protocol::Rdp) {
+        if matches!(draft.protocol, Protocol::Vnc | Protocol::Rdp | Protocol::RustDesk) {
             if draft.scale == ScaleChoice::Native {
                 settings.insert(OPTION_SCALE.to_owned(), "native".to_owned());
             }
@@ -1089,6 +1095,17 @@ impl Actor {
             }
             if let Some(quality) = rdp_quality_option(draft.rdp_quality) {
                 settings.insert(OPTION_QUALITY.to_owned(), quality.to_owned());
+            }
+        }
+        if draft.protocol == Protocol::RustDesk {
+            if let Some(quality) = rdp_quality_option(draft.rdp_quality) {
+                settings.insert(OPTION_QUALITY.to_owned(), quality.to_owned());
+            }
+            if let Some(server) = non_empty(&draft.rustdesk_server) {
+                settings.insert(OPTION_RENDEZVOUS.to_owned(), server);
+            }
+            if let Some(key) = non_empty(&draft.rustdesk_key) {
+                settings.insert(OPTION_SERVER_KEY.to_owned(), key);
             }
         }
         if draft.protocol == Protocol::Vnc
@@ -1189,6 +1206,8 @@ impl Actor {
         draft.vnc_colors = vnc_colors(&settings);
         draft.ftps = settings.get(OPTION_FTPS).is_some_and(|value| value == "1");
         draft.domain = settings.get(OPTION_DOMAIN).cloned().unwrap_or_default();
+        draft.rustdesk_server = settings.get(OPTION_RENDEZVOUS).cloned().unwrap_or_default();
+        draft.rustdesk_key = settings.get(OPTION_SERVER_KEY).cloned().unwrap_or_default();
         Ok(draft)
     }
 

@@ -1,10 +1,9 @@
 //! Interface input to RDP fast-path events.
 
-use ironrdp_input::{Database, MouseButton, MousePosition, Operation, WheelRotations};
+use ironrdp_input::{Database, MouseButton, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
+use rmx_display::keymap::{EVDEV_PAUSE, evdev_to_scancode};
 use rmx_display::{InputEvent, Key, buttons};
-
-use crate::keymap::{EVDEV_PAUSE, evdev_to_scancode};
 
 /// Rotation units of one wheel notch.
 const WHEEL_DELTA: i16 = 120;
@@ -42,7 +41,7 @@ impl InputMapper {
         if key.evdev == EVDEV_PAUSE {
             return if pressed { pause_sequence() } else { Vec::new() };
         }
-        let Some(scancode) = evdev_to_scancode(key.evdev) else {
+        let Some(scancode) = evdev_to_scancode(key.evdev).map(Scancode::from_u16) else {
             return Vec::new();
         };
         if pressed && self.state.is_key_pressed(scancode) {

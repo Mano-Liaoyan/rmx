@@ -26,7 +26,9 @@ use rmx_transfer::{
     DialedStream, FtpConfig, FtpDialer, FtpFs, FtpTls, RemoteFs, SftpFs, SftpOptions, TunnelStream,
 };
 use rmx_ui::Protocol;
-use rmx_ui::widgets::{HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, VncColors};
+use rmx_ui::widgets::{
+    HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, VncColors, is_rustdesk_address,
+};
 use rmx_vault::{KnownHost, Tunnel};
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
@@ -398,6 +400,10 @@ pub struct ConnectPlan {
     pub rdp_security: RdpSecurity,
     pub rdp_quality: RdpQuality,
     pub vnc_colors: VncColors,
+    /// RustDesk: the rendezvous server, if not RustDesk's public one.
+    pub rustdesk_server: Option<String>,
+    /// RustDesk: that server's public key, if not the public server's.
+    pub rustdesk_key: Option<String>,
     pub ftps: bool,
     pub serial: SerialConfig,
 }
@@ -469,6 +475,7 @@ pub async fn run(request: ConnectRequest) {
             (Protocol::Ftp, _) => run_ftp(&reporter, plan, vault, &mut cancel).await,
             (Protocol::Vnc, _) => run_vnc(&reporter, plan, vault, &mut cancel).await,
             (Protocol::Rdp, _) => run_rdp(&reporter, plan, pixels, vault, &mut cancel).await,
+            (Protocol::RustDesk, _) => run_rustdesk(&reporter, plan, vault, &mut cancel).await,
             (Protocol::Telnet, _) => {
                 let shell = ShellSpec { size, theme, sink, runtime };
                 run_telnet(&reporter, plan, shell, vault, &mut cancel).await
@@ -1181,6 +1188,115 @@ async fn run_rdp(
     Ok(())
 }
 
+/// The rendezvous server a RustDesk connection uses when it names none.
+const RUSTDESK_PUBLIC_SERVER: &str = "rs-ny.rustdesk.com";
+
+/// Opens what a RustDesk session dials, straight or through the jump hosts' tunnel.
+struct RustDeskDialer<'a> {
+    tunnel: Option<&'a SshClient>,
+}
+
+impl rmx_rustdesk::Dial for RustDeskDialer<'_> {
+    fn dial<'a>(
+        &'a self,
+        host: &'a str,
+        port: u16,
+    ) -> rmx_rustdesk::BoxFuture<'a, std::io::Result<Box<dyn rmx_rustdesk::Transport>>> {
+        Box::pin(async move {
+            let stream = open_stream(self.tunnel, host, port).await.map_err(std::io::Error::other)?;
+            Ok(Box::new(stream) as Box<dyn rmx_rustdesk::Transport>)
+        })
+    }
+}
+
+/// Where a RustDesk connection goes: an address straight, an ID through its server.
+fn rustdesk_target(host: &str, port: u16, server: Option<String>, key: Option<String>) -> rmx_rustdesk::Target {
+    if is_rustdesk_address(host) {
+        return rmx_rustdesk::Target::Direct { host: host.trim().to_owned(), port };
+    }
+    let server = rmx_rustdesk::Server {
+        host: server.unwrap_or_else(|| RUSTDESK_PUBLIC_SERVER.to_owned()),
+        key,
+    };
+    rmx_rustdesk::Target::Id { id: host.trim().to_owned(), server }
+}
+
+async fn run_rustdesk(
+    reporter: &Reporter,
+    plan: ConnectPlan,
+    vault: VaultHandle,
+    cancel: &mut oneshot::Receiver<()>,
+) -> Result<(), String> {
+    use rmx_rustdesk::ConnectError;
+
+    let ConnectPlan {
+        endpoint, jumps, holds, scale, follow_size, rdp_quality, rustdesk_server, rustdesk_key, ..
+    } = plan;
+    let Endpoint { host, port, password, .. } = endpoint;
+    let target = rustdesk_target(&host, port, rustdesk_server, rustdesk_key);
+    reporter.send(LinkEvent::Target(match &target {
+        rmx_rustdesk::Target::Id { id, server } => format!("{id} via {}", server.host),
+        rmx_rustdesk::Target::Direct { host, port } => format!("{host}:{port}"),
+    }));
+    let quality = match rdp_quality {
+        RdpQuality::Best => rmx_rustdesk::Quality::Best,
+        RdpQuality::Balanced => rmx_rustdesk::Quality::Balanced,
+        RdpQuality::Fast => rmx_rustdesk::Quality::Fast,
+    };
+    let mut credentials = rmx_rustdesk::Credentials {
+        password: password.map(|secret| secret.expose().to_owned()),
+        two_factor_code: None,
+    };
+
+    let setup = async {
+        let tunnel = open_tunnel(reporter, jumps, vault).await?;
+        drop(holds);
+        let dialer = RustDeskDialer { tunnel: tunnel.as_ref() };
+        for attempt in 0..PASSWORD_ATTEMPTS {
+            reporter.send(LinkEvent::Stage(match (&target, &credentials.password) {
+                (_, None) => "Waiting for the peer to accept".to_owned(),
+                (rmx_rustdesk::Target::Id { .. }, Some(_)) => "Reaching the peer".to_owned(),
+                (rmx_rustdesk::Target::Direct { .. }, Some(_)) => "Starting the session".to_owned(),
+            }));
+            let mut config = rmx_rustdesk::Config::new(target.clone());
+            config.credentials = credentials.clone();
+            config.quality = quality;
+            let (title, label) = match rmx_rustdesk::connect(&dialer, config).await {
+                Ok(session) => {
+                    if session.identity == rmx_rustdesk::Identity::Unverified {
+                        log::warn!("the RustDesk peer at {host} is encrypted but its identity was not checked");
+                    }
+                    return Ok::<_, String>((session.display, tunnel));
+                },
+                Err(ConnectError::PasswordRequired | ConnectError::WrongPassword) => {
+                    (format!("RustDesk password for {host}"), "Password")
+                },
+                Err(ConnectError::TwoFactorRequired | ConnectError::WrongTwoFactorCode) => {
+                    (format!("Two-factor code for {host}"), "Code")
+                },
+                Err(err) => return Err(err.to_string()),
+            };
+            let detail = retry_note(attempt + 1);
+            let secret = label == "Password";
+            let answer = ask(&reporter.proxy, Some(reporter.pane), title, detail, vec![(label.to_owned(), secret)]).await;
+            let typed = answer.and_then(|answers| answers.into_iter().next()).ok_or("An answer is needed")?;
+            if secret {
+                credentials.password = Some(typed.expose().to_owned());
+            } else {
+                credentials.two_factor_code = Some(typed.expose().trim().to_owned());
+            }
+        }
+        Err("The peer did not accept the login".to_owned())
+    };
+    let (handle, tunnel) = tokio::select! {
+        biased;
+        _ = &mut *cancel => return Ok(()),
+        result = setup => result?,
+    };
+    pump_display(reporter, DisplayKind::RustDesk, handle, scale, follow_size, tunnel, cancel).await;
+    Ok(())
+}
+
 /// Whether an RDP handshake failed because of the credentials rather than the network.
 fn is_auth_failure(message: &str) -> bool {
     let text = message.to_ascii_lowercase();
@@ -1226,6 +1342,22 @@ pub fn sync_verifier(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rustdesk_id_goes_through_its_server_and_an_address_straight() {
+        let by_id = rustdesk_target(" 123456789 ", 21118, None, None);
+        let server = rmx_rustdesk::Server { host: RUSTDESK_PUBLIC_SERVER.to_owned(), key: None };
+        assert_eq!(by_id, rmx_rustdesk::Target::Id { id: "123456789".to_owned(), server });
+
+        let own = rustdesk_target("office", 1, Some("rd.example.com".into()), Some("KEY".into()));
+        let server = rmx_rustdesk::Server { host: "rd.example.com".to_owned(), key: Some("KEY".into()) };
+        assert_eq!(own, rmx_rustdesk::Target::Id { id: "office".to_owned(), server });
+
+        for host in ["192.168.1.20", "pc.lan", "fe80::1"] {
+            let direct = rustdesk_target(host, 21118, Some("ignored".into()), None);
+            assert_eq!(direct, rmx_rustdesk::Target::Direct { host: host.to_owned(), port: 21118 });
+        }
+    }
 
     #[test]
     fn certificate_fingerprints_survive_their_stored_form() {

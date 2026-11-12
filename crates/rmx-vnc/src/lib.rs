@@ -29,7 +29,6 @@
 //!   desktop. A refused [`InputEvent::Resize`](rmx_display::InputEvent::Resize) is logged and
 //!   otherwise leaves the session as it was.
 
-mod coalesce;
 mod input;
 mod session;
 

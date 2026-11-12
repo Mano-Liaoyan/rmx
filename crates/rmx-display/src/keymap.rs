@@ -1,15 +1,14 @@
-//! Linux evdev key codes to the set-1 scancodes RDP carries.
-
-use ironrdp_input::Scancode;
+//! Linux evdev key codes to the PC set-1 scancodes Windows and RDP use.
 
 /// `KEY_PAUSE`, which has no scancode of its own and is sent as its own sequence.
-pub(crate) const EVDEV_PAUSE: u32 = 119;
+pub const EVDEV_PAUSE: u32 = 119;
 
-/// Returns the RDP scancode of the physical key, or `None` if it has no scancode.
+/// Returns the set-1 scancode of the physical key, or `None` if it has no scancode.
 ///
-/// Evdev numbers for the main block are set-1 scancodes by construction; everything else
-/// comes from the extended (`0xE0`) range or the Japanese and Korean keys.
-pub(crate) fn evdev_to_scancode(evdev: u32) -> Option<Scancode> {
+/// Extended keys carry `0xE0` in the high byte, as `0xE048` for the up arrow. Evdev numbers for
+/// the main block are set-1 scancodes by construction; everything else comes from the extended
+/// range or the Japanese and Korean keys.
+pub fn evdev_to_scancode(evdev: u32) -> Option<u16> {
     const E: u16 = 0xE000;
     let code = match evdev {
         1..=83 => evdev as u16,
@@ -68,7 +67,7 @@ pub(crate) fn evdev_to_scancode(evdev: u32) -> Option<Scancode> {
         217 => E | 0x65, // KEY_SEARCH
         _ => return None,
     };
-    Some(Scancode::from_u16(code))
+    Some(code)
 }
 
 #[cfg(test)]
@@ -76,7 +75,8 @@ mod tests {
     use super::*;
 
     fn parts(evdev: u32) -> (bool, u8) {
-        evdev_to_scancode(evdev).expect("mapped").as_u8()
+        let code = evdev_to_scancode(evdev).expect("mapped");
+        (code >> 8 == 0xE0, code as u8)
     }
 
     #[test]
@@ -129,11 +129,10 @@ mod tests {
     fn every_mapped_scancode_is_unique() {
         let mut seen = std::collections::HashMap::new();
         for evdev in 0..512 {
-            if let Some(scancode) = evdev_to_scancode(evdev) {
-                let code = scancode.as_u16();
-                if let Some(earlier) = seen.insert(code, evdev) {
-                    panic!("{earlier} and {evdev} share {code:#x}");
-                }
+            if let Some(code) = evdev_to_scancode(evdev)
+                && let Some(earlier) = seen.insert(code, evdev)
+            {
+                panic!("{earlier} and {evdev} share {code:#x}");
             }
         }
     }
