@@ -17,6 +17,8 @@
 //! - Password login, two-factor codes, and sessions the person at the peer approves.
 //! - Video, keyboard (by key position), pointer, wheel and text clipboard. No audio, file
 //!   transfer or remote cursor shape: the cursor is drawn locally.
+//! - The peer keeps its own resolution: [`InputEvent::Resize`](rmx_display::InputEvent::Resize)
+//!   is ignored, and the interface scales the picture.
 
 mod codec;
 mod crypto;

@@ -132,6 +132,8 @@ impl Peer {
                     },
                     _ => continue,
                 },
+                // Such as a resolution change, which would hang a Wayland peer.
+                message::Union::Misc(_) => "misc".to_owned(),
                 _ => continue,
             };
             let clipboard =
@@ -182,6 +184,8 @@ async fn carries_input(session: crate::Session) {
     // The test delay that came in with the login was sent back.
     assert_eq!(next_event(&mut display.events).await, DisplayEvent::Clipboard("delay 7".into()));
 
+    // The pane changing size asks nothing of the peer: the key is the next thing it hears of.
+    display.input.send(InputEvent::Resize { width: 1280, height: 720 }).await.unwrap();
     // A Linux peer gets X key codes: A is evdev 30, X keycode 38.
     let key = Key { evdev: 30, keysym: None };
     display.input.send(InputEvent::Key { key, pressed: true }).await.unwrap();

@@ -40,6 +40,9 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.rmx-rustdesk]
 opt-level = 3
+# The RustDesk video decoder: a quarter faster than at "s".
+[profile.release.package.vp9-mt]
+opt-level = 3
 [profile.release.package.alacritty_terminal]
 opt-level = 3
 [profile.release.package.vte]
