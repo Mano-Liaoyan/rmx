@@ -15,6 +15,7 @@ ironrdp-connector = "0.12"
 ironrdp-core = { version = "0.3", features = ["std"] }
 ironrdp-displaycontrol = "0.10"
 ironrdp-dvc = "0.10"
+ironrdp-egfx = "0.5"
 ironrdp-graphics = "0.11"
 ironrdp-input = "0.9"
 ironrdp-pdu = { version = "0.11", features = ["std"] }

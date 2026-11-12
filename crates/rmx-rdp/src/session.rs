@@ -16,6 +16,7 @@ use ironrdp_core::{MonotonicInstant, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_displaycontrol::pdu::MonitorLayoutEntry;
 use ironrdp_dvc::DrdynvcClient;
+use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_pdu::Action;
 use ironrdp_pdu::gcc::{ConnectionType, KeyboardType};
@@ -114,7 +115,8 @@ where
     let mut connector = ClientConnector::new(connector_config, SocketAddr::from(([0, 0, 0, 0], 0)))
         .with_static_channel(
             DrdynvcClient::new()
-                .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+                .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())))
+                .with_dynamic_channel(GraphicsPipelineClient::new(Box::new(Pipeline), None)),
         )
         .with_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
             clipboard.backend(),
@@ -221,9 +223,18 @@ fn connector_config(config: &RdpConfig) -> Result<Config, RdpError> {
         enable_server_pointer: true,
         pointer_software_rendering: true,
         multitransport_flags: None,
-        support_dyn_vc_gfx_protocol: false,
+        // The graphics pipeline always carries 32-bit color, so a server whose listener caps the
+        // older bitmap updates at 16-bit (the Windows Server default) still sends full color.
+        support_dyn_vc_gfx_protocol: true,
     })
 }
+
+/// The graphics pipeline's handler. [`ActiveStage`] composites what the pipeline decodes into
+/// the session's image, so nothing here needs to act. Without an H.264 decoder the pipeline
+/// offers the server only its other codecs: RemoteFX Progressive, ClearCodec and planar.
+struct Pipeline;
+
+impl GraphicsPipelineHandler for Pipeline {}
 
 /// The color depth, connection type and desktop effects a [`Quality`] asks for.
 fn quality_settings(quality: Quality) -> (u32, ConnectionType, PerformanceFlags) {
@@ -547,6 +558,8 @@ impl Session {
             .stage
             .process(&mut self.image, action, frame, received_at)
             .map_err(session_error)?;
+        // The graphics pipeline resets the image to the size the server chose.
+        self.outbox.fit(self.image.width().into(), self.image.height().into());
         if let Some(outcome) = self.apply(outputs)? {
             return Ok(Some(outcome));
         }
@@ -689,6 +702,13 @@ mod tests {
         assert_eq!(config.bitmap.unwrap().color_depth, 32);
         assert_eq!(config.performance_flags, PerformanceFlags::default());
         assert_eq!(config.connection_type, ConnectionType::Lan);
+    }
+
+    #[test]
+    fn every_quality_offers_the_graphics_pipeline() {
+        for quality in [Quality::Best, Quality::Balanced, Quality::Fast] {
+            assert!(config(quality).support_dyn_vc_gfx_protocol, "{quality:?}");
+        }
     }
 
     #[test]
