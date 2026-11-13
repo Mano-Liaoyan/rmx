@@ -395,6 +395,8 @@ pub enum UiAction {
     PaneToggleScale(PaneId),
     /// Browse the files of this SSH pane at its working directory.
     PaneOpenFiles(PaneId),
+    /// Put this pane in the broadcast group, or take it out.
+    PaneBroadcast(PaneId),
     Files(PaneId, FilesAction),
     /// The menu of a column of a file pane, of the row `name` or else its empty space.
     FilesMenu {

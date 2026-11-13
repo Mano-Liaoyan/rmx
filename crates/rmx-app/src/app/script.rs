@@ -240,6 +240,7 @@ impl At<'_> {
                 .and_then(|id| self.pane(id))
                 .and_then(|pane| pane.notice.as_deref())
                 .is_some_and(|notice| notice.contains(found.as_str())),
+            C::Broadcast(count) => crate::broadcast::group_size(&self.core.panes) == *count,
         }
     }
 }

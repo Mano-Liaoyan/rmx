@@ -7,6 +7,7 @@ mod app;
 mod background;
 #[cfg(feature = "bench")]
 mod bench;
+mod broadcast;
 mod clipboard;
 mod compare;
 mod connect;

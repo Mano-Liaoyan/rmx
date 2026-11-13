@@ -389,9 +389,7 @@ impl At<'_> {
                 (!text.is_empty()).then(|| Preedit { text, cursor: cursor.map(|at| at.0) })
             },
             Ime::Commit(text) => {
-                if let Some(terminal) = self.focused_terminal() {
-                    terminal.write(text.into_bytes());
-                }
+                self.type_keys(true, |_| text.as_bytes().to_vec());
                 None
             },
             Ime::Enabled | Ime::Disabled => None,

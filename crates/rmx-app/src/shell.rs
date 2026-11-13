@@ -48,6 +48,8 @@ const SLOT_BAR: f32 = 3.;
 const DRAG_LABEL: f32 = 180.;
 /// Opacity of the chrome over a pane being dragged.
 const VEIL: f32 = 0.4;
+/// Thickness of the ring around a pane in the broadcast group, in points.
+const BROADCAST_EDGE: f32 = 2.;
 /// How long a divider's pill takes to show, hide or grow, in milliseconds.
 const PILL_MS: u64 = 140;
 /// The least room the sidebar leaves the panes, in points.
@@ -917,6 +919,7 @@ impl Shell {
                 files: ssh
                     && pane.content.terminal().is_some()
                     && pane.link == crate::pane::Link::Live,
+                broadcast: pane.content.terminal().is_some().then_some(pane.broadcast),
             };
             let reveal = self.bars.entry(id).or_default();
             if self.drag.is_some() {
@@ -984,9 +987,15 @@ impl Shell {
             let cut = Stroke::new(gutter, palette.chrome);
             painter.rect_stroke(panel, radius, cut, StrokeKind::Outside);
 
-            let light = view.motion.light(id, view.now);
-            let edge = palette.border.lerp_to_gamma(palette.muted_fg, light * 0.45);
-            painter.rect_stroke(panel, radius, Stroke::new(1., edge), StrokeKind::Inside);
+            // A pane in the broadcast group is ringed, so it is plain where typing goes.
+            let broadcast = view.panes.iter().any(|pane| pane.id == id && pane.broadcast);
+            let edge = if broadcast {
+                Stroke::new(BROADCAST_EDGE, palette.warning)
+            } else {
+                let light = view.motion.light(id, view.now);
+                Stroke::new(1., palette.border.lerp_to_gamma(palette.muted_fg, light * 0.45))
+            };
+            painter.rect_stroke(panel, radius, edge, StrokeKind::Inside);
         }
     }
 

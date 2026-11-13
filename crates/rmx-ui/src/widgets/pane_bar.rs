@@ -3,11 +3,11 @@
 
 use std::time::Instant;
 
-use egui::{CursorIcon, Id, Rect, Sense, Ui, Vec2, pos2};
+use egui::{CornerRadius, CursorIcon, Id, Rect, Sense, Ui, Vec2, pos2};
 
 use crate::action::{PaneId, UiAction};
 use crate::draw::{elided_at, hline, palette};
-use crate::theme::{PANE_BAR_HEIGHT, TEXT_SM};
+use crate::theme::{PANE_BAR_HEIGHT, RADIUS_SM, TEXT_SM, TEXT_XS};
 use crate::{fonts, icons};
 
 use super::controls::paint_icon_button;
@@ -40,7 +40,13 @@ pub struct PaneBarView<'a> {
     pub zoomed: bool,
     /// Whether its files can be opened.
     pub files: bool,
+    /// Whether it is in the broadcast group, for a pane that takes typing; `None` for one that
+    /// cannot join.
+    pub broadcast: Option<bool>,
 }
+
+/// What the badge of a pane in the broadcast group says.
+const BROADCAST_BADGE: &str = "Broadcast";
 
 /// Draw the bar of a pane in `rect`, which is [`PANE_BAR_HEIGHT`] tall.
 pub fn pane_bar(
@@ -97,6 +103,10 @@ pub fn pane_bar(
     }
     buttons.push((icons::ROWS_2, "Split down", UiAction::PaneSplitDown(pane)));
     buttons.push((icons::COLUMNS_2, "Split right", UiAction::PaneSplitRight(pane)));
+    if let Some(joined) = view.broadcast {
+        let tip = if joined { "Stop broadcasting" } else { "Broadcast input" };
+        buttons.push((icons::CABLE, tip, UiAction::PaneBroadcast(pane)));
+    }
     if view.files {
         buttons.push((icons::FOLDER_SYNC, "Files", UiAction::PaneOpenFiles(pane)));
     }
@@ -125,7 +135,17 @@ pub fn pane_bar(
 
     // The name and where it goes give way smoothly as the buttons come.
     let end = rect.right() - 8. - room * shown;
-    let start = rect.left() + 22.;
+    let mut start = rect.left() + 22.;
+    // In the broadcast group, a badge says so before the name, whether the pointer is there or not.
+    if view.broadcast == Some(true) {
+        let galley =
+            painter.layout_no_wrap(BROADCAST_BADGE.to_owned(), fonts::medium(TEXT_XS), p.warning);
+        let size = galley.size() + Vec2::new(12., 2.);
+        let badge = Rect::from_min_size(pos2(start, y - size.y / 2.), size);
+        painter.rect_filled(badge, CornerRadius::same(RADIUS_SM), p.warning.gamma_multiply(0.18));
+        painter.galley(badge.min + Vec2::new(6., 1.), galley, p.warning);
+        start = badge.right() + 8.;
+    }
     let (font, color) = if view.focused {
         (fonts::medium(TEXT_SM), p.foreground)
     } else {
