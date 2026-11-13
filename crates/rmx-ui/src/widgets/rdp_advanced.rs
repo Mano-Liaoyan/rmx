@@ -268,8 +268,17 @@ fn text_row(ui: &mut Ui, salt: &'static str, label: &str, value: &mut String, hi
     });
 }
 
-/// The page's rows, changing `draft` as they are used.
+/// The page's rows, changing `draft` as they are used: one function per group.
 pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
+    picture(ui, draft);
+    graphics(ui, &mut draft.rdp);
+    display(ui, &mut draft.rdp);
+    session(ui, &mut draft.rdp);
+    devices(ui, &mut draft.rdp);
+}
+
+/// The quality, and the color depth, link and effects it asks for.
+fn picture(ui: &mut Ui, draft: &mut ConnectionDraft) {
     heading(ui, "Picture");
     let quality = [RdpQuality::Best, RdpQuality::Balanced, RdpQuality::Fast, RdpQuality::Custom];
     let at = quality.iter().position(|&q| q == draft.rdp_quality).unwrap_or(1);
@@ -305,10 +314,12 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
         draft.rdp.picture = picture;
         draft.rdp_quality = RdpQuality::Custom;
     }
+}
 
+/// The graphics pipeline, codecs and compression.
+fn graphics(ui: &mut Ui, rdp: &mut RdpAdvanced) {
     section(ui);
     heading(ui, "Graphics");
-    let rdp = &mut draft.rdp;
     ticks(
         ui,
         "ra-graphics",
@@ -323,7 +334,10 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
     if let Some(picked) = choice(ui, "Compression", "ra-compression", &options, at) {
         rdp.compression = RdpCompression::ALL[picked];
     }
+}
 
+/// The remote scale and where the pointer is drawn.
+fn display(ui: &mut Ui, rdp: &mut RdpAdvanced) {
     section(ui);
     heading(ui, "Display");
     let at = RDP_SCALES.iter().position(|&s| s == rdp.scale).unwrap_or(0);
@@ -338,7 +352,10 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
     {
         rdp.local_cursor = picked == 0;
     }
+}
 
+/// The clipboard, keyboard, client name and start program.
+fn session(ui: &mut Ui, rdp: &mut RdpAdvanced) {
     section(ui);
     heading(ui, "Session");
     ticks(ui, "ra-session", &mut [(&mut rdp.clipboard, "Share the clipboard")]);
@@ -347,6 +364,10 @@ pub fn rdp_advanced_page(ui: &mut Ui, draft: &mut ConnectionDraft) {
     text_row(ui, "ra-program", "Start program", &mut rdp.start_program, "The desktop");
     text_row(ui, "ra-workdir", "Start in", &mut rdp.work_dir, "");
 }
+
+/// The local devices a session hands the server. No device channel exists yet, so the group
+/// draws nothing; the first one starts it with `section(ui)` and `heading(ui, "Devices")`.
+fn devices(_ui: &mut Ui, _rdp: &mut RdpAdvanced) {}
 
 #[cfg(test)]
 mod tests {

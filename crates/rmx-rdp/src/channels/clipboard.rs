@@ -1,7 +1,7 @@
-//! Plain text clipboard over the `cliprdr` channel.
+//! Plain text clipboard over the `cliprdr` static channel.
 //!
 //! The channel calls back into [`TextClipboard`] with no way to answer directly, so the
-//! callbacks queue [`Action`]s for the session, which owns the channel and acts on them.
+//! callbacks queue [`Action`]s for [`State`], which acts on them after each frame.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,94 @@ use ironrdp_cliprdr::pdu::{
     FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
     OwnedFormatDataResponse,
 };
+use ironrdp_cliprdr::{Cliprdr, CliprdrClient};
+use ironrdp_connector::ClientConnector;
 use ironrdp_core::impl_as_any;
+
+use super::Link;
+use crate::session::session_error;
+
+/// What the clipboard channel is asked to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipboardOptions {
+    /// Share the clipboard's text with the server.
+    pub enabled: bool,
+}
+
+impl Default for ClipboardOptions {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// The session's side of the channel, from before the handshake to the end.
+#[derive(Debug, Default)]
+pub(crate) struct State {
+    handle: ClipboardHandle,
+    /// The text the remote last sent, which the interface echoes back.
+    last_remote_text: Option<String>,
+}
+
+impl State {
+    pub fn register(&self, options: &ClipboardOptions, connector: &mut ClientConnector) {
+        // Without the channel nothing crosses the clipboard either way.
+        if options.enabled {
+            connector.attach_static_channel(Cliprdr::<ironrdp_cliprdr::Client>::new(Box::new(
+                self.handle.backend(),
+            )));
+        }
+    }
+
+    /// The local clipboard now holds `text`.
+    pub fn set_local(&mut self, text: String, link: &mut Link<'_>) -> Result<(), String> {
+        // The interface echoing the text the remote just sent is not a new local copy.
+        if self.last_remote_text.as_deref() == Some(text.as_str()) {
+            return Ok(());
+        }
+        self.handle.set_local_text(text);
+        self.advertise(link)
+    }
+
+    fn advertise(&self, link: &mut Link<'_>) -> Result<(), String> {
+        let formats = self.handle.formats();
+        let Some(channel) = link.stage.get_svc_processor_mut::<CliprdrClient>() else {
+            return Ok(());
+        };
+        let messages = channel.initiate_copy(&formats).map_err(|e| e.to_string())?;
+        let frame = link.stage.process_svc_processor_messages(messages).map_err(session_error)?;
+        link.send(frame);
+        Ok(())
+    }
+
+    /// Carries out what the channel queued during the last frame.
+    pub fn run_actions(&mut self, link: &mut Link<'_>) -> Result<(), String> {
+        for action in self.handle.take_actions() {
+            let messages = {
+                let Some(channel) = link.stage.get_svc_processor_mut::<CliprdrClient>() else {
+                    return Ok(());
+                };
+                match action {
+                    Action::Advertise => {
+                        self.advertise(link)?;
+                        continue;
+                    },
+                    Action::Paste(format) => channel.initiate_paste(format),
+                    Action::Reply(response) => channel.submit_format_data(response),
+                    Action::Received(text) => {
+                        self.last_remote_text = Some(text.clone());
+                        link.outbox.clipboard(text);
+                        continue;
+                    },
+                }
+            }
+            .map_err(|e| e.to_string())?;
+            let frame =
+                link.stage.process_svc_processor_messages(messages).map_err(session_error)?;
+            link.send(frame);
+        }
+        Ok(())
+    }
+}
 
 /// What the session must do on the channel's behalf.
 #[derive(Debug)]
