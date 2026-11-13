@@ -2568,6 +2568,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironrdp-propertyset"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa863399999a1964a772afbcbaabfe1371c2e99c3b90da0d35832b3621c8746"
+
+[[package]]
 name = "ironrdp-rdpei"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2579,6 +2585,15 @@ dependencies = [
  "ironrdp-pdu",
  "ironrdp-svc",
  "tracing",
+]
+
+[[package]]
+name = "ironrdp-rdpfile"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c12e471db37faa636ae910eef243d7f677a14801105ff22633dc12da8589652"
+dependencies = [
+ "ironrdp-propertyset",
 ]
 
 [[package]]
@@ -4371,6 +4386,8 @@ dependencies = [
  "copypasta",
  "crossfont",
  "glutin",
+ "ironrdp-propertyset",
+ "ironrdp-rdpfile",
  "libc",
  "log",
  "ring",

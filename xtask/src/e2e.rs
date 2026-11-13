@@ -764,6 +764,36 @@ pub fn broadcast(bench_target: &Path, shots: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `.rdp` files as mstsc saves them, imported from the sidebar's add menu and by dropping one
+/// on the window, each shown in the preview first. Needs no server.
+pub fn rdp_import(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    const GATEWAY: &[u8] =
+        include_bytes!("../../crates/rmx-app/tests/rdp/gateway-custom-effects.rdp");
+    const UTF16: &[u8] = include_bytes!("../../crates/rmx-app/tests/rdp/utf16-bom.rdp");
+    let scratch = Scratch::new();
+    let picked = scratch.path("home/jump.rdp");
+    let dropped = scratch.path("home/office.rdp");
+    fs::write(&picked, GATEWAY).map_err(|err| format!("{}: {err}", picked.display()))?;
+    fs::write(&dropped, UTF16).map_err(|err| format!("{}: {err}", dropped.display()))?;
+    let row = "Import .rdp\u{2026}";
+    let script = [
+        "await:setup,vault-create-plain,await:unlocked,wait,wait".to_owned(),
+        format!("add-menu,await:menu-offers:{row},menu-row:{row},wait,press,wait,release"),
+        format!("await:prompt,answer:{},await:import:1,wait,wait,wait,wait", picked.display()),
+        shot_step(shots, "rdp-import-preview.ppm"),
+        "import-confirm:RDP files,await:no-question,await:tree:jump".to_owned(),
+        "await:host:jump|10.20.30.40,await:tree:RDP files".to_owned(),
+        format!("drop:{},await:import:1,wait,wait", dropped.display()),
+        "import-confirm:Office,await:no-question,await:tree:office,await:tree:Office".to_owned(),
+        "await:host:office|fd00::17,wait,wait".to_owned(),
+        shot_step(shots, "rdp-imported.ppm"),
+    ]
+    .join(",");
+    app_run(bench_target, &scratch, "device", &script)?;
+    println!("ok   rdp-import: a picked and a dropped .rdp file, previewed, then saved");
+    Ok(())
+}
+
 /// Tearing tabs off with a live SSH session, merging them back, the session reopened after a
 /// restart behind the lock, and snippets sent from the palette.
 pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {

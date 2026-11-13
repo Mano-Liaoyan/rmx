@@ -59,6 +59,11 @@
 //! that, `dont-ask` ticks its "Don't ask again", and `await:settings` holds until the settings
 //! dialog is open, where `confirm-close:<on|off>` sets the question before closing and saves.
 //!
+//! `drop:<path>` drops that file on the window, `add-menu` opens the sidebar's add menu and
+//! `import-rdp` asks for `.rdp` files as its row does. `await:import:<count>` holds until the
+//! import preview lists that many connections, `import-confirm:<group>` imports them all into
+//! the group, and `await:host:<label>|<host>` holds until the connection `label` goes to `host`.
+//!
 //! `RMX_BENCH_VAULT=off` puts the panes straight up, to measure them without the vault.
 //!
 //! `RMX_BENCH_SIZE` is the window size as `WIDTHxHEIGHT`. Frames before `RMX_BENCH_WARMUP` do not
@@ -374,6 +379,8 @@ pub enum Step {
     FilesKey(FilesKey, bool),
     /// Show the connection form for this protocol.
     Form(Protocol),
+    /// Import everything the import preview lists, into this group.
+    ImportConfirm(String),
     /// The steps after this act on the window at this index.
     Window(usize),
     /// Press this letter with Ctrl+Shift.
@@ -493,6 +500,10 @@ pub enum Condition {
     Asking(String),
     /// The settings dialog is open.
     Settings,
+    /// The import preview lists so many connections.
+    Import(usize),
+    /// The connection with this label connects to this host.
+    Host(String, String),
 }
 
 fn file_side(text: &str) -> Option<FileSide> {
@@ -616,6 +627,12 @@ fn parse(step: &str) -> Option<Step> {
     }
     if let Some(index) = step.strip_prefix("tab-point:") {
         return Some(Step::TabPoint(index.parse().ok()?));
+    }
+    if let Some(path) = step.strip_prefix("drop:") {
+        return Some(Step::Input(WindowEvent::DroppedFile(path.into())));
+    }
+    if let Some(group) = step.strip_prefix("import-confirm:") {
+        return Some(Step::ImportConfirm(group.into()));
     }
     if let Some(text) = step.strip_prefix("commit:") {
         return Some(Step::Input(WindowEvent::Ime(Ime::Commit(text.into()))));
@@ -742,6 +759,13 @@ fn parse_condition(text: &str) -> Option<Condition> {
     }
     if let Some(count) = text.strip_prefix("broadcast:") {
         return Some(Condition::Broadcast(count.parse().ok()?));
+    }
+    if let Some(count) = text.strip_prefix("import:") {
+        return Some(Condition::Import(count.parse().ok()?));
+    }
+    if let Some(rest) = text.strip_prefix("host:") {
+        let (label, host) = rest.split_once('|')?;
+        return Some(Condition::Host(label.into(), host.into()));
     }
     if let Some(count) = text.strip_prefix("live-shown:") {
         return Some(Condition::LiveShown(count.parse().ok()?));
@@ -1050,6 +1074,9 @@ fn parse_interface_step(step: &str) -> Option<Step> {
         "vault-lock" => Step::Ui("vault-lock", UiAction::VaultLock),
         "sync-now" => Step::Ui("sync-now", UiAction::SyncNow),
         "import-ssh" => Step::Ui("import-ssh", UiAction::ImportSshConfig),
+        "import-rdp" => Step::Ui("import-rdp", UiAction::ImportRdpAsk),
+        // Under the sidebar's add button, where it opens the menu.
+        "add-menu" => Step::Ui("add-menu", UiAction::SidebarAddMenu(egui::pos2(250., 96.))),
         "settings" => Step::Ui("settings", UiAction::OpenSettings),
         "confirm" => Step::Ui("confirm", UiAction::PromptSubmit(Vec::new())),
         "dont-ask" => Step::DontAsk,

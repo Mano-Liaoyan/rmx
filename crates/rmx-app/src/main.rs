@@ -18,6 +18,7 @@ mod highlight;
 mod options;
 mod pacer;
 mod pane;
+mod rdp_file;
 mod rdp_options;
 mod remote;
 mod session_log;

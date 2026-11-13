@@ -112,6 +112,7 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("broadcast", Box::new(|| e2e::broadcast(&bench_target, &shots))),
         ("quick", Box::new(|| e2e::quick(&bench_target, &shots))),
         ("closing", Box::new(|| e2e::closing(&bench_target, &shots))),
+        ("rdp-import", Box::new(|| e2e::rdp_import(&bench_target, &shots))),
     ];
     let results: Vec<(&str, Result<(), String>)> = tests
         .into_iter()

@@ -20,14 +20,14 @@ use rmx_ui::theme::{
     STRIP_HEIGHT,
 };
 use rmx_ui::widgets::{
-    ContextMenu, FilesKey, FilesState, HostKeyView, InheritedLogin, MenuItem, NewConnectionState,
-    NodeKind, PaneBarView, Panels, PromptState, QuickItem, QuickOpenState, Reveal,
-    SIDEBAR_STATUS_HEIGHT, SessionDot, SettingsState, SettingsView, SidebarStatus, SnippetRow,
-    SnippetsState, TabStripState, TabView, TitleBarView, TreeModel, TreeState, VaultSetupState,
-    VaultSetupView, VaultState, VaultView, context_menu, empty_state, files_pane, host_key_dialog,
-    new_connection_dialog, paint_pill, pane_bar, pane_notice, pane_overlay, prompt_dialog,
-    quick_open, resize_handle, settings_dialog, sidebar, sidebar_status, snippets_dialog,
-    title_bar, vault_setup, vault_unlock,
+    ContextMenu, FilesKey, FilesState, HostKeyView, ImportPreviewState, InheritedLogin, MenuItem,
+    NewConnectionState, NodeKind, PaneBarView, Panels, PromptState, QuickItem, QuickOpenState,
+    Reveal, SIDEBAR_STATUS_HEIGHT, SessionDot, SettingsState, SettingsView, SidebarStatus,
+    SnippetRow, SnippetsState, TabStripState, TabView, TitleBarView, TreeModel, TreeState,
+    VaultSetupState, VaultSetupView, VaultState, VaultView, context_menu, empty_state, files_pane,
+    host_key_dialog, import_preview_dialog, new_connection_dialog, paint_pill, pane_bar,
+    pane_notice, pane_overlay, prompt_dialog, quick_open, resize_handle, settings_dialog, sidebar,
+    sidebar_status, snippets_dialog, title_bar, vault_setup, vault_unlock,
 };
 use rmx_ui::{FileSide, NodeId, Protocol, TabId, UiAction, fonts, icons};
 use std::collections::HashMap;
@@ -173,6 +173,8 @@ impl From<&Phase> for Gate {
 pub enum Asking {
     HostKey(HostKeyPrompt),
     Fields(PromptState),
+    /// What an import would create, before anything is saved.
+    Import(ImportPreviewState),
 }
 
 /// A line of the palette and what picking it does.
@@ -868,6 +870,7 @@ impl Shell {
                 },
             ),
             Some(Asking::Fields(state)) => prompt_dialog(ctx, state),
+            Some(Asking::Import(state)) => import_preview_dialog(ctx, state),
             None => None,
         };
         self.actions.extend(action);

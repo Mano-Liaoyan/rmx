@@ -86,6 +86,14 @@ impl At<'_> {
         items.push(MenuItem::Separator);
         items.push(menu_item(icons::PENCIL, "Edit", UiAction::TreeEdit(node), false));
         items.push(menu_item(icons::COPY, "Duplicate", UiAction::TreeDuplicate(node), false));
+        if info.kind == NodeKind::Connection(Protocol::Rdp) {
+            items.push(menu_item(
+                icons::ARROW_RIGHT,
+                "Export as .rdp\u{2026}",
+                UiAction::TreeExportRdp(node),
+                false,
+            ));
+        }
         if !info.host.is_empty() {
             items.push(menu_item(
                 icons::COPY,
@@ -277,6 +285,16 @@ impl At<'_> {
         }
         items.push(menu_item(icons::X, "Close tab", UiAction::TabClose(id), true));
         items
+    }
+
+    /// What the sidebar's add button offers.
+    pub(super) fn add_menu(&self) -> Vec<MenuItem> {
+        vec![
+            menu_item(icons::PLUS, "New connection", UiAction::NewConnection, false),
+            menu_item(icons::FOLDER, "New folder", UiAction::TreeNewFolder(None), false),
+            MenuItem::Separator,
+            menu_item(icons::FOLDER_OPEN, "Import .rdp\u{2026}", UiAction::ImportRdpAsk, false),
+        ]
     }
 
     /// What can be done from the menu of a column of a file pane.

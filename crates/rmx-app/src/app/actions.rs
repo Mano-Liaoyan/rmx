@@ -400,6 +400,13 @@ impl At<'_> {
             UiAction::SettingsCancel => (),
             UiAction::SyncNow => self.perform(Action::SyncNow),
             UiAction::ImportSshConfig => self.core.vault.send(Request::ImportSshConfig),
+            UiAction::ImportRdpAsk => self.ask_rdp_files(),
+            UiAction::ImportConfirm { group, include } => self.confirm_import(&group, &include),
+            UiAction::TreeExportRdp(NodeId(node)) => self.ask_export_rdp(node),
+            UiAction::SidebarAddMenu(pos) => {
+                let items = self.add_menu();
+                self.win.shell.open_menu(pos, items);
+            },
             UiAction::SnippetSave { id, name, body } => {
                 self.core.vault.send(Request::SaveSnippet { id, name, body });
             },
