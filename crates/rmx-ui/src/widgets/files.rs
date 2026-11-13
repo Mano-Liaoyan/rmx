@@ -545,8 +545,7 @@ fn show_column(
         let pos = empty.interact_pointer_pos().unwrap_or(rows.center());
         actions.push(UiAction::FilesMenu { pane, side, name: None, pos });
     }
-    for index in visible.first..visible.end {
-        let row = &view.rows[index];
+    for (index, row) in view.rows.iter().enumerate().take(visible.end).skip(visible.first) {
         let y = rows.top() + visible.top + (index - visible.first) as f32 * ROW;
         let row_rect =
             Rect::from_min_size(pos2(rows.left() + 4., y), vec2(rows.width() - 12., ROW));
@@ -841,8 +840,7 @@ fn show_queue(
     let painter = ui.painter_at(list);
     let mut list_ui = ui.new_child(egui::UiBuilder::new().id_salt(id.with("list")).max_rect(list));
     list_ui.set_clip_rect(list.intersect(ui.clip_rect()));
-    for index in visible.first..visible.end {
-        let row = &view.transfers[index];
+    for (index, row) in view.transfers.iter().enumerate().take(visible.end).skip(visible.first) {
         let y = list.top() + visible.top + (index - visible.first) as f32 * ROW;
         let row_rect =
             Rect::from_min_size(pos2(list.left() + PAD, y), vec2(list.width() - 2. * PAD, ROW));
