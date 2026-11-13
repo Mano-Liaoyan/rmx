@@ -6,7 +6,8 @@
 //! `shot:<path>` to write a fully redrawn frame, and `peek:<path>` to write a frame as partial
 //! redraws leave it. `move:<x>:<y>`, `press` and `release` drive the pointer, `text:<text>` types
 //! into the focused field, `escape` and `enter` press those keys in it, and `preedit:<text>` shows
-//! that text as the input method's.
+//! that text as the input method's. `commit:<text>` is the input method finishing that text, which
+//! types it into the focused terminal as keys do, and into its broadcast group with it.
 //!
 //! Steps driving the real interface, where fields are separated by `|` since `,` ends a step:
 //! `vault-create:<password>[|<key file>]`, `vault-unlock:<password>[|<key file>]`, `vault-lock`,
@@ -43,7 +44,8 @@
 //! dialog; `await:snippet:<name>` holds until it is known. `files-key:[+]<name>` presses `up`,
 //! `down`, `pageup`, `pagedown`, `home`, `end`, `enter`, `back`, `tab` or `copy` in a file pane,
 //! `+` being Shift. `await:awaiting` holds for a reopened pane left waiting for the user, and
-//! `await:live-shown:<count>` for that many connected panes on screen.
+//! `await:live-shown:<count>` for that many connected panes on screen. `await:broadcast:<count>`
+//! holds until the broadcast group has that many panes.
 //!
 //! For more than one window: `win:<index>` makes the steps after it act on that window,
 //! `tab-point:<index>` puts the pointer on a tab, and `await:windows:<count>` and
@@ -476,6 +478,8 @@ pub enum Condition {
     TabName(String),
     /// The focused pane's notice says this.
     Notice(String),
+    /// The broadcast group has so many panes.
+    Broadcast(usize),
 }
 
 fn file_side(text: &str) -> Option<FileSide> {
@@ -600,6 +604,9 @@ fn parse(step: &str) -> Option<Step> {
     if let Some(index) = step.strip_prefix("tab-point:") {
         return Some(Step::TabPoint(index.parse().ok()?));
     }
+    if let Some(text) = step.strip_prefix("commit:") {
+        return Some(Step::Input(WindowEvent::Ime(Ime::Commit(text.into()))));
+    }
     if let Some(text) = step.strip_prefix("preedit:") {
         let cursor = Some((text.len(), text.len()));
         return Some(Step::Input(WindowEvent::Ime(Ime::Preedit(text.into(), cursor))));
@@ -719,6 +726,9 @@ fn parse_condition(text: &str) -> Option<Condition> {
     }
     if let Some(name) = text.strip_prefix("snippet:") {
         return Some(Condition::Snippet(name.into()));
+    }
+    if let Some(count) = text.strip_prefix("broadcast:") {
+        return Some(Condition::Broadcast(count.parse().ok()?));
     }
     if let Some(count) = text.strip_prefix("live-shown:") {
         return Some(Condition::LiveShown(count.parse().ok()?));

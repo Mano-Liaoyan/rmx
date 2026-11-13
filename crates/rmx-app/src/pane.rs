@@ -184,6 +184,8 @@ pub struct Pane {
     pub dirty: bool,
     pub title: Option<String>,
     pub link: Link,
+    /// In the broadcast group: what is typed into one pane of the group goes to all of them.
+    pub broadcast: bool,
     pub remote: Option<Remote>,
     /// Something to tell the user, until dismissed.
     pub notice: Option<String>,
@@ -201,6 +203,7 @@ impl Pane {
             dirty: true,
             title: None,
             link: Link::Local,
+            broadcast: false,
             remote: None,
             notice: None,
             log: None,

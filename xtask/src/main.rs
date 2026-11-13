@@ -109,6 +109,7 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("no-passphrase", Box::new(|| e2e::no_passphrase(&bench_target, &shots))),
         ("last-tab", Box::new(|| e2e::last_tab(&bench_target, &shots))),
         ("panes", Box::new(|| e2e::panes(&bench_target, &shots))),
+        ("broadcast", Box::new(|| e2e::broadcast(&bench_target, &shots))),
     ];
     let results: Vec<(&str, Result<(), String>)> = tests
         .into_iter()

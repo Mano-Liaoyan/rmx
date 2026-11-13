@@ -48,6 +48,27 @@ impl Harness {
         result.expect("the ui closure ran")
     }
 
+    /// Run one frame with no input, returning every text it paints.
+    fn texts(&mut self, mut draw: impl FnMut(&mut Ui)) -> Vec<String> {
+        fn collect(shape: &egui::Shape, into: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => into.push(text.galley.text().to_owned()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, into)),
+                _ => (),
+            }
+        }
+        self.time += 1. / 60.;
+        let raw =
+            RawInput { screen_rect: Some(SCREEN), time: Some(self.time), ..RawInput::default() };
+        let mut output = self.ctx.run_ui(raw, |ui| draw(ui));
+        let mut texts = Vec::new();
+        for clipped in std::mem::take(&mut output.shapes) {
+            collect(&clipped.shape, &mut texts);
+        }
+        output.drop_without_applying_deltas();
+        texts
+    }
+
     /// Settle hover at `at`, press and release, returning the action from the release frame.
     fn click<R>(&mut self, at: Pos2, mut draw: impl FnMut(&mut Ui) -> Option<R>) -> Option<R> {
         self.press_release(at, PointerButton::Primary, &mut draw)
@@ -480,6 +501,7 @@ fn pane_bar_routes_its_buttons() {
         grouped: true,
         zoomed: false,
         files: false,
+        broadcast: None,
     };
     let mut reveal = Reveal::default();
     let mut draw = |ui: &mut Ui| pane_bar(ui, rect, &view, &mut reveal, std::time::Instant::now());
@@ -497,6 +519,38 @@ fn pane_bar_routes_its_buttons() {
         harness.click(pos2(800. - 92., y), &mut draw),
         Some(UiAction::PaneSplitRight(PaneId(7)))
     );
+}
+
+#[test]
+fn a_terminal_pane_bar_toggles_broadcast_and_shows_it() {
+    let mut harness = Harness::new();
+    let rect = Rect::from_min_size(pos2(0., 0.), vec2(800., PANE_BAR_HEIGHT));
+    let mut view = PaneBarView {
+        pane: PaneId(7),
+        status: PaneStatus::Connected,
+        title: "t",
+        tooltip: "",
+        focused: true,
+        grouped: false,
+        zoomed: false,
+        files: false,
+        broadcast: Some(false),
+    };
+    let mut reveal = Reveal::default();
+    let y = rect.center().y;
+    // Close, split down, split right, then broadcast.
+    let at = pos2(800. - 14. - 3. * 26., y);
+    let mut draw = |ui: &mut Ui| pane_bar(ui, rect, &view, &mut reveal, std::time::Instant::now());
+    harness.click(at, &mut draw);
+    assert_eq!(harness.click(at, &mut draw), Some(UiAction::PaneBroadcast(PaneId(7))));
+
+    // In the group, the bar says so, wherever the pointer is.
+    view.broadcast = Some(true);
+    let mut reveal = Reveal::default();
+    let shown = harness.texts(|ui| {
+        pane_bar(ui, rect, &view, &mut reveal, Instant::now());
+    });
+    assert!(shown.iter().any(|text| text == "Broadcast"), "no badge in {shown:?}");
 }
 
 fn core() -> ChromeCore {

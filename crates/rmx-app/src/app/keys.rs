@@ -1,5 +1,7 @@
 //! Input routing: the keys bound to actions, what they do, and the keys of a file pane.
 
+use rmx_terminal::TermMode;
+
 use super::*;
 
 /// The action bound to a key, if any.
@@ -177,6 +179,36 @@ impl At<'_> {
                 self.core.vault.send(Request::SyncNow);
             },
         }
+    }
+
+    /// Put `pane` in the broadcast group, or take it out. Only a terminal can join.
+    pub(super) fn toggle_broadcast(&mut self, pane: PaneId) {
+        let Some(found) = self.pane_mut(pane) else { return };
+        if !found.broadcast && found.content.terminal().is_none() {
+            return;
+        }
+        found.broadcast = !found.broadcast;
+        self.win.chrome.invalidate();
+        self.redraw_all();
+    }
+
+    /// Type into the focused terminal, and into the rest of its broadcast group when it is in one.
+    /// `encode` makes the bytes for a terminal's modes, so that each target gets the key as it
+    /// reads keys; each is written to once. A press scrolls each target to the bottom.
+    pub(super) fn type_keys(&mut self, pressed: bool, encode: impl Fn(TermMode) -> Vec<u8>) {
+        let Some(focused) = self.win.workspace.focused() else { return };
+        crate::broadcast::each_target(&mut self.core.panes, focused, |pane| {
+            let Some(terminal) = pane.content.terminal_mut() else { return };
+            let bytes = encode(terminal.mode());
+            if bytes.is_empty() {
+                return;
+            }
+            if pressed {
+                terminal.scroll_to_bottom();
+                pane.dirty = true;
+            }
+            terminal.write(bytes);
+        });
     }
 
     /// A key meant for the focused pane, if it is a file pane's. Returns whether it was used.

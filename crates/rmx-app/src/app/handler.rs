@@ -363,18 +363,11 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     return;
                 }
-                let Some(terminal) = pane.content.terminal_mut() else { return };
-                let pressed = event.state == ElementState::Pressed;
-                let bytes = encode_key(event, mods, terminal.mode());
-                if !bytes.is_empty() {
-                    if pressed {
-                        terminal.scroll_to_bottom();
-                        terminal.write(bytes);
-                        pane.dirty = true;
-                    } else {
-                        terminal.write(bytes);
-                    }
+                if pane.content.terminal().is_none() {
+                    return;
                 }
+                let pressed = event.state == ElementState::Pressed;
+                at.type_keys(pressed, |mode| encode_key(event.clone(), mods, mode));
             },
             WindowEvent::Ime(ime) if !consumed && !at.core.ui.locked() => at.ime(ime),
             WindowEvent::CursorMoved { position, .. } => {

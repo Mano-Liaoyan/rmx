@@ -695,6 +695,75 @@ pub fn panes(bench_target: &Path, shots: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Split a terminal's answers to the program (`ESC [ ? ... c`) out of what it was sent: how many
+/// there were, and the rest.
+fn split_answers(seen: &[u8]) -> (usize, Vec<u8>) {
+    let (mut answers, mut rest, mut at) = (0, Vec::new(), 0);
+    while at < seen.len() {
+        if seen[at..].starts_with(b"\x1b[?")
+            && let Some(end) = seen[at..].iter().position(|&byte| byte == b'c')
+        {
+            answers += 1;
+            at += end + 1;
+        } else {
+            rest.push(seen[at]);
+            at += 1;
+        }
+    }
+    (answers, rest)
+}
+
+/// Typing into a broadcast group: three local shells, two of them joined from the bar's button
+/// and the menu. What is typed in the group reaches both of them once, and the third not at all;
+/// what is typed in the third stays there. The terminals' own answers are not passed around.
+pub fn broadcast(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let scratch = Scratch::new();
+    let received = scratch.path("received");
+    fs::create_dir_all(&received).map_err(|err| format!("{}: {err}", received.display()))?;
+    // Each shell asks its terminal what it is, then writes down everything it is sent.
+    let shell = format!(
+        "f=$(mktemp -p {} in.XXXXXX); stty raw -echo; printf '\\033[c'; exec cat >> \"$f\"",
+        received.display(),
+    );
+    // The bar's buttons from the right, in a tab of several panes: close, zoom, split down, split
+    // right, broadcast.
+    let script = [
+        "await:setup,vault-create-plain,await:unlocked,await:panes:1,wait,wait".to_owned(),
+        "split-right-local,await:panes:2,wait,wait,split-right-local,await:panes:3".to_owned(),
+        "await:live-shown:3,wait,wait,wait".to_owned(),
+        "bar:0,wait,wait,wait,bar-button:0:4,wait,press,wait,release,await:broadcast:1".to_owned(),
+        "bar:1,wait,press-right,wait,release-right,await:menu".to_owned(),
+        "await:menu-offers:Broadcast input,menu-row:Broadcast input,wait,press,wait,release"
+            .to_owned(),
+        "await:no-menu,await:broadcast:2,wait,wait".to_owned(),
+        "bar:0,wait,press,wait,release,wait,commit:one,wait,wait,wait".to_owned(),
+        shot_step(shots, "ux-broadcast.ppm"),
+        "bar:2,wait,press,wait,release,wait,commit:solo,wait,wait".to_owned(),
+        "bar:1,wait,wait,wait,bar-button:1:4,wait,press,wait,release,await:broadcast:1".to_owned(),
+        "bar:0,wait,press,wait,release,wait,commit:last,wait,wait,wait,wait".to_owned(),
+    ]
+    .join(",");
+    let more: [(&str, &str); 0] = [];
+    app_run_shell(bench_target, &scratch, "device", &script, &more, &shell)?;
+
+    let mut typed = Vec::new();
+    for entry in fs::read_dir(&received).map_err(|err| format!("{}: {err}", received.display()))? {
+        let path = entry.map_err(|err| err.to_string())?.path();
+        let seen = fs::read(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+        let (answers, rest) = split_answers(&seen);
+        if answers != 1 {
+            return Err(format!("a shell got {answers} answers, not its own one: {seen:?}"));
+        }
+        typed.push(String::from_utf8_lossy(&rest).into_owned());
+    }
+    typed.sort();
+    if typed != ["one", "onelast", "solo"] {
+        return Err(format!("the shells were sent {typed:?}, not one, onelast and solo"));
+    }
+    println!("ok   broadcast: typing reaches the group once each, and nothing else");
+    Ok(())
+}
+
 /// Tearing tabs off with a live SSH session, merging them back, the session reopened after a
 /// restart behind the lock, and snippets sent from the palette.
 pub fn windows(bench_target: &Path, shots: &Path) -> Result<(), String> {

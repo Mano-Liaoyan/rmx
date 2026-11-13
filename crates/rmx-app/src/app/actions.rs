@@ -402,6 +402,7 @@ impl At<'_> {
             UiAction::PaneCtrlAltDel(rmx_ui::PaneId(pane)) => self.salute(pane),
             UiAction::PaneToggleScale(rmx_ui::PaneId(pane)) => self.toggle_scale(pane),
             UiAction::PaneOpenFiles(rmx_ui::PaneId(pane)) => self.open_files_here(pane),
+            UiAction::PaneBroadcast(rmx_ui::PaneId(pane)) => self.toggle_broadcast(pane),
             UiAction::Files(rmx_ui::PaneId(pane), action) => self.files_action(pane, action),
             UiAction::PaneDismissNotice(rmx_ui::PaneId(pane)) => {
                 if let Some(found) = self.pane_mut(pane) {
