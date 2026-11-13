@@ -820,3 +820,91 @@ fn a_local_shell_is_tapped_both_ways() {
     });
     assert_eq!(input, b"tapped\r");
 }
+
+/// A program that leaves echoing typed input to the terminal, as a Telnet server that refused to.
+#[derive(Clone, Default)]
+struct NoEcho(Writes);
+
+impl TransportWriter for NoEcho {
+    async fn write(&self, bytes: Bytes) -> Result<(), CloseReason> {
+        self.0.write(bytes).await
+    }
+
+    async fn resize(&self, size: WindowSize) -> Result<(), CloseReason> {
+        self.0.resize(size).await
+    }
+
+    fn local_echo(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn typed_input_is_shown_once_when_the_program_does_not_echo() {
+    let runtime = runtime();
+    let (output, rx) = tokio_mpsc::unbounded_channel();
+    let writes = NoEcho::default();
+    let sink = Arc::new(SinkLog::default());
+    let terminal = Terminal::connect(
+        1,
+        size(80, 24),
+        ScriptedReader(rx),
+        writes.clone(),
+        runtime.handle(),
+        Theme::dark(),
+        sink.clone(),
+    )
+    .unwrap();
+    let mut tap = terminal.tap(Streams::BOTH, 64);
+
+    output.send(Ok(Bytes::from_static(b"login: "))).unwrap();
+    wait_for("the prompt", || line_text(&terminal.term(), 0) == "login:");
+    terminal.write(&b"root\x7fT\x1b[D"[..]);
+    terminal.write(&b"\r"[..]);
+    terminal.paste("pw");
+    wait_for("the echo", || line_text(&terminal.term(), 1) == "pw");
+    output.send(Ok(Bytes::from_static(b"\x1b[6n"))).unwrap();
+
+    wait_for("the cursor report", || {
+        sink.events.lock().iter().any(|event| matches!(event, Event::PtyWrite(_)))
+    });
+    for event in std::mem::take(&mut *sink.events.lock()) {
+        terminal.handle(event, &Theme::dark());
+    }
+    wait_for("the answer to be sent", || writes.0.bytes.lock().ends_with(b"R"));
+    // Anything echoed for the answer would be parsed before this.
+    output.send(Ok(Bytes::from_static(b"!"))).unwrap();
+    wait_for("the output after the answer", || line_text(&terminal.term(), 1).ends_with('!'));
+
+    assert_eq!(line_text(&terminal.term(), 0), "login: rooT");
+    assert_eq!(line_text(&terminal.term(), 1), "pw!", "the answer was echoed");
+    assert_eq!(&writes.0.bytes.lock()[..], b"root\x7fT\x1b[D\rpw\x1b[2;3R");
+
+    // The output tap has what the program sent and no echo, the input tap what was typed.
+    let mut seen = Vec::new();
+    while let Some(tapped) = tap.try_recv() {
+        seen.push(tapped);
+    }
+    let output: Vec<u8> = seen
+        .iter()
+        .filter(|tapped| tapped.direction == Direction::Output)
+        .flat_map(|tapped| tapped.bytes.to_vec())
+        .collect();
+    assert_eq!(output, b"login: \x1b[6n!");
+    let input: Vec<u8> = seen
+        .iter()
+        .filter(|tapped| tapped.direction == Direction::Input)
+        .flat_map(|tapped| tapped.bytes.to_vec())
+        .collect();
+    assert_eq!(input, b"root\x7fT\x1b[D\rpw");
+}
+
+#[test]
+fn typed_input_is_not_shown_when_the_program_echoes() {
+    let session = connect();
+    session.terminal.write(&b"ls"[..]);
+    wait_for("the input to be sent", || &session.writes.bytes.lock()[..] == b"ls");
+    session.send(b"ls");
+    session.send(b"!");
+    wait_for("the echo", || line_text(&session.terminal.term(), 0) == "ls!");
+}

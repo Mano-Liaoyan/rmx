@@ -196,7 +196,7 @@ impl Control {
         }
     }
 
-    /// Send `bytes`, which a tap has a copy of, to the program.
+    /// Send `bytes`, which a tap has a copy of, to the program as typed.
     fn send(&self, bytes: Bytes) {
         match self {
             Self::Pty(sender) => Notifier(sender.clone()).notify(bytes.to_vec()),
@@ -204,18 +204,34 @@ impl Control {
             Self::Remote(_) => (),
         }
     }
+
+    /// Send `bytes` to the program as typed.
+    fn type_in(&self, bytes: Cow<'static, [u8]>) {
+        match self {
+            Self::Pty(sender) => Notifier(sender.clone()).notify(bytes),
+            Self::Remote(_) => self.send(into_bytes(bytes)),
+        }
+    }
 }
 
+/// `bytes`, without copying them.
+fn into_bytes(bytes: Cow<'static, [u8]>) -> Bytes {
+    match bytes {
+        Cow::Borrowed(bytes) => Bytes::from_static(bytes),
+        Cow::Owned(bytes) => Bytes::from(bytes),
+    }
+}
+
+/// Answers to the program, which a local echo leaves out.
 impl Notify for Control {
     fn notify<B: Into<Cow<'static, [u8]>>>(&self, bytes: B) {
         match self {
             Self::Pty(sender) => Notifier(sender.clone()).notify(bytes),
-            Self::Remote(remote) => match bytes.into() {
-                Cow::Borrowed(bytes) if !bytes.is_empty() => {
-                    remote.write(Bytes::from_static(bytes));
-                },
-                Cow::Owned(bytes) if !bytes.is_empty() => remote.write(Bytes::from(bytes)),
-                _ => (),
+            Self::Remote(remote) => {
+                let bytes = into_bytes(bytes.into());
+                if !bytes.is_empty() {
+                    remote.answer(bytes);
+                }
             },
         }
     }
@@ -371,6 +387,10 @@ impl Terminal {
     /// parsed. Input is what [`Self::write`] and [`Self::paste`] send: what was typed or pasted,
     /// not the terminal's own answers to the program. Several taps can be attached at once, and
     /// dropping one detaches it.
+    ///
+    /// The echo a terminal shows of what is typed, for a program that asks for one with
+    /// [`TransportWriter::local_echo`], is on neither: its bytes are on the input tap already,
+    /// and a log of the output should not look as if the program had sent them.
     pub fn tap(&self, streams: Streams, capacity: usize) -> Tap {
         self.taps.tap(streams, capacity)
     }
@@ -507,12 +527,9 @@ impl Terminal {
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let bytes = bytes.into();
         if !self.taps.input.is_attached() {
-            return self.control.notify(bytes);
+            return self.control.type_in(bytes);
         }
-        let bytes = match bytes {
-            Cow::Borrowed(bytes) => Bytes::from_static(bytes),
-            Cow::Owned(bytes) => Bytes::from(bytes),
-        };
+        let bytes = into_bytes(bytes);
         self.taps.input.send_with(Direction::Input, || bytes.clone());
         self.control.send(bytes);
     }

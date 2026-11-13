@@ -3,6 +3,7 @@
 mod content;
 mod cursor;
 mod driver;
+mod echo;
 mod keyboard;
 mod mouse;
 #[cfg(target_os = "linux")]

@@ -77,4 +77,16 @@ pub trait TransportWriter: Send + Sync + 'static {
     /// Tell the program about a new size. Only the latest of several quick changes gets here.
     /// Failing ends the session with that reason.
     fn resize(&self, size: WindowSize) -> impl Future<Output = Result<(), CloseReason>> + Send;
+
+    /// Whether the program leaves showing what is typed to the terminal, as a Telnet server
+    /// that refused to echo does. Asked as each write of typed or pasted input is sent, so the
+    /// answer may change during a session. Most programs echo, hence the default.
+    ///
+    /// The terminal then shows the text it sends, with Enter as a new line and a backspace
+    /// erasing, and leaves out control keys and escape sequences, so that nothing typed can
+    /// drive it. The echo goes straight to the screen and not through any output tap, which only
+    /// ever gets what the program sent. Answers to the program's requests are never echoed.
+    fn local_echo(&self) -> bool {
+        false
+    }
 }

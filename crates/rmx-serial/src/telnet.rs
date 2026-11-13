@@ -2,7 +2,9 @@
 //!
 //! Negotiates ECHO, SGA, TTYPE, NAWS and BINARY and refuses everything else. [`connect`] offers
 //! those at once and does not wait for the server: anything received afterwards is handled as
-//! it arrives, and a server that refuses them all still gets a working byte stream.
+//! it arrives, and a server that refuses them all still gets a working byte stream. One that
+//! refuses ECHO has the terminal show what is typed, through
+//! [`TransportWriter::local_echo`].
 //!
 //! # Backpressure
 //!
@@ -221,12 +223,19 @@ impl TransportWriter for TelnetWriter {
         }
         Ok(())
     }
+
+    /// Whether the server refused ECHO, or gave it up.
+    fn local_echo(&self) -> bool {
+        self.shared.lock().engine.echoes_locally()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use rmx_render::SizeInfo;
+    use rmx_terminal::{Sink, TermEvent, Terminal, Theme};
     use tokio::io::{DuplexStream, duplex};
     use tokio::time::{sleep, timeout};
 
@@ -250,6 +259,78 @@ mod tests {
 
     fn size(cols: u16, rows: u16) -> WindowSize {
         WindowSize { num_cols: cols, num_lines: rows, cell_width: 8, cell_height: 16 }
+    }
+
+    struct NoSink;
+
+    impl Sink for NoSink {
+        fn wakeup(&self, _: u64) {}
+
+        fn event(&self, _: u64, _: TermEvent) {}
+    }
+
+    /// A terminal on a Telnet session, and the server's end of it after the opening offers.
+    async fn terminal() -> (Terminal, DuplexStream) {
+        let (near, mut far) = duplex(4096);
+        let (reader, writer) = connect(near, TelnetOptions::default(), &Handle::current());
+        let offers = Engine::new("xterm-256color".into(), 80, 24).take_replies();
+        read_exactly(&mut far, offers.len()).await;
+
+        let size = SizeInfo::new(640., 384., 8., 16., 0., 0., false);
+        let sink = Arc::new(NoSink);
+        let terminal =
+            Terminal::connect(1, size, reader, writer, &Handle::current(), Theme::dark(), sink)
+                .unwrap();
+        (terminal, far)
+    }
+
+    /// The text on the first line, once it ends with `end`.
+    async fn first_line(terminal: &Terminal, end: &str) -> String {
+        let read = async {
+            loop {
+                if terminal.refresh() {
+                    // Blank cells are left out of a snapshot.
+                    let mut line = vec![' '; 80];
+                    for cell in terminal.last_snapshot().cells.iter() {
+                        if cell.point.line == 0 {
+                            line[cell.point.column.0] = cell.character;
+                        }
+                    }
+                    let line = String::from_iter(line).trim_end().to_owned();
+                    if line.ends_with(end) {
+                        return line;
+                    }
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        };
+        timeout(WAIT, read).await.expect("the line never got there")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typing_shows_once_when_the_server_refuses_to_echo() {
+        let (terminal, mut far) = terminal().await;
+        far.write_all(&[IAC, WONT, ECHO]).await.unwrap();
+        far.write_all(b"login: ").await.unwrap();
+        first_line(&terminal, "login:").await;
+
+        terminal.write(&b"root"[..]);
+        assert_eq!(read_exactly(&mut far, 4).await, b"root");
+        far.write_all(b"!").await.unwrap();
+        assert_eq!(first_line(&terminal, "!").await, "login: root!");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typing_is_not_doubled_when_the_server_echoes() {
+        let (terminal, mut far) = terminal().await;
+        far.write_all(&[IAC, WILL, ECHO]).await.unwrap();
+        far.write_all(b"$ ").await.unwrap();
+        first_line(&terminal, "$").await;
+
+        terminal.write(&b"ls"[..]);
+        assert_eq!(read_exactly(&mut far, 2).await, b"ls");
+        far.write_all(b"ls!").await.unwrap();
+        assert_eq!(first_line(&terminal, "!").await, "$ ls!");
     }
 
     #[tokio::test]
