@@ -1370,6 +1370,8 @@ impl Actor {
         let sync = parse_sync(vault, &map);
         Ok(SettingsDraft {
             theme,
+            // Kept in the state file, not the vault: the app fills it in.
+            confirm_close: true,
             auto_lock_minutes: auto_lock.unwrap_or_else(|| DEFAULT_AUTO_LOCK_MINUTES.to_string()),
             sync_on_save: sync.as_ref().is_none_or(|sync| sync.on_save),
             sync_interval_minutes: sync

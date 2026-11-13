@@ -145,6 +145,7 @@ impl At<'_> {
             sidebar_open: self.win.shell.sidebar_open,
             theme: self.core.theme,
             panels: self.core.ui.panels,
+            confirm_close: self.core.confirm_close,
         }
     }
 

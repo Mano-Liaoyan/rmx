@@ -1,6 +1,7 @@
 //! Dialogs: the questions a session or the vault asks, and the answers that come back.
 
 use super::*;
+use crate::closing;
 
 /// Where the answer to the question on screen goes.
 pub(super) enum Reply {
@@ -21,6 +22,8 @@ pub(super) enum Reply {
     FilesOverwrite(PaneId),
     /// Go on with `then`, losing the edits in these panes.
     LoseEdits(Vec<PaneId>, UiAction),
+    /// Go on with closing `then`, ending the live sessions in it.
+    EndSessions(UiAction),
     /// Go to the vault at the path typed.
     VaultPath,
     /// Move the vault's file to the path typed.
@@ -150,6 +153,7 @@ impl At<'_> {
         fields: Option<Vec<Sensitive>>,
     ) {
         let Some((reply, _)) = self.core.answer.take() else { return };
+        let checked = matches!(&self.core.ui.asking, Some(Asking::Fields(state)) if state.checked);
         self.core.ui.asking = None;
         let first =
             fields.as_ref().and_then(|fields| fields.first()).map(|f| f.expose().trim().to_owned());
@@ -223,11 +227,16 @@ impl At<'_> {
                     for pane in panes {
                         self.core.ui.files_forget_edits(pane);
                     }
-                    if then == UiAction::WindowClose {
-                        self.win.exit = true;
-                    } else {
-                        self.ui_action(then);
+                    // A close goes on to ask about the sessions it ends.
+                    self.ui_action(then);
+                }
+            },
+            Reply::EndSessions(then) => {
+                if fields.is_some() {
+                    if checked {
+                        self.set_confirm_close(false);
                     }
+                    self.close_now(&then);
                 }
             },
             Reply::VaultPath => {
@@ -310,6 +319,46 @@ impl At<'_> {
         state.submit = "Discard".to_owned();
         self.ask_here(state, Reply::LoseEdits(dirty, then));
         true
+    }
+
+    /// Close what `then` says, a window, tab or pane, first asking if that loses edits or ends
+    /// live sessions. See [`crate::closing`] for what is asked about.
+    pub(super) fn close_asking(&mut self, then: UiAction) {
+        let panes = closing::closed_by(&self.win.workspace, &then);
+        if self.ask_before_losing_edits(panes.clone(), then.clone()) {
+            return;
+        }
+        if self.core.confirm_close {
+            let hidden = self.core.ui.locked();
+            let names = closing::live_sessions(&self.core.panes, &panes);
+            if let Some(state) = closing::question(&names, hidden) {
+                self.ask_here(state, Reply::EndSessions(then));
+                return;
+            }
+        }
+        self.close_now(&then);
+    }
+
+    /// Close what `then` says, without asking.
+    pub(super) fn close_now(&mut self, then: &UiAction) {
+        match *then {
+            UiAction::WindowClose => self.win.exit = true,
+            UiAction::TabClose(TabId(id)) => {
+                if let Some(index) = self.win.workspace.tab_index(id) {
+                    self.close_tab(index);
+                }
+            },
+            UiAction::PaneClose(rmx_ui::PaneId(pane)) => self.close(pane),
+            _ => (),
+        }
+    }
+
+    /// Whether closing asks before it ends live sessions, on this device from now on.
+    pub(super) fn set_confirm_close(&mut self, confirm: bool) {
+        if self.core.confirm_close != confirm {
+            self.core.confirm_close = confirm;
+            self.core.vault.send(Request::SaveLayout(self.layout()));
+        }
     }
 
     pub(super) fn ask_delete(&mut self, node: u64) {

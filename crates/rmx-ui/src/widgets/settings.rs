@@ -61,6 +61,8 @@ impl fmt::Debug for SyncDraft {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingsDraft {
     pub theme: ThemeMode,
+    /// Ask before a close ends live sessions. Kept on this device, like the theme.
+    pub confirm_close: bool,
     /// Minutes without input until the vault locks; empty or 0 never does.
     pub auto_lock_minutes: String,
     pub sync: SyncDraft,
@@ -89,6 +91,11 @@ impl SettingsState {
     /// Hide it, forgetting what was entered.
     pub fn close(&mut self) {
         self.draft = None;
+    }
+
+    /// What is entered so far, while it is showing.
+    pub fn draft_mut(&mut self) -> Option<&mut SettingsDraft> {
+        self.draft.as_deref_mut()
     }
 }
 
@@ -246,6 +253,9 @@ fn settings_body(
                 if segmented(ui, id.with("theme"), &["Dark", "Light"], &mut selected).changed() {
                     draft.theme = [ThemeMode::Dark, ThemeMode::Light][selected];
                 }
+            });
+            row(ui, "Confirm close", |ui| {
+                on_off(ui, id.with("confirm-close"), &mut draft.confirm_close);
             });
 
             if !view.unencrypted {

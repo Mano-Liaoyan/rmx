@@ -1219,6 +1219,94 @@ pub fn last_tab(bench_target: &Path, shots: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Every way of closing asks before it ends a live SSH session, and none asks for a local shell, a
+/// disconnected session, or a tab torn off and merged back. "Don't ask again" holds across a
+/// restart, and the setting brings the question back.
+pub fn closing(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let server = Sshd::start()?;
+    let scratch = Scratch::new();
+    let vault_password = random_hex();
+    let (port, password) = (server.port, server.password.clone());
+    let shot = |name: &str| shot_step(shots, name);
+    let more = [("RMX_BENCH_CLAIM_MS", CLAIM_MS)];
+    // Asked, and cancelled: the session stays.
+    let kept = |tabs: usize| {
+        format!("escape,await:no-question,await:windows:1,await:tabs:{tabs},await:live,wait")
+    };
+    let one = "await:asking:Disconnect 1 live session?,await:asking:box";
+
+    let script = [
+        "await:setup".to_owned(),
+        format!("vault-create:{vault_password}"),
+        "await:unlocked,await:tabs:1".to_owned(),
+        format!("conn:box|127.0.0.1|{port}|alice|{password}"),
+        "await:host-key,hostkey:always,await:live,await:text:$ ,await:tabs:2".to_owned(),
+        // The shortcut, the tab's button, the window's button and the system closing the window.
+        format!("close,{one},wait,wait"),
+        shot("close-confirm.ppm"),
+        kept(2),
+        format!("tab-close:1,{one},{}", kept(2)),
+        format!("window-close,{one},{}", kept(2)),
+        format!("os-close,{one},{}", kept(2)),
+        // A local shell beside it goes without a word.
+        "split-right-local,await:panes:3,wait,wait,wait".to_owned(),
+        "close,await:panes:2,await:no-question,await:live,wait".to_owned(),
+        // Torn off into a window of its own and merged back, it neither ends nor asks.
+        tear_tab(1),
+        "await:windows:2,win:1,await:tabs:1,await:live,await:no-question,wait,wait".to_owned(),
+        merge_tab(0),
+        "await:windows:1,await:tabs:2,await:live,await:no-question".to_owned(),
+        "run:echo still-here,await:text:still-here,wait".to_owned(),
+        // Two sessions: the window names how many.
+        "open:box,await:tabs:3,await:live,await:text:$ ".to_owned(),
+        "os-close,await:asking:Disconnect 2 live sessions?,wait,wait".to_owned(),
+        shot("close-confirm-two.ppm"),
+        kept(3),
+        // A disconnected session is not asked about.
+        "disconnect,await:closed,close,await:tabs:2,await:no-question,wait".to_owned(),
+        // Confirmed, it closes.
+        format!("tab-close:1,{one},confirm,await:tabs:1,await:panes:1,await:no-question"),
+        // Told not to ask again, it no longer does.
+        "open:box,await:tabs:2,await:live".to_owned(),
+        format!("close,{one},dont-ask,wait,wait"),
+        shot("close-dont-ask.ppm"),
+        "confirm,await:tabs:1,await:no-question".to_owned(),
+        "open:box,await:tabs:2,await:live,close,await:tabs:1,await:no-question,wait".to_owned(),
+    ]
+    .join(",");
+    let report = app_run_with(bench_target, &scratch, "device", &script, &more)?;
+    report_paths("closing", &report);
+    println!("ok   closing: every close asks for a live session, and only for one");
+
+    // Still not asked after a restart: the window closes at once, and with it the application.
+    // The hold never releases, so only the application ending lets the run finish clean.
+    let script = [
+        "await:locked".to_owned(),
+        format!("vault-unlock:{vault_password}"),
+        "await:unlocked,await:tabs:1".to_owned(),
+        "open:box,await:tabs:2,await:live,wait,window-close,await:tabs:99".to_owned(),
+    ]
+    .join(",");
+    app_run(bench_target, &scratch, "device", &script)?;
+    println!("ok   closing: \"Don't ask again\" holds after a restart");
+
+    // Turned back on in the settings, the system closing the window asks again, and quits once
+    // confirmed.
+    let script = [
+        "await:locked".to_owned(),
+        format!("vault-unlock:{vault_password}"),
+        "await:unlocked".to_owned(),
+        "settings,await:settings,wait,wait".to_owned(),
+        shot("close-setting.ppm"),
+        "confirm-close:on,wait,wait".to_owned(),
+        "open:box,await:live,wait,os-close,await:asking:box,confirm,await:tabs:99".to_owned(),
+    ]
+    .join(",");
+    app_run(bench_target, &scratch, "device", &script)?;
+    println!("ok   closing: the setting brings the question back, and quitting waits for it");
+    Ok(())
+}
+
 /// A busybox telnetd giving a shell straight away.
 fn telnet_server() -> Result<Server, String> {
     ensure_image(
@@ -2188,7 +2276,7 @@ pub fn standard_scene(bench_target: &Path, cycles: usize) -> Result<Report, Stri
         busy,
         // Saving connects in a tab of its own, so that one goes and comes back beside the others.
         format!("conn-as:VNC|screen|127.0.0.1|{vnc_port}||{vnc_password}||keep"),
-        "await:live,await:display,close,await:panes:4,left".to_owned(),
+        "await:live,await:display,close,await:asking:screen,confirm,await:panes:4,left".to_owned(),
         "open-split:down:screen,await:live,await:display".to_owned(),
         "wait,wait,wait,wait".to_owned(),
     ];

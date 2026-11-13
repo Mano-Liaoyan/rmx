@@ -368,7 +368,8 @@ impl Running {
                     at.ask_remote_password();
                 }
             },
-            VaultEvent::Settings(draft) => {
+            VaultEvent::Settings(mut draft) => {
+                draft.confirm_close = self.core.confirm_close;
                 if let Some(at) = self.at_active() {
                     at.win.shell.settings.open(*draft);
                 }

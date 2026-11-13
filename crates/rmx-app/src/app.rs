@@ -266,6 +266,8 @@ struct Core {
     /// Where the answer to the dialog now showing goes, and the pane it is about.
     answer: Option<(Reply, Option<PaneId>)>,
     theme: ThemeMode,
+    /// Ask before a close ends live sessions: see [`crate::closing`].
+    confirm_close: bool,
     /// When the vault's thread last heard the user is there.
     touched: Instant,
     /// Whether the first tab has been seen to: a shell opened for the vault, as happens the first
@@ -556,6 +558,7 @@ impl App {
             prompts: VecDeque::new(),
             answer: None,
             theme: layout.theme,
+            confirm_close: layout.confirm_close,
             touched: Instant::now(),
             opened_first_tab: false,
             ui: common,

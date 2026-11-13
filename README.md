@@ -59,6 +59,8 @@ a bastion is one setting away.
 - A sidebar tree of your connections, with folders and live status. Hosts from `~/.ssh/config`
   come in with one click.
 - Dark and light themes, both drawn by rmx itself, so it looks the same on every platform.
+- Closing a pane, tab or window that would end live sessions asks first, naming them. Tick
+  "Don't ask again", or turn it off and on in Settings.
 
 **A vault you can trust**
 

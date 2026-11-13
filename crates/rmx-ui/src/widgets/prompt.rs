@@ -7,9 +7,11 @@ use crate::draw::{hline, palette};
 use crate::theme::{CONTROL_HEIGHT, TEXT_LG, TEXT_SM};
 use crate::{float, fonts};
 
-use super::controls::{ButtonKind, InputOptions, button, button_full, text_input};
+use super::controls::{ButtonKind, InputOptions, button, button_full, checkbox, text_input};
 
 const WIDTH: f32 = 420.;
+/// The height of the tick box's line.
+const CHECK_HEIGHT: f32 = 22.;
 
 /// One line to answer.
 #[derive(Clone, Default)]
@@ -30,6 +32,10 @@ pub struct PromptState {
     pub submit: String,
     /// Only telling something: no fields, no Cancel, and the title in red if it is bad news.
     pub notice: Option<bool>,
+    /// A tick box under the text, with this label, such as "Don't ask again".
+    pub check: Option<String>,
+    /// Whether the tick box is ticked. The app reads it once the answer is in.
+    pub checked: bool,
     focused: bool,
 }
 
@@ -54,6 +60,8 @@ impl PromptState {
             fields,
             submit: "Continue".to_owned(),
             notice: None,
+            check: None,
+            checked: false,
             focused: false,
         }
     }
@@ -99,6 +107,13 @@ fn prompt_body(ui: &mut Ui, id: Id, state: &mut PromptState) -> Option<UiAction>
             if focus && index == 0 {
                 response.request_focus();
             }
+        }
+        if let Some(label) = &state.check {
+            let (line, _) = ui.allocate_exact_size(
+                vec2(ui.available_width(), CHECK_HEIGHT),
+                egui::Sense::hover(),
+            );
+            checkbox(ui, line, id.with("check"), &mut state.checked, label);
         }
     });
     let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.), egui::Sense::hover());

@@ -27,6 +27,7 @@ const KEY_RECENT_VAULTS: &str = "recent_vaults";
 const RECENT_VAULTS: usize = 12;
 const KEY_SESSION: &str = "session";
 const KEY_PANELS: &str = "panels";
+const KEY_CONFIRM_CLOSE: &str = "confirm_close";
 
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
@@ -102,6 +103,8 @@ pub struct Layout {
     pub sidebar_open: bool,
     pub theme: ThemeMode,
     pub panels: Panels,
+    /// Ask before a close ends live sessions: see [`crate::closing`].
+    pub confirm_close: bool,
 }
 
 impl Default for Layout {
@@ -113,6 +116,7 @@ impl Default for Layout {
             sidebar_open: true,
             theme: ThemeMode::Dark,
             panels: Panels::default(),
+            confirm_close: true,
         }
     }
 }
@@ -174,6 +178,7 @@ impl AppState {
                 .ok()
                 .flatten()
                 .map_or_else(Panels::default, |text| Panels::read(&text)),
+            confirm_close: flag(KEY_CONFIRM_CLOSE, defaults.confirm_close),
         }
     }
 
@@ -187,6 +192,7 @@ impl AppState {
             (KEY_SIDEBAR, flag(layout.sidebar_open).to_owned()),
             (KEY_THEME, theme.to_owned()),
             (KEY_PANELS, layout.panels.spell()),
+            (KEY_CONFIRM_CLOSE, flag(layout.confirm_close).to_owned()),
         ];
         for (key, value) in entries {
             if let Err(err) = self.0.set(key, &value) {
@@ -354,6 +360,7 @@ mod tests {
             Paths { state: dir.path().join("rmx/app.local"), default_vault: PathBuf::new() };
         let state = AppState::open(&paths).unwrap();
         assert_eq!(state.layout(), Layout::default());
+        assert!(Layout::default().confirm_close, "closing asks until told otherwise");
 
         let layout = Layout {
             width: 900.,
@@ -362,6 +369,7 @@ mod tests {
             sidebar_open: false,
             theme: ThemeMode::Light,
             panels: Panels { sidebar: 321., files_split: 0.3, ..Panels::default() },
+            confirm_close: false,
         };
         state.save_layout(&layout);
         state.set_last_vault(Path::new("/some/where.rmxdb"));

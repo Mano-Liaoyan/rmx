@@ -221,19 +221,8 @@ impl ApplicationHandler<AppEvent> for App {
         }
 
         match event {
-            WindowEvent::CloseRequested => {
-                let key = at.win.key;
-                let here = at
-                    .core
-                    .panes
-                    .iter()
-                    .filter(|pane| pane.window == key)
-                    .map(|pane| pane.id)
-                    .collect();
-                if !at.ask_before_losing_edits(here, UiAction::WindowClose) {
-                    at.win.exit = true;
-                }
-            },
+            // The system closing the window, as Alt+F4 or the taskbar do, asks as its button does.
+            WindowEvent::CloseRequested => at.close_asking(UiAction::WindowClose),
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 if at.win.motion.running(now) || at.win.chrome.needs_update(now) {
