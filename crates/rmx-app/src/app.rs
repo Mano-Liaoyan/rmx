@@ -39,7 +39,7 @@ use winit::window::{
 use crate::background::{Boot, Layout, SavedPane, SavedSession};
 use crate::clipboard::Clipboard;
 use crate::connect::{
-    self, ConnectRequest, Goal, HostKeyAnswer, LinkEvent, Prompt, PromptKind, Ready,
+    self, ConnectRequest, Goal, HostKeyAnswer, LinkEvent, Origin, Prompt, PromptKind, Ready,
 };
 use crate::files::{self, FilesEvent, FilesPane};
 use crate::gfx::{Early, Gfx, PaneDraw, Preedit};
@@ -342,6 +342,8 @@ struct Win {
     display_focus: Option<PaneId>,
     /// Whether the window lets the input method in. Not while a remote desktop has the keyboard.
     ime_allowed: bool,
+    /// The unsaved connection whose panes the connection form, open to save it, is for.
+    adopting: Option<Arc<ConnectionDraft>>,
     /// For measuring only: how wide the terminal was before the script resized the window.
     #[cfg(feature = "bench")]
     columns_before_resize: Option<usize>,
@@ -405,6 +407,7 @@ impl Win {
             has_focus: true,
             display_focus: None,
             ime_allowed: true,
+            adopting: None,
             #[cfg(feature = "bench")]
             columns_before_resize: None,
             #[cfg(feature = "bench")]
@@ -643,7 +646,7 @@ fn menu_keyed(glyph: char, label: &str, keys: &str, action: UiAction) -> MenuIte
     }
 }
 
-/// The saved connection `user@host:port` stands for.
+/// The connection `user@host:port` stands for, to connect to without saving it.
 fn quick_draft(text: &str) -> Option<ConnectionDraft> {
     let text = text.trim();
     let (user, place) = text.rsplit_once('@').map_or(("", text), |(user, place)| (user, place));

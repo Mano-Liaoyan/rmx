@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use crate::app::Action;
 use crate::connect::{Goal, HostKeyPrompt};
-use crate::pane::Pane;
+use crate::pane::{Pane, Remote};
 use crate::store::{NodeInfo, Phase, SyncState, TreeUpdate};
 
 /// How long the drop preview takes to reach a new place, in milliseconds.
@@ -338,8 +338,8 @@ impl Common {
         self.snippets = Arc::new(snippets);
         self.tree.set_query(&query);
         for pane in panes {
-            if let Some(remote) = &pane.remote {
-                self.tree.set_state(NodeId(remote.node), session_dot(panes, remote.node));
+            if let Some(node) = pane.remote.as_ref().and_then(Remote::node) {
+                self.tree.set_state(NodeId(node), session_dot(panes, node));
             }
         }
     }
@@ -376,7 +376,7 @@ pub fn session_dot(panes: &[Pane], node: u64) -> SessionDot {
     let links = || {
         panes
             .iter()
-            .filter(|pane| pane.remote.as_ref().is_some_and(|r| r.node == node))
+            .filter(|pane| pane.remote.as_ref().is_some_and(|r| r.node() == Some(node)))
             .map(|pane| &pane.link)
     };
     if links().any(|link| *link == Link::Live) {
@@ -473,10 +473,7 @@ fn pane_title(panes: &[Pane], id: PaneId) -> &str {
 /// The icon of what the tab has focused: of its kind of connection, a terminal otherwise.
 fn tab_protocol(panes: &[Pane], common: &Common, tab: &Tab) -> Option<Protocol> {
     let remote = panes.iter().find(|pane| pane.id == tab.focus)?.remote.as_ref()?;
-    let protocol = common.nodes.get(&remote.node).and_then(|info| match info.kind {
-        NodeKind::Connection(protocol) => Some(protocol),
-        NodeKind::Folder => None,
-    })?;
+    let protocol = remote.protocol(&common.nodes)?;
     // Files opened from a shell are not a shell.
     Some(if protocol == Protocol::Ssh && matches!(remote.goal, Goal::Files { .. }) {
         Protocol::Sftp
@@ -906,12 +903,10 @@ impl Shell {
             let tooltip: Vec<String> =
                 target.into_iter().chain(pane.content.size_fact()).chain(forwards).collect();
             let tooltip = tooltip.join("  ");
-            let ssh = pane.remote.as_ref().is_some_and(|remote| {
-                common
-                    .nodes
-                    .get(&remote.node)
-                    .is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
-            });
+            let ssh = pane
+                .remote
+                .as_ref()
+                .is_some_and(|remote| remote.protocol(&common.nodes) == Some(Protocol::Ssh));
             let bar = PaneBarView {
                 pane: rmx_ui::PaneId(id),
                 status: pane.status(),

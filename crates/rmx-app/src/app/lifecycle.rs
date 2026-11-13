@@ -133,11 +133,35 @@ impl At<'_> {
             return;
         }
         let name = info.name.clone();
+        self.open_source(Origin::Saved(node), name, goal);
+    }
+
+    /// Open `source`, saved or not, in a new tab called `name` until the session says otherwise.
+    pub(super) fn open_source(&mut self, source: Origin, name: String, goal: Goal) {
         let id = self.new_id();
-        self.add_pane(Pane::remote(id, node, name, goal));
+        self.add_pane(Pane::remote(id, source, name, goal));
         self.win.workspace.add_tab(id);
         self.start_session(id);
         self.relayout(false);
+    }
+
+    /// Open the connection form filled in from the unsaved connection of `pane`, to save it.
+    pub(super) fn ask_to_save(&mut self, pane: PaneId) {
+        let Some(Origin::Transient(draft)) =
+            self.pane(pane).and_then(|found| found.remote.as_ref()).map(|r| r.source.clone())
+        else {
+            return;
+        };
+        self.win.shell.dialog.open_to_save((*draft).clone());
+        self.win.adopting = Some(draft);
+        self.win.chrome.invalidate();
+        self.request_frame();
+    }
+
+    /// Connect to `draft` in a new tab without saving it: quick connect.
+    pub(super) fn open_transient(&mut self, draft: ConnectionDraft) {
+        let name = draft.name.clone();
+        self.open_source(Origin::Transient(Arc::new(draft)), name, Goal::Session);
     }
 
     /// Start connecting the remote pane `id`, whose earlier screen stays until there is a new one.
@@ -165,7 +189,7 @@ impl At<'_> {
         let request = ConnectRequest {
             pane: id,
             generation: remote.generation,
-            node: remote.node,
+            source: remote.source.clone(),
             size,
             pixels,
             goal: remote.goal.clone(),

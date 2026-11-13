@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -98,6 +99,12 @@ pub enum Request {
     /// The user did something: the auto-lock starts over.
     Touch,
     SaveConnection(Box<ConnectionDraft>),
+    /// Save, from the form, what the panes of the unsaved connection `origin` connect to; they
+    /// are then the saved connection's.
+    SaveTransient {
+        draft: Box<ConnectionDraft>,
+        origin: Arc<ConnectionDraft>,
+    },
     EditConnection(u64),
     Duplicate(u64),
     DeleteConnection(u64),
@@ -134,6 +141,11 @@ pub enum Request {
     ImportSshConfig,
     Plan {
         node: u64,
+        reply: oneshot::Sender<Result<ConnectPlan, String>>,
+    },
+    /// How to connect to a connection that is not saved, saving nothing.
+    PlanTransient {
+        draft: Arc<ConnectionDraft>,
         reply: oneshot::Sender<Result<ConnectPlan, String>>,
     },
     KnownHosts {
@@ -259,6 +271,11 @@ pub enum VaultEvent {
     Saved {
         node: u64,
         connect: bool,
+    },
+    /// What the panes of the unsaved connection `origin` connect to is saved now, as `node`.
+    Adopted {
+        node: u64,
+        origin: Arc<ConnectionDraft>,
     },
     /// Which vault this is, and the others this device knows.
     Vaults {
@@ -677,6 +694,9 @@ impl Actor {
             Request::Plan { node, reply } => {
                 let _ = reply.send(self.plan(node));
             },
+            Request::PlanTransient { draft, reply } => {
+                let _ = reply.send(self.open().and_then(|vault| transient_plan(vault, &draft)));
+            },
             Request::KnownHosts { host, port, reply } => {
                 let rows = self.known_hosts(&host, port);
                 let _ = reply.send(rows);
@@ -721,6 +741,13 @@ impl Actor {
                     },
                     Err(err) => self.notice(err, true),
                 }
+            },
+            Request::SaveTransient { draft, origin } => match self.save_connection(&draft) {
+                Ok(id) => {
+                    self.changed();
+                    self.send(VaultEvent::Adopted { node: node_number(id), origin });
+                },
+                Err(err) => self.notice(err, true),
             },
             other => match self.mutate(other) {
                 Ok(Some(message)) => {
@@ -1046,83 +1073,7 @@ impl Actor {
         let vault = self.open()?;
         let connection = vault.get::<Connection>(id).map_err(text)?.ok_or("no such connection")?;
         let connection = vault.with_inherited_login(connection).map_err(text)?;
-        let protocol = parse_protocol(&connection.protocol);
-
-        let mut holds = Vec::new();
-        let target = match protocol {
-            Protocol::Ssh | Protocol::Sftp => Some(host_config(vault, &connection, &mut holds)?),
-            _ => None,
-        };
-        let credential = match connection.credential_id {
-            Some(credential) => vault.get::<Credential>(credential).map_err(text)?,
-            None => None,
-        };
-        let settings = connection.options.as_deref().map(options::parse).unwrap_or_default();
-        let endpoint = Endpoint {
-            host: connection.host.clone(),
-            port: connection.port.or(protocol.default_port()).unwrap_or(0),
-            user: connection
-                .username
-                .clone()
-                .or_else(|| credential.as_ref().and_then(|c| c.username.clone()))
-                .unwrap_or_default(),
-            password: credential.as_ref().map(|c| SecretString::new(c.secret.expose().to_owned())),
-            domain: settings.get(OPTION_DOMAIN).cloned(),
-        };
-
-        let mut jumps = Vec::new();
-        let mut seen = HashSet::from([connection.id]);
-        let mut next = connection.jump_connection_id;
-        while let Some(jump_id) = next {
-            if !seen.insert(jump_id) {
-                return Err("the jump hosts of this connection form a loop".to_owned());
-            }
-            let jump = vault
-                .get::<Connection>(jump_id)
-                .map_err(text)?
-                .ok_or("its jump host no longer exists")?;
-            let jump = vault.with_inherited_login(jump).map_err(text)?;
-            jumps.push(host_config(vault, &jump, &mut holds)?);
-            next = jump.jump_connection_id;
-        }
-        // Each connection names the hop before it, so the walk ends at the first to dial.
-        jumps.reverse();
-
-        let tunnels = vault
-            .list::<Tunnel>()
-            .map_err(text)?
-            .into_iter()
-            .filter(|tunnel| tunnel.connection_id == connection.id)
-            .collect();
-        let scale = if settings.get(OPTION_SCALE).is_some_and(|value| value == "native") {
-            ScaleChoice::Native
-        } else {
-            ScaleChoice::Fit
-        };
-        let rdp_security = match settings.get(OPTION_SECURITY).map(String::as_str) {
-            Some("nla") => RdpSecurity::Nla,
-            Some("tls") => RdpSecurity::Tls,
-            _ => RdpSecurity::Negotiate,
-        };
-        Ok(ConnectPlan {
-            protocol,
-            endpoint,
-            target,
-            jumps,
-            tunnels,
-            holds,
-            scale,
-            follow_size: settings.get(OPTION_RESIZE).is_none_or(|value| value != "keep"),
-            rdp_security,
-            rdp_quality: rdp_quality(&settings),
-            rdp: crate::rdp_options::load(&settings),
-            vnc_colors: vnc_colors(&settings),
-            rustdesk_server: settings.get(OPTION_RENDEZVOUS).cloned(),
-            rustdesk_key: settings.get(OPTION_SERVER_KEY).cloned(),
-            ftps: settings.get(OPTION_FTPS).is_some_and(|value| value == "1"),
-            serial: serial_config(&settings),
-            log: session_logging(&settings),
-        })
+        plan_of(vault, &connection)
     }
 
     fn folder_for_group(&mut self, group: &str) -> Result<Option<Id>, String> {
@@ -1885,6 +1836,114 @@ fn store_sync_settings(
 }
 
 /// How the SSH library is to log in to the connection `row`.
+/// Everything connecting to `draft` takes, without saving it: quick connect. Only where it goes
+/// and as whom are taken; with no folder, it inherits no login, and a password typed in the form
+/// lives in the plan alone. The vault is only read, for what it trusts of the server.
+fn transient_plan(vault: &mut Vault, draft: &ConnectionDraft) -> Result<ConnectPlan, String> {
+    let host = draft.host.trim();
+    if host.is_empty() {
+        return Err("there is no host to connect to".to_owned());
+    }
+    let connection = Connection {
+        protocol: protocol_name(draft.protocol),
+        host: host.to_owned(),
+        port: draft.port.trim().parse().ok(),
+        name: non_empty(&draft.name).unwrap_or_else(|| host.to_owned()),
+        username: non_empty(&draft.username),
+        ..Default::default()
+    };
+    let mut plan = plan_of(vault, &connection)?;
+    if !draft.password.is_empty() {
+        let typed = || SecretString::new(draft.password.clone());
+        if let Some(target) = &mut plan.target {
+            target.auth.insert(0, AuthMethod::Password(Some(typed())));
+        }
+        plan.endpoint.password = Some(typed());
+    }
+    Ok(plan)
+}
+
+/// Everything connecting to `connection` takes, its login already settled.
+fn plan_of(vault: &mut Vault, connection: &Connection) -> Result<ConnectPlan, String> {
+    let protocol = parse_protocol(&connection.protocol);
+
+    let mut holds = Vec::new();
+    let target = match protocol {
+        Protocol::Ssh | Protocol::Sftp => Some(host_config(vault, connection, &mut holds)?),
+        _ => None,
+    };
+    let credential = match connection.credential_id {
+        Some(credential) => vault.get::<Credential>(credential).map_err(text)?,
+        None => None,
+    };
+    let settings = connection.options.as_deref().map(options::parse).unwrap_or_default();
+    let endpoint = Endpoint {
+        host: connection.host.clone(),
+        port: connection.port.or(protocol.default_port()).unwrap_or(0),
+        user: connection
+            .username
+            .clone()
+            .or_else(|| credential.as_ref().and_then(|c| c.username.clone()))
+            .unwrap_or_default(),
+        password: credential.as_ref().map(|c| SecretString::new(c.secret.expose().to_owned())),
+        domain: settings.get(OPTION_DOMAIN).cloned(),
+    };
+
+    let mut jumps = Vec::new();
+    let mut seen = HashSet::from([connection.id]);
+    let mut next = connection.jump_connection_id;
+    while let Some(jump_id) = next {
+        if !seen.insert(jump_id) {
+            return Err("the jump hosts of this connection form a loop".to_owned());
+        }
+        let jump = vault
+            .get::<Connection>(jump_id)
+            .map_err(text)?
+            .ok_or("its jump host no longer exists")?;
+        let jump = vault.with_inherited_login(jump).map_err(text)?;
+        jumps.push(host_config(vault, &jump, &mut holds)?);
+        next = jump.jump_connection_id;
+    }
+    // Each connection names the hop before it, so the walk ends at the first to dial.
+    jumps.reverse();
+
+    let tunnels = vault
+        .list::<Tunnel>()
+        .map_err(text)?
+        .into_iter()
+        .filter(|tunnel| tunnel.connection_id == connection.id)
+        .collect();
+    let scale = if settings.get(OPTION_SCALE).is_some_and(|value| value == "native") {
+        ScaleChoice::Native
+    } else {
+        ScaleChoice::Fit
+    };
+    let rdp_security = match settings.get(OPTION_SECURITY).map(String::as_str) {
+        Some("nla") => RdpSecurity::Nla,
+        Some("tls") => RdpSecurity::Tls,
+        _ => RdpSecurity::Negotiate,
+    };
+    Ok(ConnectPlan {
+        protocol,
+        endpoint,
+        target,
+        jumps,
+        tunnels,
+        holds,
+        scale,
+        follow_size: settings.get(OPTION_RESIZE).is_none_or(|value| value != "keep"),
+        rdp_security,
+        rdp_quality: rdp_quality(&settings),
+        rdp: crate::rdp_options::load(&settings),
+        vnc_colors: vnc_colors(&settings),
+        rustdesk_server: settings.get(OPTION_RENDEZVOUS).cloned(),
+        rustdesk_key: settings.get(OPTION_SERVER_KEY).cloned(),
+        ftps: settings.get(OPTION_FTPS).is_some_and(|value| value == "1"),
+        serial: serial_config(&settings),
+        log: session_logging(&settings),
+    })
+}
+
 fn host_config(
     vault: &mut Vault,
     row: &Connection,
@@ -2581,6 +2640,61 @@ mod tests {
                 key: false,
             }]
         );
+    }
+
+    fn quick(host: &str, port: &str, user: &str) -> ConnectionDraft {
+        let mut draft = ConnectionDraft::new(Protocol::Ssh);
+        draft.name = format!("{user}@{host}:{port}");
+        draft.host = host.to_owned();
+        draft.port = port.to_owned();
+        draft.username = user.to_owned();
+        draft
+    }
+
+    #[test]
+    fn a_transient_connection_connects_and_leaves_no_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let draft = quick("db.example.com", "2222", "alice");
+
+        let plan = transient_plan(&mut vault, &draft).unwrap();
+        let target = plan.target.unwrap();
+        assert_eq!(
+            (target.host.as_str(), target.port, target.user.as_str()),
+            ("db.example.com", 2222, "alice")
+        );
+        assert!(plan.jumps.is_empty() && plan.tunnels.is_empty());
+        assert!(
+            target.auth.iter().any(|auth| matches!(auth, AuthMethod::Password(None))),
+            "the password is asked for, not looked up"
+        );
+        assert!(vault.list::<Connection>().unwrap().is_empty(), "nothing saved");
+        assert!(vault.list::<Credential>().unwrap().is_empty());
+        assert!(vault.list::<Folder>().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_transient_connection_takes_no_folders_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let production = folder("Production", None);
+        vault.put(&production).unwrap();
+        save_folder_login(&mut vault, production.id, "admin", &Secret::new("pw"), "").unwrap();
+        let mut draft = quick("h", "22", "");
+        draft.group = "Production".to_owned();
+
+        let target = transient_plan(&mut vault, &draft).unwrap().target.unwrap();
+        assert_ne!(target.user, "admin");
+        assert!(!target.auth.iter().any(|auth| matches!(auth, AuthMethod::Password(Some(_)))));
+        assert!(vault.list::<Connection>().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_transient_connection_on_the_default_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let target = transient_plan(&mut vault, &quick("h", "", "bob")).unwrap().target.unwrap();
+        assert_eq!(target.port, 22);
     }
 
     #[test]

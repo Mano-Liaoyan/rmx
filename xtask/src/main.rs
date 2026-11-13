@@ -110,6 +110,7 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("last-tab", Box::new(|| e2e::last_tab(&bench_target, &shots))),
         ("panes", Box::new(|| e2e::panes(&bench_target, &shots))),
         ("broadcast", Box::new(|| e2e::broadcast(&bench_target, &shots))),
+        ("quick", Box::new(|| e2e::quick(&bench_target, &shots))),
     ];
     let results: Vec<(&str, Result<(), String>)> = tests
         .into_iter()

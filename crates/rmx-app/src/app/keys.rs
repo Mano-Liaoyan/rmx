@@ -147,6 +147,7 @@ impl At<'_> {
                 self.win.chrome.invalidate();
             },
             Action::NewConnection => {
+                self.win.adopting = None;
                 self.win.shell.dialog.open();
                 self.win.chrome.invalidate();
             },

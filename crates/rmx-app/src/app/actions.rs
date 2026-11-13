@@ -145,6 +145,7 @@ impl At<'_> {
                 self.perform(Action::Zoom);
             },
             UiAction::PaneDuplicate(rmx_ui::PaneId(pane)) => self.duplicate_session(pane),
+            UiAction::PaneSaveConnection(rmx_ui::PaneId(pane)) => self.ask_to_save(pane),
             UiAction::PaneToTab(rmx_ui::PaneId(pane)) => {
                 let at = self.win.workspace.active_index() + 1;
                 if self.win.workspace.detach(pane, at) {
@@ -173,10 +174,14 @@ impl At<'_> {
                 None => (),
             },
             UiAction::NewConnection => self.perform(Action::NewConnection),
-            UiAction::ConnectionSubmit(draft) => {
-                self.core.vault.send(Request::SaveConnection(draft))
+            UiAction::ConnectionSubmit(draft) => match self.win.adopting.take() {
+                Some(origin) if draft.editing.is_none() => {
+                    self.core.vault.send(Request::SaveTransient { draft, origin });
+                },
+                _ => self.core.vault.send(Request::SaveConnection(draft)),
             },
-            UiAction::ConnectionCancel | UiAction::QuickOpenDismiss | UiAction::TreeSelect(_) => (),
+            UiAction::ConnectionCancel => self.win.adopting = None,
+            UiAction::QuickOpenDismiss | UiAction::TreeSelect(_) => (),
             UiAction::TreeOpen(NodeId(node)) => self.open_connection(node),
             UiAction::TreeOpenSplit { id: NodeId(node), down } => {
                 self.open_node_split(node, if down { Axis::Column } else { Axis::Row });
@@ -217,7 +222,7 @@ impl At<'_> {
             UiAction::CopyText(text) => self.core.clipboard.store(ClipboardType::Clipboard, text),
             UiAction::QuickConnect(text) => {
                 if let Some(draft) = quick_draft(&text) {
-                    self.core.vault.send(Request::SaveConnection(Box::new(draft)));
+                    self.open_transient(draft);
                 }
             },
             UiAction::SidebarResize(width) => {

@@ -227,8 +227,8 @@ impl At<'_> {
         let Some(remote) = &pane.remote else { return };
         let directory =
             pane.content.terminal().and_then(Terminal::working_directory).map(|cwd| cwd.path);
-        let node = remote.node;
-        self.open_node(node, Goal::Files { directory });
+        let (source, name) = (remote.source.clone(), remote.name.clone());
+        self.open_source(source, name, Goal::Files { directory });
     }
 
     pub(super) fn set_title(&mut self, id: PaneId, title: Option<String>) {

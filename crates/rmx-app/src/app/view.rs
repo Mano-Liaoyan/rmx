@@ -161,7 +161,7 @@ impl At<'_> {
     pub(super) fn link_changed(&mut self, id: PaneId) {
         let Some(pane) = self.pane_mut(id) else { return };
         pane.dirty = true;
-        let node = pane.remote.as_ref().map(|remote| remote.node);
+        let node = pane.remote.as_ref().and_then(crate::pane::Remote::node);
         if let Some(node) = node {
             let dot = shell::session_dot(&self.core.panes, node);
             self.core.ui.tree.set_state(NodeId(node), dot);

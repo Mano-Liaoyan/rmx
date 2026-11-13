@@ -62,7 +62,7 @@ impl At<'_> {
         let name = info.name.clone();
         let id = self.new_id();
         if self.win.workspace.split(id, axis) {
-            self.add_pane(Pane::remote(id, node, name, Goal::Session));
+            self.add_pane(Pane::remote(id, Origin::Saved(node), name, Goal::Session));
             self.start_session(id);
             self.relayout(true);
         }

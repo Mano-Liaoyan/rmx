@@ -23,6 +23,8 @@ impl At<'_> {
                     focus_id = Some(id);
                 }
                 match saved {
+                    // Never saved, so nothing to reopen: left out like a deleted one.
+                    SavedPane::Transient => gone.push(id),
                     SavedPane::Local => {
                         self.add_pane(Pane::local(id));
                         start.push(id);
@@ -34,7 +36,7 @@ impl At<'_> {
                         };
                         match self.core.ui.nodes.get(&node).map(|info| info.name.clone()) {
                             Some(name) => {
-                                self.add_pane(Pane::remote(id, node, name, goal));
+                                self.add_pane(Pane::remote(id, Origin::Saved(node), name, goal));
                                 start.push(id);
                             },
                             None => gone.push(id),
@@ -86,42 +88,44 @@ impl At<'_> {
     }
 
     pub(super) fn pane_is_ssh(&self, pane: PaneId) -> bool {
-        let node =
-            self.pane(pane).and_then(|found| found.remote.as_ref()).map(|remote| remote.node);
-        node.and_then(|node| self.core.ui.nodes.get(&node))
-            .is_some_and(|info| info.kind == NodeKind::Connection(Protocol::Ssh))
+        self.pane(pane)
+            .and_then(|found| found.remote.as_ref())
+            .and_then(|remote| remote.protocol(&self.core.ui.nodes))
+            == Some(Protocol::Ssh)
     }
 
-    /// Open the session of `pane` again, as a saved connection and for the same thing.
-    pub(super) fn clone_of(&mut self, pane: PaneId) -> Option<(u64, String, Goal)> {
+    /// Open the session of `pane` again, to the same connection and for the same thing.
+    pub(super) fn clone_of(&mut self, pane: PaneId) -> Option<(Origin, String, Goal)> {
         let remote = self.pane(pane)?.remote.as_ref()?;
-        let (node, goal) = (remote.node, remote.goal.clone());
-        let info = self.core.ui.nodes.get(&node)?;
-        Some((node, info.name.clone(), goal))
+        let name = match &remote.source {
+            Origin::Saved(node) => self.core.ui.nodes.get(node)?.name.clone(),
+            Origin::Transient(_) => remote.name.clone(),
+        };
+        Some((remote.source.clone(), name, remote.goal.clone()))
     }
 
     /// Put a new pane next to the focused one: the same session where another one makes sense,
     /// else a local shell.
     pub(super) fn split_focused(&mut self, axis: Axis) {
-        let same = self.win.workspace.focused().and_then(|pane| self.clone_of(pane)).filter(
-            |(node, _, goal)| {
-                let protocol = self.core.ui.nodes.get(node).map(|info| info.kind);
-                *goal != Goal::Session
-                    || matches!(
-                        protocol,
-                        Some(NodeKind::Connection(
-                            Protocol::Ssh | Protocol::Telnet | Protocol::Sftp | Protocol::Ftp
-                        ))
-                    )
-            },
-        );
-        let Some((node, name, goal)) = same else {
+        let focused = self.win.workspace.focused();
+        let protocol = focused
+            .and_then(|pane| self.pane(pane))
+            .and_then(|pane| pane.remote.as_ref())
+            .and_then(|remote| remote.protocol(&self.core.ui.nodes));
+        let same = focused.and_then(|pane| self.clone_of(pane)).filter(|(_, _, goal)| {
+            *goal != Goal::Session
+                || matches!(
+                    protocol,
+                    Some(Protocol::Ssh | Protocol::Telnet | Protocol::Sftp | Protocol::Ftp)
+                )
+        });
+        let Some((source, name, goal)) = same else {
             self.split_local(axis);
             return;
         };
         let id = self.new_id();
         if self.win.workspace.split(id, axis) {
-            self.add_pane(Pane::remote(id, node, name, goal));
+            self.add_pane(Pane::remote(id, source, name, goal));
             self.start_session(id);
             self.relayout(true);
         }
@@ -142,7 +146,7 @@ impl At<'_> {
     /// Open the same session as `pane` again, in a tab of its own.
     pub(super) fn duplicate_session(&mut self, pane: PaneId) {
         match self.clone_of(pane) {
-            Some((node, _, goal)) => self.open_node(node, goal),
+            Some((source, name, goal)) => self.open_source(source, name, goal),
             None => self.perform(Action::NewTab),
         }
     }
@@ -156,7 +160,7 @@ impl At<'_> {
         let name = info.name.clone();
         let id = self.new_id();
         if self.win.workspace.split(id, axis) {
-            self.add_pane(Pane::remote(id, node, name, Goal::Session));
+            self.add_pane(Pane::remote(id, Origin::Saved(node), name, Goal::Session));
             self.start_session(id);
             self.relayout(true);
         } else {
@@ -168,7 +172,7 @@ impl At<'_> {
     pub(super) fn sessions_of(&self, node: u64) -> impl Iterator<Item = &Pane> {
         let key = self.win.key;
         self.core.panes.iter().filter(move |pane| {
-            pane.window == key && pane.remote.as_ref().is_some_and(|remote| remote.node == node)
+            pane.window == key && pane.remote.as_ref().is_some_and(|r| r.node() == Some(node))
         })
     }
 
@@ -306,7 +310,7 @@ impl At<'_> {
         self.dismiss_prompts(id);
         let Some(index) = self.core.panes.iter().position(|pane| pane.id == id) else { return };
         let mut pane = self.core.panes.remove(index);
-        let node = pane.remote.as_ref().map(|remote| remote.node);
+        let node = pane.remote.as_ref().and_then(crate::pane::Remote::node);
         pane.hang_up();
         self.retire(pane.content);
         if let Some(node) = node {
