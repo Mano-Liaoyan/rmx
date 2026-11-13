@@ -504,6 +504,7 @@ fn pane_bar_routes_its_buttons() {
         zoomed: false,
         files: false,
         broadcast: None,
+        unencrypted: false,
     };
     let mut reveal = Reveal::default();
     let mut draw = |ui: &mut Ui| pane_bar(ui, rect, &view, &mut reveal, std::time::Instant::now());
@@ -537,6 +538,7 @@ fn a_terminal_pane_bar_toggles_broadcast_and_shows_it() {
         zoomed: false,
         files: false,
         broadcast: Some(false),
+        unencrypted: false,
     };
     let mut reveal = Reveal::default();
     let y = rect.center().y;
@@ -553,6 +555,37 @@ fn a_terminal_pane_bar_toggles_broadcast_and_shows_it() {
         pane_bar(ui, rect, &view, &mut reveal, Instant::now());
     });
     assert!(shown.iter().any(|text| text == "Broadcast"), "no badge in {shown:?}");
+}
+
+#[test]
+fn an_unencrypted_session_says_so_in_its_pane_bar() {
+    let mut harness = Harness::new();
+    let rect = Rect::from_min_size(pos2(0., 0.), vec2(800., PANE_BAR_HEIGHT));
+    let mut view = PaneBarView {
+        pane: PaneId(3),
+        status: PaneStatus::Connected,
+        title: "desk",
+        tooltip: "",
+        focused: true,
+        grouped: false,
+        zoomed: false,
+        files: false,
+        broadcast: None,
+        unencrypted: false,
+    };
+    let mut badges = |view: &PaneBarView<'_>| {
+        let mut reveal = Reveal::default();
+        harness.texts(|ui| {
+            pane_bar(ui, rect, view, &mut reveal, Instant::now());
+        })
+    };
+    let shown = badges(&view);
+    assert!(!shown.iter().any(|text| text == "Not encrypted"), "a badge in {shown:?}");
+
+    view.unencrypted = true;
+    let shown = badges(&view);
+    assert!(shown.iter().any(|text| text == "Not encrypted"), "no badge in {shown:?}");
+    assert!(shown.iter().any(|text| text == "desk"), "the name is gone from {shown:?}");
 }
 
 fn core() -> ChromeCore {

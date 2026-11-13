@@ -168,6 +168,8 @@ pub struct Remote {
     pub cancel: Option<oneshot::Sender<()>>,
     /// Port forwards running.
     pub forwards: u32,
+    /// The session crosses the network unencrypted.
+    pub unencrypted: bool,
     /// What it connects for: the kind of pane is settled by the connection, or by this.
     pub goal: Goal,
     /// Reopened from the last session: anything it has to ask leaves it awaiting the user.
@@ -244,6 +246,7 @@ impl Pane {
                 generation: 0,
                 cancel: None,
                 forwards: 0,
+                unencrypted: false,
                 goal,
                 quiet: false,
                 log: SessionLogging::Off,

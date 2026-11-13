@@ -919,6 +919,8 @@ impl Shell {
                     && pane.content.terminal().is_some()
                     && pane.link == crate::pane::Link::Live,
                 broadcast: pane.content.terminal().is_some().then_some(pane.broadcast),
+                unencrypted: pane.remote.as_ref().is_some_and(|remote| remote.unencrypted)
+                    && pane.link == crate::pane::Link::Live,
             };
             let reveal = self.bars.entry(id).or_default();
             if self.drag.is_some() {

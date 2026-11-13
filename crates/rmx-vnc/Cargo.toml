@@ -7,9 +7,13 @@ license.workspace = true
 
 [dependencies]
 log = { version = "0.4", default-features = false }
+ring = "0.17"
 rmx-display = { path = "../rmx-display" }
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging", "std"] }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 vnc-rs = { version = "0.6", default-features = false }
 
 [dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

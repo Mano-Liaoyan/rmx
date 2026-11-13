@@ -186,6 +186,7 @@ impl At<'_> {
         remote.generation += 1;
         remote.cancel = Some(cancel_sender);
         remote.forwards = 0;
+        remote.unencrypted = false;
         let request = ConnectRequest {
             pane: id,
             generation: remote.generation,
@@ -315,6 +316,11 @@ impl At<'_> {
             LinkEvent::Logging(choice) => {
                 if let Some(remote) = self.pane_mut(id).and_then(|pane| pane.remote.as_mut()) {
                     remote.log = choice;
+                }
+            },
+            LinkEvent::Unencrypted => {
+                if let Some(remote) = self.pane_mut(id).and_then(|pane| pane.remote.as_mut()) {
+                    remote.unencrypted = true;
                 }
             },
             LinkEvent::Forwards(running, errors) => {

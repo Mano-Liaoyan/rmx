@@ -45,7 +45,7 @@ is no Electron or web view.
 |---|---|---|
 | Terminals | SSH, Telnet, serial | Jump hosts (`ProxyJump`), local, remote and dynamic (SOCKS) port forwards, host key checks against `known_hosts`, key and password login, snippets |
 | Files | SFTP, FTP, FTPS | Two-column browser, a transfer queue that resumes and retries, recursive copies, open and compare text files in a pane |
-| Remote desktops | RDP, VNC, RustDesk | RDP with NLA and the graphics pipeline (32-bit color), shared clipboard, resize to fit, the server's own cursor; RustDesk by ID or straight at an address |
+| Remote desktops | RDP, VNC, RustDesk | RDP with NLA and the graphics pipeline (32-bit color), shared clipboard, resize to fit, the server's own cursor; VNC over VeNCrypt TLS with a pinned certificate; RustDesk by ID or straight at an address |
 
 Remote desktop and file sessions can go through an SSH jump host, so an RDP or VNC machine behind
 a bastion is one setting away.
@@ -236,8 +236,11 @@ rmx is young (version 0.1). Things that don't work yet, each tracked in an issue
   other devices ([#56](https://github.com/Mano-Liaoyan/rmx/issues/56)), no RD Gateway
   ([#57](https://github.com/Mano-Liaoyan/rmx/issues/57)) and no UDP transport
   ([#60](https://github.com/Mano-Liaoyan/rmx/issues/60)).
-- **VNC:** traffic is only encrypted when tunnelled over SSH, until VeNCrypt lands
-  ([#16](https://github.com/Mano-Liaoyan/rmx/issues/16)). The clipboard is ASCII only, and very
+- **VNC:** VeNCrypt is spoken with the X509None, X509Vnc and X509Plain security types. The
+  anonymous TLSNone, TLSVnc and TLSPlain aren't, since `rustls` has no anonymous Diffie-Hellman
+  and nothing could tell such a server from a machine in the middle: give the server a
+  certificate (TigerVNC: `-X509Cert` and `-X509Key`). A session without VeNCrypt and without an
+  SSH jump host is marked "Not encrypted" on its pane. The clipboard is ASCII only, and very
   large desktops aren't supported yet ([#15](https://github.com/Mano-Liaoyan/rmx/issues/15)).
 - **SSH:** no X11 forwarding ([#23](https://github.com/Mano-Liaoyan/rmx/issues/23)).
 - **Terminal:** combining accents can render at an offset
