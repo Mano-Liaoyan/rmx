@@ -11,7 +11,7 @@ use crate::draw::{elided_at, icon, palette};
 use crate::theme::{RADIUS_SM, STRIP_HEIGHT, TAB_HEIGHT, TAB_SLIDE_MS, TEXT_SM};
 use crate::{fonts, icons};
 
-use super::controls::{InputOptions, paint_icon_button, submitted, text_input};
+use super::controls::{InputOptions, paint_close_button, paint_icon_button, submitted, text_input};
 use super::pane_bar::PaneStatus;
 
 /// The widest a tab grows.
@@ -245,7 +245,7 @@ pub fn tab_strip(
 
         if show_close && !held {
             let close = ui.interact(close_rect, id.with(("close", tab.id.0)), Sense::click());
-            paint_icon_button(ui, close_rect.shrink(1.), icons::X, 12., &close);
+            paint_close_button(ui, close_rect.shrink(1.), 12., &close);
             if close.clicked() {
                 action = Some(UiAction::TabClose(tab.id));
             }

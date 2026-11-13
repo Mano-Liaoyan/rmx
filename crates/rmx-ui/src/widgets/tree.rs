@@ -527,9 +527,12 @@ pub fn sidebar_status(ui: &mut Ui, rect: Rect, status: &SidebarStatus<'_>) -> Op
     let x = rect.left() + 12.;
     let y = rect.center().y;
     let width = right - x - 4.;
-    elided_at(ui.painter(), x, y, status.text, fonts::regular(TEXT_XS), color, width);
-    if status.failed {
-        // The strip is too short for most reasons.
+    let font = fonts::regular(TEXT_XS);
+    let full = ui.painter().layout_no_wrap(status.text.to_owned(), font.clone(), color);
+    let cut = full.size().x > width;
+    elided_at(ui.painter(), x, y, status.text, font, color, width);
+    if cut || status.failed {
+        // The strip is too short for most reasons, and for anything else in a narrow sidebar.
         let line = Rect::from_min_size(pos2(x, rect.top()), Vec2::new(width, rect.height()));
         ui.interact(line, id.with("reason"), Sense::hover()).on_hover_text(status.text);
     }

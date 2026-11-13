@@ -9,7 +9,7 @@ use crate::draw::palette;
 use crate::icons;
 use crate::theme::{STRIP_HEIGHT, TAB_HEIGHT};
 
-use super::controls::paint_icon_button;
+use super::controls::{paint_close_button, paint_icon_button};
 use super::tabs::{TabStripState, TabView, tab_strip};
 
 const CONTROL: f32 = TAB_HEIGHT;
@@ -75,7 +75,11 @@ pub fn title_bar(
         let cell = Rect::from_min_size(pos2(right, top), Vec2::splat(CONTROL));
         right -= CONTROL_GAP;
         let response = ui.interact(cell, id.with(salt), Sense::click());
-        paint_icon_button(ui, cell, glyph, 14., &response);
+        if glyph == icons::X {
+            paint_close_button(ui, cell, 14., &response);
+        } else {
+            paint_icon_button(ui, cell, glyph, 14., &response);
+        }
         if response.clicked() {
             action = Some(control_action);
         }

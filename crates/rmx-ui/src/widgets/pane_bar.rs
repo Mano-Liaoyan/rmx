@@ -10,7 +10,7 @@ use crate::draw::{elided_at, hline, palette};
 use crate::theme::{PANE_BAR_HEIGHT, RADIUS_SM, TEXT_SM, TEXT_XS};
 use crate::{fonts, icons};
 
-use super::controls::paint_icon_button;
+use super::controls::{paint_close_button, paint_icon_button};
 use super::panels::Reveal;
 
 /// How far the controls drop into place as they appear.
@@ -133,7 +133,11 @@ pub fn pane_bar(
             let cell = Rect::from_min_size(pos2(x, rect.top() + 2. + dy), Vec2::splat(BUTTON));
             x -= 2.;
             let response = child.interact(cell, id.with(tip), Sense::click()).on_hover_text(tip);
-            paint_icon_button(&child, cell, glyph, 12., &response);
+            if glyph == icons::X {
+                paint_close_button(&child, cell, 12., &response);
+            } else {
+                paint_icon_button(&child, cell, glyph, 12., &response);
+            }
             if response.clicked() {
                 action = Some(button_action);
             }
