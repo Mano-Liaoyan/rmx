@@ -35,6 +35,8 @@ const PASSWORD_WRONG: &str = "Wrong Password";
 const TWO_FACTOR_REQUIRED: &str = "2FA Required";
 const TWO_FACTOR_WRONG: &str = "Wrong 2FA Code";
 const NO_PASSWORD_ACCESS: &str = "No Password Access";
+/// Also what a peer says to a login that names neither its ID nor its address.
+const OFFLINE: &str = "Offline";
 
 /// How far the peer's identity was checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +234,7 @@ fn login_error(error: &str) -> ConnectError {
         NO_PASSWORD_ACCESS => {
             ConnectError::Failed("the peer only accepts sessions its user approves".to_owned())
         },
+        OFFLINE => ConnectError::Offline,
         other => ConnectError::Failed(other.to_owned()),
     }
 }

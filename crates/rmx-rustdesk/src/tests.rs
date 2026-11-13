@@ -102,7 +102,10 @@ impl Peer {
             panic!("no login")
         };
         let expected = password_proof(&salted_password(self.password, &hash.salt), &hash.challenge);
-        let error = if request.password.is_empty() {
+        // As `connection.rs` does: a login names the peer's ID, or an address it was reached at.
+        let error = if request.username != "peer" && !names_an_address(&request.username) {
+            Some("Offline")
+        } else if request.password.is_empty() {
             Some("Empty Password")
         } else if request.password.as_ref() != expected.as_slice() {
             Some("Wrong Password")
@@ -143,6 +146,36 @@ impl Peer {
     }
 }
 
+/// RustDesk's `is_direct_ip_access`: an IP address with or without a port, or a host name with
+/// a dot and a port.
+fn names_an_address(name: &str) -> bool {
+    use std::net::{IpAddr, SocketAddr};
+    if name.parse::<IpAddr>().is_ok() || name.parse::<SocketAddr>().is_ok() {
+        return true;
+    }
+    let Some((host, port)) = name.rsplit_once(':') else { return false };
+    let tld = host.rsplit('.').next().unwrap_or_default();
+    host.contains('.')
+        && (1..=5).contains(&port.len())
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && tld.len() >= 2
+        && tld.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+#[test]
+fn direct_names_are_addresses_a_peer_accepts() {
+    for (host, name) in [
+        ("100.95.114.15", "100.95.114.15:21118"),
+        ("fd7a:115c:a1e0::1", "[fd7a:115c:a1e0::1]:21118"),
+        ("[fd7a:115c:a1e0::1]", "[fd7a:115c:a1e0::1]:21118"),
+        ("tumbleweed.tail1234.ts.net", "tumbleweed.tail1234.ts.net:21118"),
+    ] {
+        assert_eq!(crate::direct_name(host, crate::DIRECT_PORT), name);
+        assert!(names_an_address(name), "{name}");
+    }
+    assert!(!names_an_address(""));
+}
+
 fn start(password: &'static str, secure: bool) -> PipeDialer {
     let (client, server) = tokio::io::duplex(1 << 20);
     tokio::spawn(Peer { connection: Connection::new(server), password, secure }.serve());
@@ -150,7 +183,8 @@ fn start(password: &'static str, secure: bool) -> PipeDialer {
 }
 
 fn config(password: Option<&str>) -> Config {
-    let mut config = Config::new(Target::Direct { host: "peer".into(), port: crate::DIRECT_PORT });
+    let mut config =
+        Config::new(Target::Direct { host: "100.95.114.15".into(), port: crate::DIRECT_PORT });
     config.credentials =
         Credentials { password: password.map(str::to_owned), two_factor_code: None };
     config
