@@ -319,6 +319,12 @@ impl Engine {
         encoded.freeze()
     }
 
+    /// Whether the server refused to echo, or stopped, which leaves echoing to the client. Not
+    /// while the offer to have it echo is unanswered: most servers agree.
+    pub(crate) fn echoes_locally(&self) -> bool {
+        self.options.iter().any(|known| known.option == ECHO && known.him == Side::Off)
+    }
+
     pub(crate) fn queued_replies(&self) -> usize {
         self.replies.len()
     }
@@ -520,6 +526,22 @@ mod tests {
         assert!(engine.take_replies().is_empty());
         assert!(engine.is_on(ECHO, false));
         assert!(!engine.is_on(BINARY, true));
+    }
+
+    #[test]
+    fn echo_is_left_to_the_client_only_once_the_server_refuses_it() {
+        let mut engine = engine();
+        assert!(!engine.echoes_locally(), "the server may still agree");
+
+        feed(&mut engine, &[&[IAC, WONT, ECHO]]);
+        assert!(engine.echoes_locally());
+
+        feed(&mut engine, &[&[IAC, WILL, ECHO]]);
+        assert!(!engine.echoes_locally(), "the server took echoing back");
+        assert_eq!(&engine.take_replies()[..], [IAC, DO, ECHO]);
+
+        feed(&mut engine, &[&[IAC, WONT, ECHO]]);
+        assert!(engine.echoes_locally(), "the server gave echoing up again");
     }
 
     #[test]

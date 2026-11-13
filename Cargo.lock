@@ -4446,6 +4446,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
+ "rmx-render",
  "rmx-terminal",
  "tempfile",
  "tokio",

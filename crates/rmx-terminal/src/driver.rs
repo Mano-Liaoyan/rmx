@@ -1,9 +1,10 @@
 //! Runs a terminal on a [`TransportReader`] and [`TransportWriter`] instead of a local PTY.
 //!
 //! Three tokio tasks, on the caller's runtime, talk to the connection: one reads, one writes and
-//! one resizes, so that none of them waits on another. The terminal's lock is never taken on the
-//! runtime, as it can be held for milliseconds. A thread of its own parses instead, the same way
-//! `alacritty_terminal`'s `EventLoop` has one.
+//! one resizes, so that none of them waits on another. The writer also queues what is typed for
+//! parsing, as output, when the program leaves echoing it to the terminal. The terminal's lock
+//! is never taken on the runtime, as it can be held for milliseconds. A thread of its own parses
+//! instead, the same way `alacritty_terminal`'s `EventLoop` has one.
 //!
 //! # Buffering
 //!
@@ -33,6 +34,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::{AbortHandle, JoinHandle};
 
+use crate::echo::local_echo;
 use crate::scan::{Found, Scanner};
 use crate::tap::{Direction, Taps};
 use crate::transport::{
@@ -214,18 +216,28 @@ impl Channel {
     }
 }
 
+/// Bytes for the program, and whether they were typed or pasted rather than an answer.
+type Input = (Bytes, bool);
+
 /// The handle a [`Terminal`](crate::Terminal) keeps on its connection.
 #[derive(Clone)]
 pub(crate) struct Remote {
-    input: mpsc::UnboundedSender<Bytes>,
+    input: mpsc::UnboundedSender<Input>,
     size: Arc<watch::Sender<WindowSize>>,
     pub(crate) channel: Arc<Channel>,
 }
 
 impl Remote {
-    /// Send `bytes` to the program. Does nothing once the session is over.
+    /// Send `bytes` typed or pasted to the program, echoing them if it asks for that. Does
+    /// nothing once the session is over.
     pub(crate) fn write(&self, bytes: Bytes) {
-        let _ = self.input.send(bytes);
+        let _ = self.input.send((bytes, true));
+    }
+
+    /// Send the program an answer to something it asked, which is never echoed. Does nothing
+    /// once the session is over.
+    pub(crate) fn answer(&self, bytes: Bytes) {
+        let _ = self.input.send((bytes, false));
     }
 
     /// Tell the program about a new size. Does nothing once the session is over.
@@ -281,10 +293,18 @@ async fn read_loop<R: TransportReader>(mut reader: R, channel: Arc<Channel>, tap
 
 async fn write_loop<W: TransportWriter>(
     writer: Arc<W>,
-    mut input: mpsc::UnboundedReceiver<Bytes>,
+    mut input: mpsc::UnboundedReceiver<Input>,
     channel: Arc<Channel>,
 ) {
-    while let Some(bytes) = input.recv().await {
+    while let Some((bytes, typed)) = input.recv().await {
+        if typed && writer.local_echo() {
+            // Straight to the parser and past the output tap, which only gets what the program
+            // sent: the input tap has these bytes already.
+            let echo = local_echo(bytes.clone());
+            if !echo.is_empty() && !channel.push(echo, false) {
+                return;
+            }
+        }
         if let Err(reason) = writer.write(bytes).await {
             return channel.close(reason);
         }
