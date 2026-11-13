@@ -194,15 +194,27 @@ Some tests need more than `cargo test` gives them:
 - **Against real servers.** The SSH, SFTP, FTP, VNC, RDP (xrdp) and vault sync tests start
   disposable servers with [podman](https://podman.io) or Docker. They're marked `#[ignore]`, so
   run them with `cargo test --workspace -- --ignored`.
-- **The GUI.** `scripts/headless.sh` runs a command in a private, invisible KWin session, so
+- **The GUI.** `scripts/headless.sh` runs a command in a private, invisible compositor, so
   nothing ever opens on your desktop:
 
   ```sh
   scripts/headless.sh target/release/rmx
   ```
 
+  It uses KWin (`kwin_wayland --virtual`) when there is a GPU render node (`/dev/dri/renderD*`)
+  for it to draw with, and otherwise weston (`weston --backend=headless --renderer=pixman`),
+  which draws on the CPU and so runs in WSL, containers and CI runners without a GPU. Set
+  `HEADLESS_COMPOSITOR=kwin` or `weston` to pick one, and `HEADLESS_WIDTH` / `HEADLESS_HEIGHT`
+  for the size of its output.
+
 - **End to end.** `cargo run -p xtask -- e2e` drives the real interface through scripted steps
   inside `scripts/headless.sh`, against podman servers, and saves a screenshot of each step.
+  `RMX_E2E_ONLY=panes,broadcast` runs just those scenarios. The servers' images are built the
+  first time, which needs the network; a scenario that needs something this machine lacks (podman,
+  an image that cannot be built, `socat` for the serial line) is reported as `skip` with the
+  reason instead of failing. Each run of the app is stopped after 15 minutes, so nothing hangs.
+- **On a real display.** `cargo run -p xtask -- bench --real-display` samples KWin as well, when
+  KWin is the compositor; with any other the KWin figures in its report say `not sampled`.
 - **Performance.** `cargo run -p xtask -- bench` measures frame times, startup, allocations and
   binary size against the budgets in [`xtask/src/main.rs`](xtask/src/main.rs).
 

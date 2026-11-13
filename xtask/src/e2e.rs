@@ -10,13 +10,20 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{Report, measure};
 
 const IMAGE: &str = "localhost/rmx-ssh-sshd-test:1";
+/// The same image the `rmx-ssh` OpenSSH tests build, so either makes it for the other.
+const IMAGE_CONTAINERFILE: &str = "\
+FROM docker.io/library/alpine:3.22
+RUN apk add --no-cache openssh-server-pam linux-pam openssh-keygen socat \
+ && ln -sf /usr/sbin/sshd.pam /usr/sbin/sshd
+RUN printf 'auth required pam_unix.so\\naccount required pam_unix.so\\nsession required pam_permit.so\\npassword required pam_deny.so\\n' > /etc/pam.d/sshd
+";
 /// Disposable servers built from packages, made once and reused between runs.
 /// The buttons of a file open in a pane of a 1280 by 800 window with a tab strip and sidebar.
 const TEXT_DIFF: &str = "move:1149:90";
@@ -67,8 +74,59 @@ fn random_hex() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// What the scenario running now left out, and why. Taken by [`take_skipped`] after each one.
+static SKIPPED: Mutex<Vec<Skipped>> = Mutex::new(Vec::new());
+
+/// One thing a scenario could not do here, for want of something the machine does not have.
+pub struct Skipped {
+    /// The part of the scenario left out, or `None` when it is the whole of it.
+    pub part: Option<String>,
+    pub reason: String,
+}
+
+/// Note that `part` of the running scenario is left out, and go on with the rest.
+fn skip_part(part: &str, reason: &str) {
+    println!("skip {part}: {reason}");
+    let skipped = Skipped { part: Some(part.to_owned()), reason: reason.to_owned() };
+    SKIPPED.lock().unwrap().push(skipped);
+}
+
+/// The error that ends the running scenario as skipped rather than failed.
+fn skip(reason: String) -> String {
+    let skipped = Skipped { part: None, reason: reason.clone() };
+    SKIPPED.lock().unwrap().push(skipped);
+    reason
+}
+
+/// `result`, or `None` if it was skipped: then only `part` of the scenario is left out.
+fn optional<T>(part: &str, result: Result<T, String>) -> Result<Option<T>, String> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(err) => {
+            let mut skipped = SKIPPED.lock().unwrap();
+            if !skipped.last().is_some_and(|last| last.part.is_none() && last.reason == err) {
+                return Err(err);
+            }
+            skipped.pop();
+            drop(skipped);
+            skip_part(part, &err);
+            Ok(None)
+        },
+    }
+}
+
+/// What the scenario just run left out.
+pub fn take_skipped() -> Vec<Skipped> {
+    std::mem::take(&mut *SKIPPED.lock().unwrap())
+}
+
+/// Whether `program` can be started at all.
+fn installed(program: &str) -> bool {
+    Command::new(program).arg("-V").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+}
+
 fn podman(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("podman").args(args).output().map_err(|err| err.to_string())?;
+    let output = Command::new("podman").args(args).output().map_err(podman_missing)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -90,6 +148,7 @@ impl Sshd {
 
     /// A server that also takes the public keys in `authorized_keys`.
     pub fn with_keys(authorized_keys: &str) -> Result<Self, String> {
+        ensure_image(IMAGE, IMAGE_CONTAINERFILE)?;
         let name = format!("rmx-e2e-{}", random_hex());
         let password = random_hex();
         let env = format!("RMX_PASSWORD={password}");
@@ -127,6 +186,7 @@ impl Sshd {
     /// A server sharing the network of `owner`, whose loopback it can reach: a way in through a
     /// tunnel to something nothing else reaches. `owner` has to publish port 22.
     fn beside(owner: &Server) -> Result<Self, String> {
+        ensure_image(IMAGE, IMAGE_CONTAINERFILE)?;
         let name = format!("rmx-e2e-{}", random_hex());
         let password = random_hex();
         let env = format!("RMX_PASSWORD={password}");
@@ -1389,12 +1449,12 @@ impl Drop for SerialLine {
 /// Telnet, directly and through an SSH tunnel; a serial line, and that line missing on restart.
 pub fn terminals(bench_target: &Path, shots: &Path) -> Result<(), String> {
     let server = telnet_server()?;
-    let gate = Sshd::beside(&server)?;
+    let gate = optional("telnet through an ssh tunnel", Sshd::beside(&server))?;
     let port = server.port(23)?;
     let scratch = Scratch::new();
     let vault_password = random_hex();
     let shot = |name: &str| shot_step(shots, name);
-    let script = [
+    let mut script = vec![
         "await:setup".to_owned(),
         format!("vault-create:{vault_password}"),
         "await:unlocked".to_owned(),
@@ -1414,23 +1474,31 @@ pub fn terminals(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "disconnect,await:closed,reconnect,await:live,wait,wait".to_owned(),
         "run:echo back-$((6*7)),await:text:back-42".to_owned(),
         "log-toggle,await:notice:Stopped logging,wait".to_owned(),
-        format!("conn:gate|127.0.0.1|{}|alice|{}", gate.port, gate.password),
-        "await:host-key,hostkey:always,await:live".to_owned(),
-        "conn-as:Telnet|telly-tunnelled|127.0.0.1|23|||gate|".to_owned(),
-        "await:live,wait,wait,wait".to_owned(),
-        "run:echo via-$((6*7)),await:text:via-42,wait".to_owned(),
-        shot("m8-telnet-tunnelled.ppm"),
-    ]
-    .join(",");
-    let report = app_run(bench_target, &scratch, "telnet", &script)?;
+    ];
+    if let Some(gate) = &gate {
+        script.extend([
+            format!("conn:gate|127.0.0.1|{}|alice|{}", gate.port, gate.password),
+            "await:host-key,hostkey:always,await:live".to_owned(),
+            "conn-as:Telnet|telly-tunnelled|127.0.0.1|23|||gate|".to_owned(),
+            "await:live,wait,wait,wait".to_owned(),
+            "run:echo via-$((6*7)),await:text:via-42,wait".to_owned(),
+            shot("m8-telnet-tunnelled.ppm"),
+        ]);
+    }
+    let report = app_run(bench_target, &scratch, "telnet", &script.join(","))?;
     report_paths("telnet", &report);
     let logs = session_logs(&scratch.path("telnet"))?;
     let [log] = logs.as_slice() else { return Err(format!("telnet: logs {logs:?}")) };
     if !file_contains(log, "tel-42") || !file_contains(log, "back-42") {
         return Err(format!("telnet: {} has not both sessions in it", log.display()));
     }
-    println!("ok   telnet: a shell, reconnected, logged, and through an ssh tunnel");
+    let tunnel = if gate.is_some() { ", and through an ssh tunnel" } else { "" };
+    println!("ok   telnet: a shell, reconnected, logged{tunnel}");
 
+    if !installed("socat") {
+        skip_part("serial", "socat, which stands in for the device, is not installed");
+        return Ok(());
+    }
     let scratch = Scratch::new();
     let path = scratch.path("ttyTEST0");
     let line = SerialLine::start(path.clone())?;
@@ -1507,7 +1575,7 @@ impl Server {
             command.arg("--env").arg(key).env(key, value);
         }
         command.arg(image).args(["sh", "-c", script]);
-        let output = command.output().map_err(|err| err.to_string())?;
+        let output = command.output().map_err(podman_missing)?;
         if !output.status.success() {
             return Err(format!("podman run: {}", String::from_utf8_lossy(&output.stderr)));
         }
@@ -1554,20 +1622,49 @@ impl Drop for Server {
     }
 }
 
+/// Podman could not be started: everything needing a server is skipped, not failed.
+fn podman_missing(err: std::io::Error) -> String {
+    skip(format!("podman: {err}"))
+}
+
 /// Build `tag` from `containerfile` unless it is already here.
 fn ensure_image(tag: &str, containerfile: &str) -> Result<(), String> {
-    if Command::new("podman").args(["image", "exists", tag]).status().is_ok_and(|s| s.success()) {
-        return Ok(());
-    }
     let scratch = Scratch::new();
     let directory = scratch.path("build");
     fs::create_dir_all(&directory).map_err(|err| err.to_string())?;
     fs::write(directory.join("Containerfile"), containerfile).map_err(|err| err.to_string())?;
-    let context = directory.to_str().ok_or("not a path")?;
-    let built = Command::new("podman").args(["build", "-q", "-t", tag, context]).status();
-    built.map_err(|err| err.to_string()).and_then(|status| {
-        status.success().then_some(()).ok_or_else(|| format!("building {tag} failed"))
-    })
+    ensure_image_from(tag, &directory)
+}
+
+/// Build `tag` from the directory `context` unless it is already here. An image that cannot be
+/// built, as with no network, skips the scenario.
+fn ensure_image_from(tag: &str, context: &Path) -> Result<(), String> {
+    let exists = Command::new("podman").args(["image", "exists", tag]).status();
+    if exists.map_err(podman_missing)?.success() {
+        return Ok(());
+    }
+    // Tried once a run: with no network, every try would wait as long for the same answer.
+    static UNBUILDABLE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+    let tried =
+        UNBUILDABLE.lock().unwrap().iter().find(|(t, _)| t == tag).map(|(_, why)| why.clone());
+    if let Some(why) = tried {
+        return Err(skip(why));
+    }
+    println!("building {tag}");
+    let built = Command::new("podman")
+        .args(["build", "-q", "-t", tag])
+        .arg(context)
+        .stdout(Stdio::null())
+        .output()
+        .map_err(podman_missing)?;
+    if built.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&built.stderr);
+    let why = why.lines().rfind(|line| !line.trim().is_empty()).unwrap_or("").trim();
+    let why = format!("no image {tag}, and building it failed: {why}");
+    UNBUILDABLE.lock().unwrap().push((tag.to_owned(), why.clone()));
+    Err(skip(why))
 }
 
 /// A port nothing listens on just now, and the `count` after it.
@@ -2132,21 +2229,7 @@ pub fn vnc(bench_target: &Path, shots: &Path) -> Result<(), String> {
 /// A session through a real xrdp server: pixels, typing, resize, clipboard both ways, and a
 /// certificate pinned on the first connection.
 pub fn rdp(bench_target: &Path, shots: &Path) -> Result<(), String> {
-    let context = Path::new("crates/rmx-rdp/tests/xrdp");
-    if !Command::new("podman")
-        .args(["image", "exists", RDP_IMAGE])
-        .status()
-        .is_ok_and(|s| s.success())
-    {
-        let built = Command::new("podman")
-            .args(["build", "-q", "-t", RDP_IMAGE])
-            .arg(context)
-            .status()
-            .map_err(|err| err.to_string())?;
-        if !built.success() {
-            return Err("building the xrdp image failed".to_owned());
-        }
-    }
+    ensure_image_from(RDP_IMAGE, Path::new("crates/rmx-rdp/tests/xrdp"))?;
     let scratch = Scratch::new();
     let suffix = random_hex();
     let user = format!("u{}", &suffix[..8]);

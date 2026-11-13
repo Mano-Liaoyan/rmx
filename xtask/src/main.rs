@@ -114,19 +114,32 @@ fn end_to_end(vendored: bool, shots: Option<&String>) -> ExitCode {
         ("closing", Box::new(|| e2e::closing(&bench_target, &shots))),
         ("rdp-import", Box::new(|| e2e::rdp_import(&bench_target, &shots))),
     ];
-    let results: Vec<(&str, Result<(), String>)> = tests
+    let results: Vec<_> = tests
         .into_iter()
         .filter(|(name, _)| wanted(name))
-        .map(|(name, test)| (name, test()))
+        .map(|(name, test)| {
+            let started = Instant::now();
+            let result = test();
+            (name, result, e2e::take_skipped(), started.elapsed())
+        })
         .collect();
+    // Something this machine lacks skips a scenario, or a part of one: said, but not a failure.
     let mut passed = true;
-    for (name, result) in results {
-        match result {
-            Ok(()) => println!("ok   {name}"),
-            Err(err) => {
+    for (name, result, skipped, took) in results {
+        let took = format!("({}s)", took.as_secs());
+        let whole = skipped.iter().find(|skipped| skipped.part.is_none());
+        match (result, whole) {
+            (Err(_), Some(skipped)) => println!("skip {name}: {} {took}", skipped.reason),
+            (Ok(()), _) => println!("ok   {name} {took}"),
+            (Err(err), None) => {
                 passed = false;
-                println!("FAIL {name}: {err}");
+                println!("FAIL {name}: {err} {took}");
             },
+        }
+        for skipped in &skipped {
+            if let Some(part) = &skipped.part {
+                println!("       without {part}: {}", skipped.reason);
+            }
         }
     }
     if passed { ExitCode::SUCCESS } else { ExitCode::FAILURE }
@@ -178,9 +191,16 @@ pub fn measure(
     if !shell.is_empty() {
         app.args(["-e", "sh", "-c", shell]);
     }
-    if !run(&mut app) {
-        eprintln!("rmx did not exit cleanly");
-        return None;
+    match run_limited(&mut app, RUN_LIMIT) {
+        Finished::Clean => {},
+        Finished::TimedOut => {
+            eprintln!("rmx was still running after {} s, and was stopped", RUN_LIMIT.as_secs());
+            return None;
+        },
+        Finished::Failed => {
+            eprintln!("rmx did not exit cleanly");
+            return None;
+        },
     }
 
     let text = fs::read_to_string(&out).ok()?;
@@ -229,9 +249,10 @@ struct RealDisplay {
     keep: PathBuf,
     limit: Duration,
     scene: Mutex<String>,
-    /// The compositor's main thread, if found, to see how the scheduler treats it.
+    /// The compositor's main thread, if found and KWin, to see how the scheduler treats it.
     kwin: Option<u32>,
-    /// Whether this is the user's session, where KWin can be asked about itself.
+    /// Whether this is the user's session and KWin, which can then be asked about itself. Any
+    /// other compositor, weston say, is not sampled.
     live: bool,
 }
 
@@ -310,8 +331,9 @@ impl RealDisplay {
         let kwin = kwin.map_or_else(|| "not sampled".to_owned(), KwinSampler::stop);
         let journal = if self.live {
             kwin_journal(wall_start, &self.keep.join(format!("kwin-journal-{label}.log")))
+                .to_string()
         } else {
-            0
+            "not sampled".to_owned()
         };
 
         let gpu = summarize_gpu(&gpu_file);
@@ -351,7 +373,11 @@ enum Finished {
     TimedOut,
 }
 
-/// Run `command`, stopping it if it goes on for longer than `limit`.
+/// How long one scripted run in a private compositor may take before it is stopped, so that a
+/// run that never ends is reported rather than waited on for ever.
+const RUN_LIMIT: Duration = Duration::from_secs(15 * 60);
+
+/// Run `command`, stopping it, and everything it started, if it goes on for longer than `limit`.
 fn run_limited(command: &mut Command, limit: Duration) -> Finished {
     let Ok(mut child) = command.spawn() else { return Finished::Failed };
     let deadline = Instant::now() + limit;
@@ -362,12 +388,38 @@ fn run_limited(command: &mut Command, limit: Duration) -> Finished {
             },
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                for pid in descendants(child.id()) {
+                    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Finished::TimedOut;
             },
         }
     }
+}
+
+/// Every process below `pid`, found through each one's parent in `/proc`.
+fn descendants(pid: u32) -> Vec<u32> {
+    let parents: Vec<(u32, u32)> = fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let pid: u32 = entry.ok()?.file_name().to_str()?.parse().ok()?;
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            // The name in brackets may hold spaces, so the fields are counted after it.
+            let parent = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()?;
+            Some((pid, parent))
+        })
+        .collect();
+    let mut found = vec![pid];
+    let mut next = 0;
+    while next < found.len() {
+        let parent = found[next];
+        found.extend(parents.iter().filter(|(_, p)| *p == parent).map(|(child, _)| *child));
+        next += 1;
+    }
+    found.split_off(1)
 }
 
 fn load() -> String {
@@ -439,6 +491,11 @@ fn kwin_journal(since: u64, file: &Path) -> usize {
     let Ok(output) = Command::new("journalctl").args(args).output() else { return 0 };
     let _ = fs::write(file, &output.stdout);
     String::from_utf8_lossy(&output.stdout).lines().count()
+}
+
+/// Whether `pid` is a running KWin.
+fn is_kwin(pid: u32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|name| name.trim() == "kwin_wayland")
 }
 
 /// The main process of the live session's compositor, not a private one.
@@ -550,10 +607,17 @@ fn real_display(args: &[String], vendored: bool) -> ExitCode {
     let expect_ns = (hz > 0.).then(|| (1e9 / hz) as u64);
     let scene = Mutex::new(String::new());
     // A socket given by path is a private compositor, for rehearsing.
-    let live = !socket.contains('/');
-    let kwin = value("--kwin-pid")
-        .and_then(|pid| pid.parse().ok())
-        .or_else(|| live.then(live_kwin).flatten());
+    let given = value("--kwin-pid").and_then(|pid| pid.parse().ok());
+    if let Some(pid) = given.filter(|pid| !is_kwin(*pid)) {
+        eprintln!("process {pid} is not kwin_wayland: the compositor is not sampled");
+    }
+    let kwin = given.filter(|pid| is_kwin(*pid)).or_else(|| {
+        let live = !socket.contains('/');
+        live.then(live_kwin).flatten()
+    });
+    // A socket given by path is a private compositor, for rehearsing; one with no KWin to find is
+    // another compositor's, with nothing of KWin's to ask.
+    let live = !socket.contains('/') && kwin.is_some();
     let real = RealDisplay {
         output,
         socket,
