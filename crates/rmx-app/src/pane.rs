@@ -2,15 +2,16 @@
 
 use rmx_render::SizeInfo;
 use rmx_terminal::{Terminal, Theme};
+use rmx_ui::Protocol;
 use rmx_ui::egui;
 use rmx_ui::widgets::{
-    PaneOverlay, PaneStatus, ScaleChoice, SessionLogging, notice_rect, overlay_rect,
+    NodeKind, PaneOverlay, PaneStatus, ScaleChoice, SessionLogging, notice_rect, overlay_rect,
 };
 use tokio::sync::oneshot;
 
 use rmx_layout::PaneId;
 
-use crate::connect::Goal;
+use crate::connect::{Goal, Origin};
 use crate::files::FilesPane;
 use crate::remote::Display;
 use crate::session_log::SessionLog;
@@ -153,10 +154,10 @@ pub enum Link {
     },
 }
 
-/// What a pane connected to a saved connection knows about it.
+/// What a pane connected to a connection, saved or not, knows about it.
 pub struct Remote {
-    /// The connection, as the tree numbers it.
-    pub node: u64,
+    /// The connection.
+    pub source: Origin,
     /// Its name, shown until the session sets a title.
     pub name: String,
     /// `user@host:port`, or the name when that is not known.
@@ -173,6 +174,27 @@ pub struct Remote {
     pub quiet: bool,
     /// What of its terminal the connection says to log.
     pub log: SessionLogging,
+}
+
+impl Remote {
+    /// The saved connection, as the tree numbers it; none for one that is not saved.
+    pub fn node(&self) -> Option<u64> {
+        self.source.node()
+    }
+
+    /// The kind of connection, as the tree or the unsaved draft says.
+    pub fn protocol(
+        &self,
+        nodes: &std::collections::HashMap<u64, crate::store::NodeInfo>,
+    ) -> Option<Protocol> {
+        match &self.source {
+            Origin::Saved(node) => match nodes.get(node)?.kind {
+                NodeKind::Connection(protocol) => Some(protocol),
+                NodeKind::Folder => None,
+            },
+            Origin::Transient(draft) => Some(draft.protocol),
+        }
+    }
 }
 
 /// A pane, whatever it shows.
@@ -210,13 +232,13 @@ impl Pane {
         }
     }
 
-    /// A pane about to connect to the saved connection `node`.
-    pub fn remote(id: PaneId, node: u64, name: String, goal: Goal) -> Self {
+    /// A pane about to connect to `source`.
+    pub fn remote(id: PaneId, source: Origin, name: String, goal: Goal) -> Self {
         let target = name.clone();
         Self {
             link: Link::Connecting { stage: "Starting".to_owned() },
             remote: Some(Remote {
-                node,
+                source,
                 name,
                 target,
                 generation: 0,

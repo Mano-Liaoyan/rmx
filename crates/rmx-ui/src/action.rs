@@ -282,7 +282,7 @@ pub enum UiAction {
     },
     /// Put this text on the clipboard.
     CopyText(String),
-    /// Connect to what was typed, as `user@host:port`.
+    /// Connect to what was typed, as `user@host:port`, without saving it.
     QuickConnect(String),
     /// The sidebar is being dragged to this width, in points.
     SidebarResize(f32),
@@ -378,6 +378,8 @@ pub enum UiAction {
     PaneZoom(PaneId),
     /// Open the same session again, in a new tab.
     PaneDuplicate(PaneId),
+    /// Open the connection form filled in from the unsaved connection of this pane, to save it.
+    PaneSaveConnection(PaneId),
     /// Make this pane a tab of its own.
     PaneToTab(PaneId),
     /// Give this pane a window of its own.

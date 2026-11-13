@@ -41,12 +41,34 @@ impl Core {
     /// How a pane goes in the state file.
     pub(super) fn saved_pane(&self, id: PaneId) -> SavedPane {
         let remote = self.panes.iter().find(|pane| pane.id == id).and_then(|p| p.remote.as_ref());
-        match remote {
+        match remote.map(|remote| (remote.node(), &remote.goal)) {
             None => SavedPane::Local,
-            Some(remote) if matches!(remote.goal, Goal::Files { .. }) => {
-                SavedPane::Files(remote.node)
-            },
-            Some(remote) => SavedPane::Node(remote.node),
+            Some((None, _)) => SavedPane::Transient,
+            Some((Some(node), Goal::Files { .. })) => SavedPane::Files(node),
+            Some((Some(node), Goal::Session)) => SavedPane::Node(node),
+        }
+    }
+
+    /// The unsaved connection `origin` was saved as `node`: its panes, in any window, are that
+    /// connection's from now on. Their sessions carry on as they are.
+    pub(super) fn adopt(&mut self, node: u64, origin: &Arc<ConnectionDraft>) {
+        let name = self.ui.nodes.get(&node).map(|info| info.name.clone());
+        let mut any = false;
+        for pane in &mut self.panes {
+            let Some(remote) = pane.remote.as_mut() else { continue };
+            if matches!(&remote.source, Origin::Transient(draft) if Arc::ptr_eq(draft, origin)) {
+                remote.source = Origin::Saved(node);
+                if let Some(name) = &name {
+                    remote.name.clone_from(name);
+                }
+                pane.dirty = true;
+                any = true;
+            }
+        }
+        if any {
+            self.ui.tree.set_state(NodeId(node), shell::session_dot(&self.panes, node));
+            self.broadcast = true;
+            self.session_changed();
         }
     }
 }
@@ -358,6 +380,7 @@ impl Running {
             },
             VaultEvent::Draft(draft) => {
                 if let Some(at) = self.at_active() {
+                    at.win.adopting = None;
                     at.win.shell.dialog.open_draft(*draft);
                 }
             },
@@ -366,6 +389,7 @@ impl Running {
                     at.open_connection(node);
                 }
             },
+            VaultEvent::Adopted { node, origin } => self.core.adopt(node, &origin),
         }
     }
 

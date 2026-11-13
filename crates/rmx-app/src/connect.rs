@@ -419,11 +419,39 @@ pub struct ConnectPlan {
     pub log: SessionLogging,
 }
 
+/// What a pane connects to.
+#[derive(Clone, Debug)]
+pub enum Origin {
+    /// The saved connection the tree numbers this.
+    Saved(u64),
+    /// A connection that is not in the vault and never goes there unless the user saves it:
+    /// quick connect. Panes opened from one share it, so saving it saves them all.
+    Transient(Arc<rmx_ui::widgets::ConnectionDraft>),
+}
+
+impl Origin {
+    /// The row of the tree, if it is saved.
+    pub fn node(&self) -> Option<u64> {
+        match self {
+            Self::Saved(node) => Some(*node),
+            Self::Transient(_) => None,
+        }
+    }
+
+    /// What to ask the vault for how to connect.
+    fn plan_request(&self, reply: oneshot::Sender<Result<ConnectPlan, String>>) -> Request {
+        match self {
+            Self::Saved(node) => Request::Plan { node: *node, reply },
+            Self::Transient(draft) => Request::PlanTransient { draft: draft.clone(), reply },
+        }
+    }
+}
+
 /// What a pane needs to get connected.
 pub struct ConnectRequest {
     pub pane: PaneId,
     pub generation: u64,
-    pub node: u64,
+    pub source: Origin,
     pub size: SizeInfo,
     /// The pane's content, in pixels, for a desktop to take.
     pub pixels: (u32, u32),
@@ -442,7 +470,7 @@ pub async fn run(request: ConnectRequest) {
     let ConnectRequest {
         pane,
         generation,
-        node,
+        source,
         size,
         pixels,
         goal,
@@ -456,7 +484,7 @@ pub async fn run(request: ConnectRequest) {
     let reporter = Reporter { proxy: proxy.clone(), pane, generation };
 
     let (reply, answer) = oneshot::channel();
-    vault.send(Request::Plan { node, reply });
+    vault.send(source.plan_request(reply));
     let plan = tokio::select! {
         biased;
         _ = &mut cancel => return,

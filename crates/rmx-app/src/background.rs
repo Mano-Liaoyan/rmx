@@ -53,6 +53,9 @@ pub enum SavedPane {
     Node(u64),
     /// Browsing the files of the saved connection numbered this.
     Files(u64),
+    /// A connection that was never saved: quick connect. Written down so that a later start
+    /// knows something was there, and reopens nothing for it.
+    Transient,
 }
 
 impl SavedPane {
@@ -62,12 +65,15 @@ impl SavedPane {
             Self::Local => "local".to_owned(),
             Self::Node(node) => format!("node {node}"),
             Self::Files(node) => format!("files {node}"),
+            Self::Transient => "transient".to_owned(),
         }
     }
 
     fn read(text: &str) -> Option<Self> {
-        if text == "local" {
-            return Some(Self::Local);
+        match text {
+            "local" => return Some(Self::Local),
+            "transient" => return Some(Self::Transient),
+            _ => (),
         }
         let (kind, node) = text.split_once(' ')?;
         let node = node.parse().ok()?;
@@ -318,6 +324,12 @@ mod tests {
                 },
                 SavedTab {
                     layout: Split::Pane(SavedPane::Local),
+                    focus: 0,
+                    zoomed: false,
+                    name: None,
+                },
+                SavedTab {
+                    layout: Split::Pane(SavedPane::Transient),
                     focus: 0,
                     zoomed: false,
                     name: None,

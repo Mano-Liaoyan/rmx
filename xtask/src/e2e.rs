@@ -1062,6 +1062,63 @@ fn plain_sync(bench_target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Quick connect without saving: `user@host:port` connects and puts nothing in the vault, its
+/// host key is still remembered, it reconnects, a later start does not reopen it, and saving it
+/// from the pane's menu keeps the session it has.
+pub fn quick(bench_target: &Path, shots: &Path) -> Result<(), String> {
+    let server = Sshd::start()?;
+    let scratch = Scratch::new();
+    let vault_password = random_hex();
+    let (port, password) = (server.port, server.password.clone());
+    let target = format!("alice@127.0.0.1:{port}");
+    let shot = |name: &str| shot_step(shots, name);
+
+    let script = [
+        format!("await:setup,vault-create:{vault_password},await:unlocked,await:panes:1"),
+        format!("quick:{target},await:host-key,hostkey:always"),
+        // Nothing saved, so nothing to log in with: the password is asked for.
+        format!("await:prompt,answer:{password},await:live,await:text:$ "),
+        format!("await:panes:2,await:no-tree:{target}"),
+        "run:echo quick-$((6*7)),await:text:quick-42,wait,wait".to_owned(),
+        shot("quick-connected.ppm"),
+        // Again from the same draft, and its key is known now: only the password is asked.
+        "disconnect,await:closed,reconnect".to_owned(),
+        format!("await:prompt,answer:{password},await:live,await:text:$ "),
+        format!("await:no-tree:{target}"),
+    ]
+    .join(",");
+    let report = app_run(bench_target, &scratch, "device", &script)?;
+    report_paths("quick connect", &report);
+
+    // The quick tab is not reopened: only the local shell is. Then saved from the pane's menu, it
+    // is in the tree, and still the one pane, connected.
+    let script = [
+        format!("await:locked,vault-unlock:{vault_password},await:unlocked,await:panes:1"),
+        "wait,wait,wait,wait,await:panes:1".to_owned(),
+        format!("quick:{target},await:prompt,answer:{password},await:live,await:text:$ "),
+        "await:panes:2,bar:0,wait,press-right,wait,release-right,await:menu".to_owned(),
+        "await:menu-offers:Save connection,menu-row:Save connection,wait,press,wait,release"
+            .to_owned(),
+        "await:dialog,wait,wait".to_owned(),
+        shot("quick-save.ppm"),
+        "rename:quick-box,await:tree:quick-box,wait,wait,await:panes:2,await:live".to_owned(),
+        "run:echo still-$((6*7)),await:text:still-42".to_owned(),
+    ]
+    .join(",");
+    let report = app_run(bench_target, &scratch, "device", &script)?;
+    report_paths("quick connect saved", &report);
+
+    // Saved, it is reopened like any other.
+    let script = [
+        format!("await:locked,vault-unlock:{vault_password},await:unlocked"),
+        "await:tree:quick-box,await:panes:2".to_owned(),
+    ]
+    .join(",");
+    let report = app_run(bench_target, &scratch, "device", &script)?;
+    report_paths("quick connect reopened", &report);
+    Ok(())
+}
+
 /// Closing the last tab, however it happens: the application stays, offering a new one.
 pub fn last_tab(bench_target: &Path, shots: &Path) -> Result<(), String> {
     let shot = |name: &str| shot_step(shots, name);

@@ -293,6 +293,8 @@ pub struct NewConnectionState {
     ports_asked: bool,
     /// Showing the RDP form's advanced page.
     advanced: bool,
+    /// Saving what is already connected: saving connects nothing more.
+    save_only: bool,
 }
 
 impl NewConnectionState {
@@ -313,6 +315,12 @@ impl NewConnectionState {
     /// Show the dialog at the form, filled in with `draft`.
     pub fn open_draft(&mut self, draft: ConnectionDraft) {
         *self = Self { open: true, draft: Some(Box::new(draft)), ..Self::default() };
+    }
+
+    /// Show the form filled in from `draft`, to save a connection that is already connected.
+    pub fn open_to_save(&mut self, draft: ConnectionDraft) {
+        *self =
+            Self { open: true, draft: Some(Box::new(draft)), save_only: true, ..Self::default() };
     }
 
     /// Whether it is showing.
@@ -639,8 +647,8 @@ fn form_step(
     let mut action = None;
     let draft = state.draft.as_deref_mut()?;
     let protocol = draft.protocol;
-    let editing = draft.editing.is_some();
-    let verb = if editing { "Edit" } else { "New" };
+    let editing = draft.editing.is_some() || state.save_only;
+    let verb = if draft.editing.is_some() { "Edit" } else { "New" };
     let title = format!("{verb} {} connection", protocol.label());
     let advanced = state.advanced && protocol == Protocol::Rdp;
     let mut leave_advanced = false;

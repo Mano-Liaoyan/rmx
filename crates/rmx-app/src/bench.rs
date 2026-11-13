@@ -16,7 +16,7 @@
 //! `dup:<label>`, `del:<label>`, `confirm`, `hostkey:always|once|reject`, `run:<shell line>`,
 //! `resize:<width>x<height>`, `disconnect`, `reconnect`, `cancel`, `theme:<light|dark>`,
 //! `conn-key:<name>|<host>|<port>|<user>|<key file>`, `answer:<text>`, `edit:<label>`,
-//! `rename:<name>`, `menu:<label>`, `discard`,
+//! `rename:<name>`, `menu:<label>`, `discard`, `quick:<user@host:port>` to quick connect,
 //! `sync-set:<kind>|<host>|<port>|<user>|<secret>|<path>`, `sync-now`,
 //! `join:<password>|<kind>|<host>|<port>|<user>|<secret>|<path>`,
 //! `join-plain:<kind>|<host>|<port>|<user>|<secret>|<path>`, `import-ssh`, `settings`.
@@ -994,6 +994,9 @@ fn parse_interface_step(step: &str) -> Option<Step> {
     }
     if let Some(name) = step.strip_prefix("rename:") {
         return Some(Step::Rename(name.into()));
+    }
+    if let Some(text) = step.strip_prefix("quick:") {
+        return Some(Step::Ui("quick-connect", UiAction::QuickConnect(text.into())));
     }
     if let Some(label) = step.strip_prefix("menu:") {
         return Some(Step::Menu(label.into()));

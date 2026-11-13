@@ -143,6 +143,14 @@ impl At<'_> {
             Link::Local => (),
         }
         items.push(menu_item(icons::COPY, "Duplicate session", UiAction::PaneDuplicate(id), false));
+        if found.remote.as_ref().is_some_and(|remote| remote.node().is_none()) {
+            items.push(menu_item(
+                icons::PLUS,
+                "Save connection",
+                UiAction::PaneSaveConnection(id),
+                false,
+            ));
+        }
     }
 
     /// Splitting and zooming `pane`.
