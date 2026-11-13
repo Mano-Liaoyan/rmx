@@ -54,6 +54,11 @@
 //! its button does, and `shortcut:<letter>` is that letter with Ctrl+Shift, unless a field or
 //! something floating has the keyboard.
 //!
+//! Closing: `window-close` is the window's own close button and `os-close` the system asking the
+//! window to close, as Alt+F4 does. `await:asking:<text>` holds until the dialog showing says
+//! that, `dont-ask` ticks its "Don't ask again", and `await:settings` holds until the settings
+//! dialog is open, where `confirm-close:<on|off>` sets the question before closing and saves.
+//!
 //! `RMX_BENCH_VAULT=off` puts the panes straight up, to measure them without the vault.
 //!
 //! `RMX_BENCH_SIZE` is the window size as `WIDTHxHEIGHT`. Frames before `RMX_BENCH_WARMUP` do not
@@ -377,6 +382,10 @@ pub enum Step {
     CloseTab(usize),
     /// Put the pointer on the tab at this index of the strip.
     TabPoint(usize),
+    /// Tick the tick box of the dialog showing.
+    DontAsk,
+    /// In the open settings dialog, set whether closing asks before ending sessions, and save.
+    ConfirmClose(bool),
 }
 
 impl Step {
@@ -480,6 +489,10 @@ pub enum Condition {
     Notice(String),
     /// The broadcast group has so many panes.
     Broadcast(usize),
+    /// The dialog showing says this, in its title or text.
+    Asking(String),
+    /// The settings dialog is open.
+    Settings,
 }
 
 fn file_side(text: &str) -> Option<FileSide> {
@@ -760,6 +773,9 @@ fn parse_condition(text: &str) -> Option<Condition> {
     if let Some(found) = text.strip_prefix("notice:") {
         return Some(Condition::Notice(found.into()));
     }
+    if let Some(found) = text.strip_prefix("asking:") {
+        return Some(Condition::Asking(found.into()));
+    }
     Some(match text {
         "unencrypted" => Condition::Unencrypted,
         "setup" => Condition::Setup,
@@ -777,6 +793,7 @@ fn parse_condition(text: &str) -> Option<Condition> {
         "remote-size" => Condition::RemoteSize,
         "display" => Condition::Display,
         "display-fits" => Condition::DisplayFits,
+        "settings" => Condition::Settings,
         _ => return None,
     })
 }
@@ -966,6 +983,7 @@ fn parse_interface_step(step: &str) -> Option<Step> {
         let fields: Vec<&str> = text.split('|').collect();
         let draft = SettingsDraft {
             theme: ThemeMode::Dark,
+            confirm_close: true,
             auto_lock_minutes: "15".into(),
             sync: sync_draft(&fields)?,
             sync_on_save: true,
@@ -1034,6 +1052,11 @@ fn parse_interface_step(step: &str) -> Option<Step> {
         "import-ssh" => Step::Ui("import-ssh", UiAction::ImportSshConfig),
         "settings" => Step::Ui("settings", UiAction::OpenSettings),
         "confirm" => Step::Ui("confirm", UiAction::PromptSubmit(Vec::new())),
+        "dont-ask" => Step::DontAsk,
+        "confirm-close:on" => Step::ConfirmClose(true),
+        "confirm-close:off" => Step::ConfirmClose(false),
+        "window-close" => Step::Ui("window-close", UiAction::WindowClose),
+        "os-close" => Step::Input(WindowEvent::CloseRequested),
         "disconnect" => Step::Link(LinkStep::Disconnect),
         "reconnect" => Step::Link(LinkStep::Reconnect),
         "cancel" => Step::Link(LinkStep::Cancel),

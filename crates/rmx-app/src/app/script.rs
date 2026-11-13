@@ -241,6 +241,12 @@ impl At<'_> {
                 .and_then(|pane| pane.notice.as_deref())
                 .is_some_and(|notice| notice.contains(found.as_str())),
             C::Broadcast(count) => crate::broadcast::group_size(&self.core.panes) == *count,
+            C::Asking(found) => matches!(
+                &self.core.ui.asking,
+                Some(Asking::Fields(state))
+                    if state.title.contains(found.as_str()) || state.detail.contains(found.as_str())
+            ),
+            C::Settings => self.win.shell.settings.is_open(),
         }
     }
 }
@@ -544,6 +550,22 @@ impl App {
                 }
             },
             Some(Step::Window(index)) => self.script_window = index,
+            Some(Step::DontAsk) => {
+                if let Some(Asking::Fields(state)) = &mut at.core.ui.asking {
+                    state.checked = true;
+                    at.core.broadcast = true;
+                }
+            },
+            Some(Step::ConfirmClose(confirm)) => {
+                if let Some(draft) = at.win.shell.settings.draft_mut() {
+                    draft.confirm_close = confirm;
+                    let draft = Box::new(draft.clone());
+                    at.win.shell.settings.close();
+                    at.ui_action(UiAction::SettingsSave(draft));
+                    at.win.chrome.invalidate();
+                    at.request_frame();
+                }
+            },
             Some(Step::Form(protocol)) => {
                 at.win.shell.dialog.open_form(protocol);
                 at.win.chrome.invalidate();

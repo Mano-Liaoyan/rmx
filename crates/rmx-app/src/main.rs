@@ -9,6 +9,7 @@ mod background;
 mod bench;
 mod broadcast;
 mod clipboard;
+mod closing;
 mod compare;
 mod connect;
 mod files;

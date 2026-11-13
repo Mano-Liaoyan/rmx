@@ -9,9 +9,11 @@ use rmx_ui::theme::{self, PANE_BAR_HEIGHT, STRIP_HEIGHT, TREE_ROW_HEIGHT};
 use rmx_ui::virtual_list::{self, window};
 use rmx_ui::widgets::tabs::{TAB_GAP, drop_index, preview_slot, slot_x, tab_width};
 use rmx_ui::widgets::{
-    ConnectionDraft, InheritedLogin, NewConnectionState, NodeKind, PaneBarView, PaneStatus,
-    QuickItem, QuickOpenState, Reveal, TabStripState, TabView, TitleBarView, TreeModel, TreeNode,
-    TreeState, connection_tree, new_connection_dialog, pane_bar, quick_open, tab_strip, title_bar,
+    ConnectionDraft, InheritedLogin, NewConnectionState, NodeKind, PaneBarView, PaneStatus, Panels,
+    PromptState, QuickItem, QuickOpenState, Reveal, SettingsDraft, SettingsState, SettingsView,
+    SyncDraft, TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState,
+    connection_tree, new_connection_dialog, pane_bar, prompt_dialog, quick_open, settings_dialog,
+    tab_strip, title_bar,
 };
 use rmx_ui::{NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction};
 
@@ -672,4 +674,133 @@ fn closing_the_palette_gives_the_keyboard_back() {
     harness.frame(Vec::new(), |_| quick_open(&ctx, &mut state, &items));
     harness.frame(Vec::new(), |_| quick_open(&ctx, &mut state, &items));
     assert!(!ctx.egui_wants_keyboard_input());
+}
+
+/// The middle of the first painted text that reads `needle`.
+fn text_center(harness: &mut Harness, mut draw: impl FnMut(&mut Ui), needle: &str) -> Option<Pos2> {
+    fn walk(shape: &egui::Shape, needle: &str, out: &mut Option<Pos2>) {
+        match shape {
+            egui::Shape::Text(text) if out.is_none() && text.galley.text() == needle => {
+                *out = Some(text.pos + text.galley.rect.center().to_vec2());
+            },
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, needle, out)),
+            _ => (),
+        }
+    }
+    harness.time += 1. / 60.;
+    let raw =
+        RawInput { screen_rect: Some(SCREEN), time: Some(harness.time), ..RawInput::default() };
+    let output = harness.ctx.run_ui(raw, |ui| draw(ui));
+    let mut found = None;
+    for clipped in &output.shapes {
+        walk(&clipped.shape, needle, &mut found);
+    }
+    output.drop_without_applying_deltas();
+    found
+}
+
+#[test]
+fn a_confirmation_can_carry_a_tick_box_that_the_answer_keeps() {
+    let mut harness = Harness::new();
+    let mut state = PromptState::new("Disconnect 1 live session?", "web", Vec::new());
+    state.check = Some("Don't ask again".to_owned());
+    // A modal sizes itself on its first frames.
+    for _ in 0..3 {
+        harness.frame(vec![], |ui| drop(prompt_dialog(ui.ctx(), &mut state)));
+    }
+    let texts = painted_text(&mut harness, |ui| {
+        prompt_dialog(ui.ctx(), &mut state);
+    });
+    assert!(texts.iter().any(|text| text == "Don't ask again"), "{texts:?}");
+    assert!(!state.checked);
+
+    let at = text_center(
+        &mut harness,
+        |ui| drop(prompt_dialog(ui.ctx(), &mut state)),
+        "Don't ask again",
+    )
+    .expect("the tick box's label is painted");
+    let action = harness.click(at, |ui| prompt_dialog(ui.ctx(), &mut state));
+    assert!(action.is_none(), "ticking the box answers nothing: {action:?}");
+    assert!(state.checked);
+
+    let submit =
+        text_center(&mut harness, |ui| drop(prompt_dialog(ui.ctx(), &mut state)), "Continue")
+            .expect("the submit button is painted");
+    let action = harness.click(submit, |ui| prompt_dialog(ui.ctx(), &mut state));
+    assert!(matches!(action, Some(UiAction::PromptSubmit(_))), "{action:?}");
+    assert!(state.checked, "the app reads the box once the answer is in");
+}
+
+#[test]
+fn a_prompt_without_a_tick_box_paints_none() {
+    let mut harness = Harness::new();
+    let mut state = PromptState::new("Delete web?", "", Vec::new());
+    for _ in 0..3 {
+        harness.frame(vec![], |ui| drop(prompt_dialog(ui.ctx(), &mut state)));
+    }
+    let texts = painted_text(&mut harness, |ui| {
+        prompt_dialog(ui.ctx(), &mut state);
+    });
+    assert!(!texts.iter().any(|text| text == "Don't ask again"), "{texts:?}");
+}
+
+/// Every painted text and the middle of where it is.
+fn placed_texts(harness: &mut Harness, mut draw: impl FnMut(&mut Ui)) -> Vec<(String, Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, Pos2)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_owned(),
+                text.pos + text.galley.rect.center().to_vec2(),
+            )),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            _ => (),
+        }
+    }
+    harness.time += 1. / 60.;
+    let raw =
+        RawInput { screen_rect: Some(SCREEN), time: Some(harness.time), ..RawInput::default() };
+    let output = harness.ctx.run_ui(raw, |ui| draw(ui));
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    output.drop_without_applying_deltas();
+    out
+}
+
+#[test]
+fn settings_turn_the_question_before_closing_off_and_on() {
+    let mut harness = Harness::new();
+    let mut state = SettingsState::default();
+    state.open(SettingsDraft {
+        theme: ThemeMode::Dark,
+        confirm_close: true,
+        auto_lock_minutes: "15".to_owned(),
+        sync: SyncDraft::default(),
+        sync_on_save: true,
+        sync_interval_minutes: String::new(),
+    });
+    let view = SettingsView { vault: "vault.rmxdb", syncing: false, unencrypted: false };
+    let mut panels = Panels::default();
+    let mut draw = |ui: &mut Ui| settings_dialog(ui.ctx(), &mut state, &view, &mut panels);
+    for _ in 0..3 {
+        harness.frame(vec![], |ui| drop(draw(ui)));
+    }
+    let texts = placed_texts(&mut harness, |ui| drop(draw(ui)));
+    let (_, label) =
+        texts.iter().find(|(text, _)| text == "Confirm close").expect("the setting is shown");
+    // Its own Off, on the same line.
+    let (_, off) = texts
+        .iter()
+        .filter(|(text, at)| text == "Off" && (at.y - label.y).abs() < 4.)
+        .min_by(|a, b| (a.1.x - label.x).total_cmp(&(b.1.x - label.x)))
+        .expect("the setting has an Off");
+    let off = *off;
+    harness.click(off, &mut draw);
+    let texts = placed_texts(&mut harness, |ui| drop(draw(ui)));
+    let (_, save) = texts.iter().find(|(text, _)| text == "Save").expect("Save is shown");
+    let action = harness.click(*save, &mut draw);
+    let Some(UiAction::SettingsSave(draft)) = action else { panic!("{action:?}") };
+    assert!(!draft.confirm_close);
 }

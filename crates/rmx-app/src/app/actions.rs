@@ -43,19 +43,7 @@ impl At<'_> {
                 let maximized = !self.win.gfx.window.is_maximized();
                 self.win.gfx.window.set_maximized(maximized);
             },
-            UiAction::WindowClose => {
-                let key = self.win.key;
-                let here = self
-                    .core
-                    .panes
-                    .iter()
-                    .filter(|pane| pane.window == key)
-                    .map(|pane| pane.id)
-                    .collect();
-                if !self.ask_before_losing_edits(here, UiAction::WindowClose) {
-                    return false;
-                }
-            },
+            UiAction::WindowClose => self.close_asking(UiAction::WindowClose),
             UiAction::WindowDrag => {
                 if let Err(err) = self.win.gfx.window.drag_window() {
                     log::warn!("Could not move the window: {err}");
@@ -68,14 +56,7 @@ impl At<'_> {
                     self.perform(Action::SelectTab(index));
                 }
             },
-            UiAction::TabClose(TabId(id)) => {
-                if let Some(index) = self.win.workspace.tab_index(id) {
-                    let panes = self.win.workspace.tabs()[index].layout.panes().to_vec();
-                    if !self.ask_before_losing_edits(panes, UiAction::TabClose(TabId(id))) {
-                        self.close_tab(index);
-                    }
-                }
-            },
+            UiAction::TabClose(id) => self.close_asking(UiAction::TabClose(id)),
             UiAction::TabNew => self.perform(Action::NewTab),
             UiAction::TabReorder { id: TabId(id), to } => {
                 if let Some(from) = self.win.workspace.tab_index(id) {
@@ -396,13 +377,7 @@ impl At<'_> {
                 }
                 self.start_session(pane);
             },
-            UiAction::PaneClose(rmx_ui::PaneId(pane)) => {
-                if !self
-                    .ask_before_losing_edits(vec![pane], UiAction::PaneClose(rmx_ui::PaneId(pane)))
-                {
-                    self.close(pane);
-                }
-            },
+            UiAction::PaneClose(id) => self.close_asking(UiAction::PaneClose(id)),
             UiAction::PaneFocus(rmx_ui::PaneId(pane)) => self.focus_pane(pane),
             UiAction::PaneCtrlAltDel(rmx_ui::PaneId(pane)) => self.salute(pane),
             UiAction::PaneToggleScale(rmx_ui::PaneId(pane)) => self.toggle_scale(pane),
@@ -418,6 +393,7 @@ impl At<'_> {
             UiAction::OpenSettings => self.perform(Action::OpenSettings),
             UiAction::ToggleTheme => self.perform(Action::ToggleTheme),
             UiAction::SettingsSave(draft) => {
+                self.set_confirm_close(draft.confirm_close);
                 self.core.ops.push(Op::SetTheme(draft.theme));
                 self.core.vault.send(Request::SaveSettings(draft));
             },
