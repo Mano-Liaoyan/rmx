@@ -289,6 +289,13 @@ fn watch_forward(port: u16) -> Arc<AtomicBool> {
     flag
 }
 
+/// The session logs written under the data directory `data`.
+fn session_logs(data: &Path) -> Result<Vec<PathBuf>, String> {
+    let dir = data.join("logs");
+    let entries = fs::read_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    Ok(entries.filter_map(Result::ok).map(|entry| entry.path()).collect())
+}
+
 /// Whether `needle` occurs in the file at `path`.
 fn file_contains(path: &Path, needle: &str) -> bool {
     fs::read(path).is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle.as_bytes()))
@@ -1156,10 +1163,13 @@ pub fn terminals(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "escape,wait".to_owned(),
         format!("conn-as:Telnet|telly|127.0.0.1|{port}||||"),
         "await:live,wait,wait,wait".to_owned(),
+        // Logged from the pane's menu, on through a reconnect, into the one file.
+        "log-toggle,await:notice:Logging output to".to_owned(),
         "run:echo tel-$((6*7)),await:text:tel-42,wait,wait".to_owned(),
         shot("m8-telnet.ppm"),
         "disconnect,await:closed,reconnect,await:live,wait,wait".to_owned(),
         "run:echo back-$((6*7)),await:text:back-42".to_owned(),
+        "log-toggle,await:notice:Stopped logging,wait".to_owned(),
         format!("conn:gate|127.0.0.1|{}|alice|{}", gate.port, gate.password),
         "await:host-key,hostkey:always,await:live".to_owned(),
         "conn-as:Telnet|telly-tunnelled|127.0.0.1|23|||gate|".to_owned(),
@@ -1170,7 +1180,12 @@ pub fn terminals(bench_target: &Path, shots: &Path) -> Result<(), String> {
     .join(",");
     let report = app_run(bench_target, &scratch, "telnet", &script)?;
     report_paths("telnet", &report);
-    println!("ok   telnet: a shell, reconnected, and through an ssh tunnel");
+    let logs = session_logs(&scratch.path("telnet"))?;
+    let [log] = logs.as_slice() else { return Err(format!("telnet: logs {logs:?}")) };
+    if !file_contains(log, "tel-42") || !file_contains(log, "back-42") {
+        return Err(format!("telnet: {} has not both sessions in it", log.display()));
+    }
+    println!("ok   telnet: a shell, reconnected, logged, and through an ssh tunnel");
 
     let scratch = Scratch::new();
     let path = scratch.path("ttyTEST0");
@@ -1179,7 +1194,7 @@ pub fn terminals(bench_target: &Path, shots: &Path) -> Result<(), String> {
         "await:setup".to_owned(),
         format!("vault-create:{vault_password}"),
         "await:unlocked".to_owned(),
-        format!("conn-as:Serial|console|{}|115200||||", path.display()),
+        format!("conn-as:Serial|console|{}|115200|||log", path.display()),
         "await:live,wait,wait".to_owned(),
         "run:echo ser-$((6*7)),await:text:ser-42,wait,wait".to_owned(),
         shot("m8-serial.ppm"),
@@ -1187,6 +1202,10 @@ pub fn terminals(bench_target: &Path, shots: &Path) -> Result<(), String> {
     .join(",");
     let report = app_run(bench_target, &scratch, "serial", &script)?;
     report_paths("serial", &report);
+    let logs = session_logs(&scratch.path("serial"))?;
+    if !logs.iter().any(|log| file_contains(log, "ser-42")) {
+        return Err(format!("serial: the connection's log is not in {logs:?}"));
+    }
     drop(line);
 
     // The port has gone: reopened, the pane waits. Asked for, it says why.

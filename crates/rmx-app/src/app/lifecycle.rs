@@ -263,6 +263,7 @@ impl At<'_> {
                 pane.link = Link::Live;
                 pane.dirty = true;
                 self.retire(old);
+                self.log_new_terminal(id);
                 self.sync_focus(Instant::now());
             },
             LinkEvent::Missing(why) => {
@@ -285,6 +286,11 @@ impl At<'_> {
                 if let Some(pane) = self.pane_mut(id) {
                     pane.link = Link::Failed { reason };
                     pane.hang_up();
+                }
+            },
+            LinkEvent::Logging(choice) => {
+                if let Some(remote) = self.pane_mut(id).and_then(|pane| pane.remote.as_mut()) {
+                    remote.log = choice;
                 }
             },
             LinkEvent::Forwards(running, errors) => {

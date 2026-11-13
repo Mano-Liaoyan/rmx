@@ -3,7 +3,9 @@
 use rmx_render::SizeInfo;
 use rmx_terminal::{Terminal, Theme};
 use rmx_ui::egui;
-use rmx_ui::widgets::{PaneOverlay, PaneStatus, ScaleChoice, notice_rect, overlay_rect};
+use rmx_ui::widgets::{
+    PaneOverlay, PaneStatus, ScaleChoice, SessionLogging, notice_rect, overlay_rect,
+};
 use tokio::sync::oneshot;
 
 use rmx_layout::PaneId;
@@ -11,6 +13,7 @@ use rmx_layout::PaneId;
 use crate::connect::Goal;
 use crate::files::FilesPane;
 use crate::remote::Display;
+use crate::session_log::SessionLog;
 
 /// What fills a pane. Every kind of pane is one of these, and the layout, the workspace, focus and
 /// the bar treat them all the same. Whatever the kind, setting up its connection is [`Link`]'s
@@ -168,6 +171,8 @@ pub struct Remote {
     pub goal: Goal,
     /// Reopened from the last session: anything it has to ask leaves it awaiting the user.
     pub quiet: bool,
+    /// What of its terminal the connection says to log.
+    pub log: SessionLogging,
 }
 
 /// A pane, whatever it shows.
@@ -182,6 +187,8 @@ pub struct Pane {
     pub remote: Option<Remote>,
     /// Something to tell the user, until dismissed.
     pub notice: Option<String>,
+    /// The file its terminal is being logged to, carried over to the terminal of a reconnect.
+    pub log: Option<SessionLog>,
 }
 
 impl Pane {
@@ -196,6 +203,7 @@ impl Pane {
             link: Link::Local,
             remote: None,
             notice: None,
+            log: None,
         }
     }
 
@@ -213,6 +221,7 @@ impl Pane {
                 forwards: 0,
                 goal,
                 quiet: false,
+                log: SessionLogging::Off,
             }),
             ..Self::local(id)
         }

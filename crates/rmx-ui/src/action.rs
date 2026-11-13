@@ -381,6 +381,8 @@ pub enum UiAction {
     PaneToWindow(PaneId),
     PaneCopy(PaneId),
     PanePaste(PaneId),
+    /// Start writing the pane's terminal output to a log file, or stop.
+    PaneLog(PaneId),
     PaneMenu {
         id: PaneId,
         pos: Pos2,

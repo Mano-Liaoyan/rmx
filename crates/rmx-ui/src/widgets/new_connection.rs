@@ -76,6 +76,17 @@ pub enum VncColors {
     Bits8,
 }
 
+/// What of a terminal session is written to a log file as it runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionLogging {
+    #[default]
+    Off,
+    /// What the session shows.
+    Output,
+    /// What it shows, and what is typed into it, passwords included.
+    Everything,
+}
+
 /// A connection as entered in the dialog.
 #[derive(Clone, PartialEq)]
 pub struct ConnectionDraft {
@@ -123,6 +134,8 @@ pub struct ConnectionDraft {
     pub vnc_colors: VncColors,
     /// FTP: whether to upgrade with `AUTH TLS`.
     pub ftps: bool,
+    /// Terminals: what of each session to write to a log file.
+    pub log: SessionLogging,
 }
 
 impl fmt::Debug for ConnectionDraft {
@@ -167,6 +180,7 @@ impl ConnectionDraft {
             rustdesk_key: String::new(),
             vnc_colors: VncColors::default(),
             ftps: false,
+            log: SessionLogging::Off,
         }
     }
 
@@ -469,6 +483,28 @@ fn field(
     });
 }
 
+/// Whether a terminal's sessions are logged, and what that means for the secrets in them.
+fn logging_options(ui: &mut Ui, draft: &mut ConnectionDraft) {
+    section(ui);
+    row(ui, "Log to file", |ui| {
+        let mut selected = draft.log as usize;
+        let options = ["Off", "Output", "Output and typing"];
+        if segmented(ui, Id::unique("cd-log"), &options, &mut selected).changed() {
+            draft.log =
+                [SessionLogging::Off, SessionLogging::Output, SessionLogging::Everything][selected];
+        }
+    });
+    match draft.log {
+        SessionLogging::Off => (),
+        SessionLogging::Output => {
+            warning(ui, "Logs are plain files: secrets shown on screen end up in them.");
+        },
+        SessionLogging::Everything => {
+            warning(ui, "Logs are plain files: typed passwords end up in them too.");
+        },
+    }
+}
+
 /// How a remote desktop fits its pane: the rows VNC and RDP share.
 /// The scale, and whether the remote size follows the pane where the protocol can resize.
 fn display_options(ui: &mut Ui, draft: &mut ConnectionDraft, resizable: bool) {
@@ -606,10 +642,14 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         },
                         AuthKind::Agent => {},
                     }
+                    if protocol == Protocol::Ssh {
+                        logging_options(ui, draft);
+                    }
                 },
                 Protocol::Telnet => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
                     warning(ui, "Telnet is not encrypted: anyone on the network can read what is typed.");
+                    logging_options(ui, draft);
                 },
                 Protocol::Ftp => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -728,7 +768,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         true,
                     );
                 },
-                Protocol::Serial => {},
+                Protocol::Serial => logging_options(ui, draft),
             }
         });
     }

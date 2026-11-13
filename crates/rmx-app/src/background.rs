@@ -128,6 +128,11 @@ impl Paths {
     }
 }
 
+/// Where session logs go: `logs` in the data directory.
+pub fn logs_dir() -> PathBuf {
+    Paths::locate().state.with_file_name("logs")
+}
+
 /// The plaintext file of what belongs to this device only.
 pub struct AppState(LocalState);
 

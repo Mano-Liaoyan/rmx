@@ -71,6 +71,11 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             },
             AppEvent::Vault(event) => running.vault_event(event),
+            AppEvent::LogFailed(id, path, why) => {
+                if let Some(mut at) = running.at_pane(id) {
+                    at.log_failed(id, &path, why);
+                }
+            },
             AppEvent::SerialPorts(ports) => {
                 for win in &mut running.windows {
                     win.shell.dialog.set_ports(ports.clone());
@@ -475,5 +480,6 @@ fn app_event_name(event: &AppEvent) -> &'static str {
         AppEvent::Prompt(_) => "prompt",
         AppEvent::SerialPorts(_) => "serial-ports",
         AppEvent::Vault(_) => "vault",
+        AppEvent::LogFailed(..) => "log-failed",
     }
 }

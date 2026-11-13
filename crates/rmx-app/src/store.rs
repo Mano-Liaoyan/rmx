@@ -14,8 +14,8 @@ use rmx_serial::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use rmx_ssh::{AuthMethod, HostConfig, SecretString};
 use rmx_ui::widgets::SessionDot;
 use rmx_ui::widgets::{
-    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SettingsDraft,
-    SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
+    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SessionLogging,
+    SettingsDraft, SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
 };
 use rmx_ui::{NodeId, Protocol, ThemeMode};
 use rmx_vault::{
@@ -58,6 +58,8 @@ const OPTION_STOP_BITS: &str = "stop_bits";
 const OPTION_FLOW: &str = "flow";
 const OPTION_RENDEZVOUS: &str = "rendezvous";
 const OPTION_SERVER_KEY: &str = "server_key";
+/// Terminals: `output`, or `all` for typing too. Absent, as in older connections, is off.
+const OPTION_LOG: &str = "log";
 
 /// Something for the vault's thread to do.
 pub enum Request {
@@ -1049,6 +1051,7 @@ impl Actor {
             rustdesk_key: settings.get(OPTION_SERVER_KEY).cloned(),
             ftps: settings.get(OPTION_FTPS).is_some_and(|value| value == "1"),
             serial: serial_config(&settings),
+            log: session_logging(&settings),
         })
     }
 
@@ -1151,6 +1154,7 @@ impl Actor {
             OPTION_FLOW,
             OPTION_RENDEZVOUS,
             OPTION_SERVER_KEY,
+            OPTION_LOG,
         ] {
             settings.remove(key);
         }
@@ -1205,6 +1209,11 @@ impl Actor {
             settings.insert(OPTION_PARITY.to_owned(), draft.parity.to_string());
             settings.insert(OPTION_STOP_BITS.to_owned(), draft.stop_bits.to_string());
             settings.insert(OPTION_FLOW.to_owned(), draft.flow_control.to_string());
+        }
+        if matches!(draft.protocol, Protocol::Ssh | Protocol::Telnet | Protocol::Serial)
+            && let Some(log) = session_logging_option(draft.log)
+        {
+            settings.insert(OPTION_LOG.to_owned(), log.to_owned());
         }
         connection.options = (!settings.is_empty()).then(|| options::encode(&settings));
 
@@ -1295,6 +1304,7 @@ impl Actor {
         draft.domain = settings.get(OPTION_DOMAIN).cloned().unwrap_or_default();
         draft.rustdesk_server = settings.get(OPTION_RENDEZVOUS).cloned().unwrap_or_default();
         draft.rustdesk_key = settings.get(OPTION_SERVER_KEY).cloned().unwrap_or_default();
+        draft.log = session_logging(&settings);
         Ok(draft)
     }
 
@@ -1621,6 +1631,23 @@ fn vnc_colors_option(colors: VncColors) -> Option<&'static str> {
 }
 
 /// How much picture an RDP connection trades for bandwidth, from what the form saved.
+fn session_logging_option(choice: SessionLogging) -> Option<&'static str> {
+    match choice {
+        SessionLogging::Off => None,
+        SessionLogging::Output => Some("output"),
+        SessionLogging::Everything => Some("all"),
+    }
+}
+
+/// What a connection logs. Anything not understood, as from a later version, logs nothing.
+fn session_logging(settings: &BTreeMap<String, String>) -> SessionLogging {
+    match settings.get(OPTION_LOG).map(String::as_str) {
+        Some("output") => SessionLogging::Output,
+        Some("all") => SessionLogging::Everything,
+        _ => SessionLogging::Off,
+    }
+}
+
 fn rdp_quality(settings: &BTreeMap<String, String>) -> RdpQuality {
     match settings.get(OPTION_QUALITY).map(String::as_str) {
         Some("best") => RdpQuality::Best,
@@ -2147,6 +2174,51 @@ mod tests {
         // Connections saved before there was a choice keep what they had.
         assert_eq!(rdp_quality(&BTreeMap::new()), RdpQuality::Balanced);
         assert_eq!(vnc_colors(&BTreeMap::new()), VncColors::Full);
+    }
+
+    #[test]
+    fn logging_reads_back_as_saved_and_is_off_for_older_connections() {
+        for choice in [SessionLogging::Off, SessionLogging::Output, SessionLogging::Everything] {
+            let mut settings = BTreeMap::new();
+            if let Some(value) = session_logging_option(choice) {
+                settings.insert(OPTION_LOG.to_owned(), value.to_owned());
+            }
+            assert_eq!(session_logging(&settings), choice);
+        }
+        assert_eq!(session_logging(&BTreeMap::new()), SessionLogging::Off);
+        let unknown = BTreeMap::from([(OPTION_LOG.to_owned(), "later".to_owned())]);
+        assert_eq!(session_logging(&unknown), SessionLogging::Off);
+    }
+
+    #[test]
+    fn a_logging_choice_syncs_and_keeps_the_other_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut here = Vault::create_plain(&dir.path().join("here.rmxdb")).unwrap();
+        // A connection as saved before logging could be chosen.
+        let mut row = connection("web", None);
+        row.options = Some(r#"{"auth":"agent"}"#.to_owned());
+        here.put(&row).unwrap();
+        let there_path = dir.path().join("there.rmxdb");
+        here.snapshot(&there_path).unwrap();
+        let mut there = Vault::open_plain(&there_path).unwrap();
+        let read = |vault: &mut Vault| {
+            let row = vault.get::<Connection>(row.id).unwrap().unwrap();
+            row.options.as_deref().map(options::parse).unwrap_or_default()
+        };
+        assert_eq!(session_logging(&read(&mut there)), SessionLogging::Off);
+
+        let mut settings = read(&mut there);
+        settings.insert(OPTION_LOG.to_owned(), "output".to_owned());
+        let mut edited = there.get::<Connection>(row.id).unwrap().unwrap();
+        edited.options = Some(options::encode(&settings));
+        there.put(&edited).unwrap();
+        let snapshot = dir.path().join("there-snapshot.rmxdb");
+        there.snapshot(&snapshot).unwrap();
+        here.merge_snapshot(&snapshot).unwrap();
+
+        let merged = read(&mut here);
+        assert_eq!(session_logging(&merged), SessionLogging::Output);
+        assert_eq!(merged.get("auth").map(String::as_str), Some("agent"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod pacer;
 mod pane;
 mod rdp_options;
 mod remote;
+mod session_log;
 mod sftp_files;
 mod shell;
 mod store;

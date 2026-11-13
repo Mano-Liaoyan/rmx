@@ -21,7 +21,8 @@
 //! `join-plain:<kind>|<host>|<port>|<user>|<secret>|<path>`, `import-ssh`, `settings`.
 //!
 //! `conn-as:<protocol>|<name>|<host>|<port>|<user>|<secret>|<jump>|<options>` saves any kind of
-//! connection, where options are `;` separated from `native`, `keep`, `tls`, `nla` and `ftps`.
+//! connection, where options are `;` separated from `native`, `keep`, `tls`, `nla`, `ftps`, and
+//! `log` or `log-all` to log its sessions. `log-toggle` starts or stops logging the focused pane.
 //! `open-split:<right|down>:<label>` opens one beside the focused pane. For remote desktops:
 //! `keys:<text>` (`~` is Enter), `center`, `clip-set:<text>`, `clip-offer`, `salute` and
 //! `scale-toggle`. For file panes, with `L` or `R` for the column: `files-goto:<side>|<path>`,
@@ -347,6 +348,8 @@ pub enum Step {
     OfferClipboard,
     Salute,
     ToggleScale,
+    /// Start or stop logging the focused pane, as its menu does.
+    ToggleLog,
     OpenFiles,
     FilesGoto(FileSide, String),
     FilesSelect(FileSide, String),
@@ -883,6 +886,8 @@ fn parse_interface_step(step: &str) -> Option<Step> {
                 "16-bit" => draft.vnc_colors = rmx_ui::widgets::VncColors::Bits16,
                 "8-bit" => draft.vnc_colors = rmx_ui::widgets::VncColors::Bits8,
                 "ftps" => draft.ftps = true,
+                "log" => draft.log = rmx_ui::widgets::SessionLogging::Output,
+                "log-all" => draft.log = rmx_ui::widgets::SessionLogging::Everything,
                 "" => (),
                 _ => return None,
             }
@@ -1024,6 +1029,7 @@ fn parse_interface_step(step: &str) -> Option<Step> {
         "clip-offer" => Step::OfferClipboard,
         "salute" => Step::Salute,
         "scale-toggle" => Step::ToggleScale,
+        "log-toggle" => Step::ToggleLog,
         "open-files" => Step::OpenFiles,
         _ => return None,
     })
