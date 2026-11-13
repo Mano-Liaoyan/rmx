@@ -24,6 +24,7 @@ use tokio::runtime::Handle;
 use crate::content::{RenderableContent, RenderableCursor};
 use crate::driver::{self, Channel, Limits, Parser, Remote};
 use crate::mouse::MouseState;
+use crate::tap::{Direction, Streams, Tap, TappedPty, Taps};
 use crate::theme::Theme;
 use crate::transport::{
     CloseReason, SessionEvent, TransportReader, TransportWriter, WorkingDirectory,
@@ -170,6 +171,13 @@ struct Pending {
 
 type SharedTerm = FairMutex<Term<Listener>>;
 
+/// What every terminal has before its program is attached.
+struct Core {
+    shared: Arc<Shared>,
+    term: Arc<SharedTerm>,
+    taps: Arc<Taps>,
+}
+
 /// What carries input and sizes to the program in a terminal.
 #[derive(Clone)]
 enum Control {
@@ -185,6 +193,15 @@ impl Control {
                 let _ = sender.send(Msg::Shutdown);
             },
             Self::Remote(remote) => remote.channel.stop(),
+        }
+    }
+
+    /// Send `bytes`, which a tap has a copy of, to the program.
+    fn send(&self, bytes: Bytes) {
+        match self {
+            Self::Pty(sender) => Notifier(sender.clone()).notify(bytes.to_vec()),
+            Self::Remote(remote) if !bytes.is_empty() => remote.write(bytes),
+            Self::Remote(_) => (),
         }
     }
 }
@@ -231,6 +248,7 @@ pub struct Terminal {
     pub(crate) mouse: MouseState,
     /// Where a selection would start, once the pointer moves.
     pub(crate) anchor: Option<(SelectionType, Point<Line>, Side)>,
+    taps: Arc<Taps>,
 }
 
 impl Terminal {
@@ -242,7 +260,7 @@ impl Terminal {
         theme: Theme,
         sink: Arc<dyn Sink>,
     ) -> io::Result<Self> {
-        let (shared, listener, term) = Self::core(id, size, &sink);
+        let (core, listener) = Self::core(id, size, &sink);
 
         #[cfg(target_os = "linux")]
         let pty = crate::pty::spawn(shell, size.into(), id)?;
@@ -253,11 +271,12 @@ impl Terminal {
             tty::new(&options, size.into(), id)?
         };
 
-        let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
+        let pty = TappedPty::new(pty, core.taps.clone());
+        let event_loop = EventLoop::new(core.term.clone(), listener, pty, false, false)?;
         let control = Control::Pty(event_loop.channel());
         event_loop.spawn();
 
-        Self::assemble(id, size, theme, sink, shared, term, control)
+        Self::assemble(id, size, theme, sink, core, control)
     }
 
     /// Attach a terminal of `size` to a remote session on `reader` and `writer`, which already
@@ -279,26 +298,23 @@ impl Terminal {
         R: TransportReader,
         W: TransportWriter,
     {
-        let (shared, listener, term) = Self::core(id, size, &sink);
+        let (core, listener) = Self::core(id, size, &sink);
 
         let session_sink = sink.clone();
         let parser = Parser::new(
-            term.clone(),
+            core.term.clone(),
             listener,
             Arc::new(Channel::new(Limits::default())),
             Box::new(move |event| session_sink.session(id, event)),
         );
-        let control = Control::Remote(driver::start(reader, writer, runtime, parser, size.into())?);
+        let taps = core.taps.clone();
+        let remote = driver::start(reader, writer, runtime, parser, size.into(), taps)?;
 
-        Self::assemble(id, size, theme, sink, shared, term, control)
+        Self::assemble(id, size, theme, sink, core, Control::Remote(remote))
     }
 
     /// What every terminal starts from.
-    fn core(
-        id: u64,
-        size: SizeInfo,
-        sink: &Arc<dyn Sink>,
-    ) -> (Arc<Shared>, Listener, Arc<SharedTerm>) {
+    fn core(id: u64, size: SizeInfo, sink: &Arc<dyn Sink>) -> (Core, Listener) {
         let published =
             Published { snapshot: empty_snapshot(size), fresh: false, output: false, stop: false };
         let shared = Arc::new(Shared {
@@ -309,7 +325,9 @@ impl Terminal {
         let listener = Listener { id, sink: sink.clone(), shared: shared.clone() };
 
         let term = Term::new(term::Config::default(), &size, listener.clone());
-        (shared, listener, Arc::new(FairMutex::new(term)))
+        let core =
+            Core { shared, term: Arc::new(FairMutex::new(term)), taps: Arc::new(Taps::default()) };
+        (core, listener)
     }
 
     /// Start the snapshot thread for a terminal that has its program attached.
@@ -318,10 +336,10 @@ impl Terminal {
         size: SizeInfo,
         theme: Theme,
         sink: Arc<dyn Sink>,
-        shared: Arc<Shared>,
-        term: Arc<SharedTerm>,
+        core: Core,
         control: Control,
     ) -> io::Result<Self> {
+        let Core { shared, term, taps } = core;
         let applied = Arc::new(Mutex::new(size));
         let shared_theme = Arc::new(Mutex::new(theme));
         let (thread_shared, thread_term, thread_applied, thread_theme) =
@@ -343,7 +361,18 @@ impl Terminal {
             focused: Cell::new(None),
             mouse: MouseState::default(),
             anchor: None,
+            taps,
         })
+    }
+
+    /// Copies of the bytes on `streams` from now on, with room for `capacity` chunks waiting.
+    ///
+    /// Output is what the program sent, as the connection or the PTY delivered it, before it is
+    /// parsed. Input is what [`Self::write`] and [`Self::paste`] send: what was typed or pasted,
+    /// not the terminal's own answers to the program. Several taps can be attached at once, and
+    /// dropping one detaches it.
+    pub fn tap(&self, streams: Streams, capacity: usize) -> Tap {
+        self.taps.tap(streams, capacity)
     }
 
     pub fn size(&self) -> SizeInfo {
@@ -474,8 +503,22 @@ impl Terminal {
         *self.term.lock().mode()
     }
 
-    /// Send bytes to the program in the terminal.
+    /// Send bytes typed or pasted to the program in the terminal. Input taps get them.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
+        let bytes = bytes.into();
+        if !self.taps.input.is_attached() {
+            return self.control.notify(bytes);
+        }
+        let bytes = match bytes {
+            Cow::Borrowed(bytes) => Bytes::from_static(bytes),
+            Cow::Owned(bytes) => Bytes::from(bytes),
+        };
+        self.taps.input.send_with(Direction::Input, || bytes.clone());
+        self.control.send(bytes);
+    }
+
+    /// Send the program an answer to something it asked, which no input tap gets.
+    pub fn answer(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         self.control.notify(bytes);
     }
 
@@ -487,7 +530,7 @@ impl Terminal {
     /// Answer `event`, telling the application what is left for it to do.
     pub fn handle(&self, event: Event, theme: &Theme) -> Output {
         match event {
-            Event::PtyWrite(text) => self.write(text.into_bytes()),
+            Event::PtyWrite(text) => self.answer(text.into_bytes()),
             Event::ColorRequest(index, format) => {
                 let color = self.term.lock().colors()[index].map(Rgb);
                 let color = match color {
@@ -495,11 +538,11 @@ impl Terminal {
                     None if index == NamedColor::Cursor as usize => return Output::None,
                     None => theme[index],
                 };
-                self.write(format(color.0).into_bytes());
+                self.answer(format(color.0).into_bytes());
             },
             Event::TextAreaSizeRequest(format) => {
                 let size: WindowSize = self.size.into();
-                self.write(format(size).into_bytes());
+                self.answer(format(size).into_bytes());
             },
             Event::ClipboardStore(ty, text) => return Output::ClipboardStore(ty, text),
             Event::ClipboardLoad(ty, format) => return Output::ClipboardLoad(ty, format),

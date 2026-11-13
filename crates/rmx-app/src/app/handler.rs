@@ -99,7 +99,7 @@ impl ApplicationHandler<AppEvent> for App {
                     Output::ClipboardLoad(ty, format) => {
                         let text = format(&at.core.clipboard.load(ty));
                         if let Some(terminal) = at.pane(id).and_then(|p| p.content.terminal()) {
-                            terminal.write(text.into_bytes());
+                            terminal.answer(text.into_bytes());
                         }
                     },
                     Output::Bell | Output::None => (),

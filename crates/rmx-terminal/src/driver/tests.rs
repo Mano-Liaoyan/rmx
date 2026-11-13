@@ -11,6 +11,7 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc as tokio_mpsc;
 
 use super::*;
+use crate::tap::{Direction, Dropped, Streams, Tap};
 use crate::terminal::{Sink, Terminal};
 use crate::theme::Theme;
 
@@ -365,8 +366,15 @@ fn a_flood_keeps_reading_past_a_stalled_consumer() {
     let (term, channel, session) = (rig.term.clone(), rig.channel.clone(), rig.session.clone());
     let reads = Arc::new(AtomicU64::new(0));
     let reader = FloodReader { reads: reads.clone(), chunk: flood_chunk(CHUNK) };
-    let remote =
-        start(reader, Writes::default(), runtime.handle(), rig.parser, small_window()).unwrap();
+    let remote = start(
+        reader,
+        Writes::default(),
+        runtime.handle(),
+        rig.parser,
+        small_window(),
+        Arc::default(),
+    )
+    .unwrap();
 
     // The slow consumer holds the terminal, far longer than the parser is waited for.
     let held = term.lock();
@@ -416,9 +424,15 @@ fn a_slow_parser_loses_nothing_while_it_makes_progress() {
     let runtime = runtime();
     let rig = rig(80, 24, Limits { max_queued: MAX_QUEUED, stall: Duration::from_secs(30) });
     let (term, channel, session) = (rig.term.clone(), rig.channel.clone(), rig.session.clone());
-    let remote =
-        start(ScriptedReader(rx), Writes::default(), runtime.handle(), rig.parser, small_window())
-            .unwrap();
+    let remote = start(
+        ScriptedReader(rx),
+        Writes::default(),
+        runtime.handle(),
+        rig.parser,
+        small_window(),
+        Arc::default(),
+    )
+    .unwrap();
 
     // A consumer that keeps taking the lock, like the snapshot thread does: reading has to pause
     // for it, never to throw anything away.
@@ -702,4 +716,107 @@ fn a_shell_shaped_transport_reports_how_it_ended() {
         assert_eq!(terminal.close_reason(), Some(reason));
         assert_eq!(line_text(&terminal.term(), 0), "bye");
     }
+}
+
+/// Everything `tap` hands over in `direction`, until `expected` bytes have come.
+fn collect(tap: &mut Tap, direction: Direction, expected: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    wait_for("the tapped bytes", || {
+        while let Some(tapped) = tap.try_recv() {
+            if tapped.direction == direction {
+                bytes.extend_from_slice(&tapped.bytes);
+            }
+        }
+        bytes.len() >= expected
+    });
+    bytes
+}
+
+#[test]
+fn an_output_tap_gets_every_byte_in_order() {
+    let session = connect();
+    let mut tap = session.terminal.tap(Streams::OUTPUT, 4096);
+    let mut expected = Vec::new();
+    for line in 0..1000 {
+        let chunk = format!("line {line}\r\n");
+        expected.extend_from_slice(chunk.as_bytes());
+        session.send(chunk.as_bytes());
+    }
+
+    assert_eq!(collect(&mut tap, Direction::Output, expected.len()), expected);
+    assert_eq!(tap.dropped(), Dropped::default());
+}
+
+#[test]
+fn an_input_tap_gets_what_is_typed_and_pasted_but_not_answers() {
+    let session = connect();
+    let mut tap = session.terminal.tap(Streams::INPUT, 64);
+    session.terminal.write(&b"ls\r"[..]);
+    session.terminal.paste("echo hi\n");
+    session.send(b"\x1b[6n");
+
+    wait_for("the cursor report", || {
+        session.sink.events.lock().iter().any(|event| matches!(event, Event::PtyWrite(_)))
+    });
+    for event in std::mem::take(&mut *session.sink.events.lock()) {
+        session.terminal.handle(event, &Theme::dark());
+    }
+    wait_for("the answer to be sent", || session.writes.bytes.lock().ends_with(b"\x1b[1;1R"));
+
+    assert_eq!(collect(&mut tap, Direction::Input, 11), b"ls\recho hi\r");
+    assert_eq!(tap.try_recv(), None, "the answer was tapped as input");
+}
+
+#[test]
+fn a_full_tap_drops_and_counts_without_holding_up_the_session() {
+    let session = connect();
+    let mut tap = session.terminal.tap(Streams::OUTPUT, 2);
+    for line in 0..100 {
+        session.send(format!("{line:02}\r\n").as_bytes());
+    }
+
+    wait_for("the last line to be parsed", || line_text(&session.terminal.term(), 22) == "99");
+    assert_eq!(tap.dropped(), Dropped { chunks: 98, bytes: 98 * 4 });
+    assert_eq!(tap.try_recv().map(|tapped| tapped.bytes), Some(Bytes::from_static(b"00\r\n")));
+    assert_eq!(tap.try_recv().map(|tapped| tapped.bytes), Some(Bytes::from_static(b"01\r\n")));
+    assert_eq!(tap.try_recv(), None);
+}
+
+#[test]
+fn a_tap_ends_once_the_terminal_is_gone() {
+    let session = connect();
+    let mut tap = session.terminal.tap(Streams::BOTH, 16);
+    session.send(b"bye");
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        while let Some(tapped) = tap.blocking_recv() {
+            bytes.extend_from_slice(&tapped.bytes);
+        }
+        bytes
+    });
+    wait_for("the output to be parsed", || line_text(&session.terminal.term(), 0) == "bye");
+    drop(session);
+    assert_eq!(reader.join().unwrap(), b"bye");
+}
+
+#[test]
+fn a_local_shell_is_tapped_both_ways() {
+    let script = "read line; echo \"got $line\"; read wait";
+    let shell = ("sh".to_owned(), vec!["-c".to_owned(), script.to_owned()]);
+    let sink = Arc::new(SinkLog::default());
+    let terminal = Terminal::spawn(1, size(80, 24), Some(shell), Theme::dark(), sink).unwrap();
+    let mut tap = terminal.tap(Streams::BOTH, 256);
+    terminal.write(&b"tapped\r"[..]);
+
+    let (mut input, mut output) = (Vec::new(), String::new());
+    wait_for("the shell's answer", || {
+        while let Some(tapped) = tap.try_recv() {
+            match tapped.direction {
+                Direction::Input => input.extend_from_slice(&tapped.bytes),
+                Direction::Output => output.push_str(&String::from_utf8_lossy(&tapped.bytes)),
+            }
+        }
+        output.contains("got tapped")
+    });
+    assert_eq!(input, b"tapped\r");
 }

@@ -8,6 +8,7 @@ mod mouse;
 #[cfg(target_os = "linux")]
 mod pty;
 mod scan;
+mod tap;
 mod terminal;
 mod theme;
 mod transport;
@@ -16,6 +17,7 @@ pub use content::RenderableCursor;
 pub use cursor::{CursorRects, IntoRects};
 pub use keyboard::encode_key;
 pub use mouse::Wheel;
+pub use tap::{Direction, Dropped, Streams, Tap, Tapped};
 pub use terminal::{Output, Sink, Snapshot, Terminal};
 pub use theme::Theme;
 pub use transport::{
