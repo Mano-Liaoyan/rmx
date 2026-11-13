@@ -15,6 +15,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use crate::error::Result;
 use crate::hlc::Hlc;
 use crate::records::{TABLES, TableDef};
+use crate::schema::has_table;
 
 /// Most superseded versions kept per live row. Part of the merge function: all devices must agree.
 pub const HISTORY_LIMIT: u32 = 16;
@@ -29,7 +30,10 @@ pub(crate) fn merge_attached(conn: &mut Connection) -> Result<()> {
          WHERE excluded.hlc > hlc;",
     )?;
     for table in TABLES {
-        merge_table(&tx, table)?;
+        // A file from an older version may lack the table, which is then empty.
+        if has_table(&tx, "remote", table)? {
+            merge_table(&tx, table)?;
+        }
     }
     tx.commit()?;
     Ok(())
@@ -91,7 +95,8 @@ pub(crate) fn trim_history(tx: &Connection, table: &TableDef, row: Option<&str>)
     Ok(())
 }
 
-/// Hash of the logical content of `schema`: equal digests mean converged replicas.
+/// Hash of the logical content of `schema`: equal digests mean converged replicas. A table the
+/// file lacks hashes as an empty one, so an old file and a new one holding the same rows agree.
 pub(crate) fn digest(conn: &Connection, schema: &str) -> Result<String> {
     let mut ctx = digest::Context::new(&SHA256);
     let mut feed = |sql: &str, columns: usize| -> Result<()> {
@@ -108,6 +113,10 @@ pub(crate) fn digest(conn: &Connection, schema: &str) -> Result<String> {
         Ok(())
     };
     for table in TABLES {
+        if !has_table(conn, schema, table)? {
+            feed("SELECT 1 WHERE false", 0)?;
+            continue;
+        }
         feed(
             &format!(
                 "SELECT id, hlc, {} FROM {schema}.{} ORDER BY id",
@@ -130,8 +139,12 @@ pub(crate) fn digest(conn: &Connection, schema: &str) -> Result<String> {
 
 /// The largest HLC stored in `schema`, for seeding the clock.
 pub(crate) fn max_hlc(conn: &Connection, schema: &str) -> Result<Option<Hlc>> {
-    let mut parts: Vec<String> =
-        TABLES.iter().map(|t| format!("SELECT max(hlc) h FROM {schema}.{}", t.name)).collect();
+    let mut parts = Vec::new();
+    for table in TABLES {
+        if has_table(conn, schema, table)? {
+            parts.push(format!("SELECT max(hlc) h FROM {schema}.{}", table.name));
+        }
+    }
     parts.push(format!("SELECT max(hlc) h FROM {schema}.tombstones"));
     parts.push(format!("SELECT max(hlc) h FROM {schema}.history"));
     let sql = format!("SELECT max(h) FROM ({})", parts.join(" UNION ALL "));

@@ -293,6 +293,12 @@ impl At<'_> {
                     Reply::RenameFolder(node),
                 );
             },
+            UiAction::TreeFolderLogin(NodeId(node)) => {
+                self.core.vault.send(Request::EditFolderLogin(node));
+            },
+            UiAction::TreeClearFolderLogin(NodeId(node)) => {
+                self.core.vault.send(Request::ClearFolderLogin(node));
+            },
             UiAction::VaultLock => self.core.vault.send(Request::Lock),
             UiAction::VaultMenu(pos) => {
                 let items = self.vault_menu();

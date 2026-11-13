@@ -7,13 +7,33 @@ impl At<'_> {
     pub(super) fn tree_menu(&self, node: NodeId) -> Vec<MenuItem> {
         let Some(info) = self.core.ui.nodes.get(&node.0) else { return Vec::new() };
         if info.kind == NodeKind::Folder {
-            return vec![
+            let mut items = vec![
                 menu_item(icons::PLUS, "New connection", UiAction::NewConnection, false),
                 menu_item(icons::FOLDER, "New folder", UiAction::TreeNewFolder(Some(node)), false),
                 menu_item(icons::PENCIL, "Rename", UiAction::TreeRenameFolder(node), false),
-                MenuItem::Separator,
-                menu_item(icons::TRASH_2, "Delete folder", UiAction::TreeDelete(node), true),
+                menu_item(
+                    icons::KEY_ROUND,
+                    "Login\u{2026}",
+                    UiAction::TreeFolderLogin(node),
+                    false,
+                ),
             ];
+            if info.login {
+                items.push(menu_item(
+                    icons::KEY_ROUND,
+                    "Clear login",
+                    UiAction::TreeClearFolderLogin(node),
+                    false,
+                ));
+            }
+            items.push(MenuItem::Separator);
+            items.push(menu_item(
+                icons::TRASH_2,
+                "Delete folder",
+                UiAction::TreeDelete(node),
+                true,
+            ));
+            return items;
         }
         let mut items = vec![
             menu_item(icons::PLUG, "Connect", UiAction::TreeOpen(node), false),

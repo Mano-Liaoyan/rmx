@@ -288,7 +288,7 @@ impl Gallery {
         let ctx = ui.ctx().clone();
         match self.page {
             Page::Dialog => {
-                let action = new_connection_dialog(&ctx, &mut self.new_connection);
+                let action = new_connection_dialog(&ctx, &mut self.new_connection, &[]);
                 self.note(action);
             },
             Page::Palette => {
@@ -390,11 +390,11 @@ impl Gallery {
         };
         let tiles = &mut self.new_tiles;
         cell(ui, 24., 24., 540., &mut |ui| {
-            new_connection_body(ui, tiles);
+            new_connection_body(ui, tiles, &[]);
         });
         let form = &mut self.new_form;
         cell(ui, 24., 354., 540., &mut |ui| {
-            new_connection_body(ui, form);
+            new_connection_body(ui, form, &[]);
         });
         let items = quick_items();
         let quick = &mut self.quick_body;

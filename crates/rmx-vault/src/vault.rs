@@ -13,11 +13,12 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::hlc::{Hlc, HlcClock};
+use crate::inherit;
 use crate::key::{self, Credentials, KdfParams, VaultKey};
 use crate::kind::VaultKind;
 use crate::local_state::LocalState;
 use crate::merge::{self, trim_history};
-use crate::records::{Id, Record, TableDef};
+use crate::records::{self, Folder, FolderLogin, Id, Record, TableDef};
 use crate::schema;
 
 /// The outcome of merging a snapshot into the working copy.
@@ -117,7 +118,7 @@ impl Vault {
             return Err(Error::NotAVault);
         }
         let conn = open_connection(path, None)?;
-        schema::check_version(&conn, "main").map_err(|e| match e {
+        schema::open_and_upgrade(&conn).map_err(|e| match e {
             // Some other program's SQLite file.
             Error::Sqlite(_) => Error::NotAVault,
             other => other,
@@ -128,7 +129,7 @@ impl Vault {
 
     pub(crate) fn open_with_key(path: &Path, key: VaultKey) -> Result<Self> {
         let conn = open_connection(path, Some(&key))?;
-        schema::check_version(&conn, "main")?;
+        schema::open_and_upgrade(&conn)?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         Self::from_parts(path, conn, Some(key))
     }
@@ -199,7 +200,7 @@ impl Vault {
         let (salt, params) = key::parse_salt(&key::read_salt(&self.path)?)?;
         let key = credentials.derive(salt, params)?;
         let conn = open_connection(&self.path, Some(&key))?;
-        schema::check_version(&conn, "main")?;
+        schema::open_and_upgrade(&conn)?;
         self.install_session(conn, Some(key))
     }
 
@@ -260,6 +261,28 @@ impl Vault {
         ))?;
         let rows = stmt.query_map([], |row| R::from_row(row.get(0)?, row, 1))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The login a connection in `folder` inherits: see [`inherit`](crate::inherit).
+    pub fn inherited_login(&mut self, folder: Option<Id>) -> Result<Option<FolderLogin>> {
+        if folder.is_none() {
+            return Ok(None);
+        }
+        let folders = self.list::<Folder>()?;
+        let logins = self.list::<FolderLogin>()?;
+        Ok(inherit::nearest_login(folder, &folders, &logins).cloned())
+    }
+
+    /// `connection` with the login it inherits filled in, if it has none of its own.
+    pub fn with_inherited_login(
+        &mut self,
+        connection: records::Connection,
+    ) -> Result<records::Connection> {
+        if connection.has_own_login() {
+            return Ok(connection);
+        }
+        let login = self.inherited_login(connection.folder_id)?;
+        Ok(connection.inheriting(login.as_ref()))
     }
 
     /// Inserts or updates a row. The previous version moves to history.
@@ -502,7 +525,7 @@ fn merge_attached(session: &mut Session) -> Result<(MergeReport, String)> {
     match check {
         Err(Error::Sqlite(e)) if is_not_a_database(&e) => return Err(Error::RemoteCorrupt),
         other => other?,
-    }
+    };
     let ours = schema::meta(&session.conn, "main", "vault_id")?;
     if ours != schema::meta(&session.conn, "remote", "vault_id")? {
         return Err(Error::VaultMismatch);

@@ -20,11 +20,11 @@ use rmx_ui::theme::{
     STRIP_HEIGHT,
 };
 use rmx_ui::widgets::{
-    ContextMenu, FilesKey, FilesState, HostKeyView, MenuItem, NewConnectionState, NodeKind,
-    PaneBarView, Panels, PromptState, QuickItem, QuickOpenState, Reveal, SIDEBAR_STATUS_HEIGHT,
-    SessionDot, SettingsState, SettingsView, SidebarStatus, SnippetRow, SnippetsState,
-    TabStripState, TabView, TitleBarView, TreeModel, TreeState, VaultSetupState, VaultSetupView,
-    VaultState, VaultView, context_menu, empty_state, files_pane, host_key_dialog,
+    ContextMenu, FilesKey, FilesState, HostKeyView, InheritedLogin, MenuItem, NewConnectionState,
+    NodeKind, PaneBarView, Panels, PromptState, QuickItem, QuickOpenState, Reveal,
+    SIDEBAR_STATUS_HEIGHT, SessionDot, SettingsState, SettingsView, SidebarStatus, SnippetRow,
+    SnippetsState, TabStripState, TabView, TitleBarView, TreeModel, TreeState, VaultSetupState,
+    VaultSetupView, VaultState, VaultView, context_menu, empty_state, files_pane, host_key_dialog,
     new_connection_dialog, paint_pill, pane_bar, pane_notice, pane_overlay, prompt_dialog,
     quick_open, resize_handle, settings_dialog, sidebar, sidebar_status, snippets_dialog,
     title_bar, vault_setup, vault_unlock,
@@ -230,6 +230,8 @@ pub struct Common {
     pub vault_others: Vec<String>,
     /// The vault's snippets. A new list is a new `Arc`, which is how the dialog tells.
     pub snippets: Arc<Vec<SnippetRow>>,
+    /// The logins folders hand down, for the connection form to show.
+    pub logins: Vec<InheritedLogin>,
     /// The sizes the panels were dragged to, the same in every window.
     pub panels: Panels,
 }
@@ -256,6 +258,7 @@ impl Default for Common {
             vault_path: String::new(),
             vault_others: Vec::new(),
             snippets: Arc::default(),
+            logins: Vec::new(),
             panels: Panels::default(),
         }
     }
@@ -326,9 +329,10 @@ impl Common {
     /// Show a freshly built tree, keeping the search and the green dots.
     pub fn set_tree(&mut self, update: TreeUpdate, panes: &[Pane]) {
         let query = self.tree.query().to_owned();
-        let TreeUpdate { model, nodes, snippets } = update;
+        let TreeUpdate { model, nodes, snippets, logins } = update;
         self.tree = model;
         self.nodes = nodes;
+        self.logins = logins;
         self.snippets = Arc::new(snippets);
         self.tree.set_query(&query);
         for pane in panes {
@@ -792,7 +796,7 @@ impl Shell {
             ctx.request_repaint();
         }
 
-        let action = new_connection_dialog(&ctx, &mut self.dialog);
+        let action = new_connection_dialog(&ctx, &mut self.dialog, &common.logins);
         self.actions.extend(action);
 
         let action =
