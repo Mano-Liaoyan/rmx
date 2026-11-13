@@ -351,6 +351,11 @@ impl Running {
                     at.win.shell.settings.open(*draft);
                 }
             },
+            VaultEvent::FolderLogin { node, folder, username, password, key } => {
+                if let Some(mut at) = self.at_active() {
+                    at.ask_folder_login(node, &folder, username, password, key);
+                }
+            },
             VaultEvent::Draft(draft) => {
                 if let Some(at) = self.at_active() {
                     at.win.shell.dialog.open_draft(*draft);

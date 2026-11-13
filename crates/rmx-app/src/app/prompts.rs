@@ -8,6 +8,8 @@ pub(super) enum Reply {
     Fields(oneshot::Sender<Option<Vec<SecretString>>>),
     NewFolder(Option<u64>),
     RenameFolder(u64),
+    /// The login a folder hands down: username, password and key file.
+    FolderLogin(u64),
     DeleteConnection(u64),
     DeleteFolder(u64),
     /// The values of a snippet's placeholders: send it with them.
@@ -174,6 +176,16 @@ impl At<'_> {
                     self.core.vault.send(Request::RenameFolder { node, name });
                 }
             },
+            Reply::FolderLogin(node) => {
+                if let Some([username, password, key_path]) = fields.as_deref() {
+                    self.core.vault.send(Request::SaveFolderLogin {
+                        node,
+                        username: username.expose().trim().to_owned(),
+                        password: Secret::new(password.expose()),
+                        key_path: key_path.expose().trim().to_owned(),
+                    });
+                }
+            },
             Reply::Snippet(body) => {
                 if let Some(fields) = &fields {
                     let names = snippet::variables(&body);
@@ -307,7 +319,11 @@ impl At<'_> {
         let (title, detail, reply) = if folder {
             (
                 format!("Delete the folder {name}?"),
-                "What is in it moves up to the top of the tree.",
+                if info.login {
+                    "What is in it moves up to the top of the tree, and no longer inherits its login."
+                } else {
+                    "What is in it moves up to the top of the tree."
+                },
                 Reply::DeleteFolder(node),
             )
         } else {
@@ -320,6 +336,32 @@ impl At<'_> {
         let mut state = PromptState::new(title, detail, Vec::new());
         state.submit = "Delete".to_owned();
         self.ask_here(state, reply);
+    }
+
+    /// Ask for the login folder `node` hands down, filled in with the one it has.
+    pub(super) fn ask_folder_login(
+        &mut self,
+        node: u64,
+        folder: &str,
+        username: String,
+        password: bool,
+        key: String,
+    ) {
+        let field =
+            |label: &str, secret, value| PromptField { label: label.to_owned(), secret, value };
+        let fields = vec![
+            field("Username", false, username),
+            field("Password", true, String::new()),
+            field("Key file", false, key),
+        ];
+        let keep = if password { " Leave the password empty to keep the saved one." } else { "" };
+        let detail = format!(
+            "Connections in {folder} and the folders inside it use this login, unless they have \
+             their own or a nearer folder has one.{keep}"
+        );
+        let mut state = PromptState::new(format!("Login for {folder}"), detail, fields);
+        state.submit = "Save".to_owned();
+        self.ask_here(state, Reply::FolderLogin(node));
     }
 
     pub(super) fn ask_folder_name(&mut self, title: &str, value: String, reply: Reply) {

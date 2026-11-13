@@ -14,14 +14,14 @@ use rmx_serial::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use rmx_ssh::{AuthMethod, HostConfig, SecretString};
 use rmx_ui::widgets::SessionDot;
 use rmx_ui::widgets::{
-    AuthKind, ConnectionDraft, NodeKind, RdpQuality, RdpSecurity, ScaleChoice, SessionLogging,
-    SettingsDraft, SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
+    AuthKind, ConnectionDraft, InheritedLogin, NodeKind, RdpQuality, RdpSecurity, ScaleChoice,
+    SessionLogging, SettingsDraft, SnippetRow, SyncDraft, SyncKind, TreeModel, TreeNode, VncColors,
 };
 use rmx_ui::{NodeId, Protocol, ThemeMode};
 use rmx_vault::{
-    Connection, Credential, Credentials, Error, Folder, Id, KdfParams, KnownHost, LocalPathBackend,
-    S3Backend, S3Config, Secret, SftpBackend, SharedSetting, Snippet, SshKey, SyncBackend,
-    SyncReport, Tunnel, Vault, VaultKind, WebDavBackend, WebDavConfig,
+    Connection, Credential, Credentials, Error, Folder, FolderLogin, Id, KdfParams, KnownHost,
+    LocalPathBackend, S3Backend, S3Config, Secret, SftpBackend, SharedSetting, Snippet, SshKey,
+    SyncBackend, SyncReport, Tunnel, Vault, VaultKind, WebDavBackend, WebDavConfig,
 };
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
@@ -110,6 +110,18 @@ pub enum Request {
         name: String,
     },
     DeleteFolder(u64),
+    /// Ask for the form of the login this folder hands down.
+    EditFolderLogin(u64),
+    /// Set the login this folder hands down. An empty password keeps the saved one; an empty
+    /// key file is none.
+    SaveFolderLogin {
+        node: u64,
+        username: String,
+        password: Secret,
+        key_path: String,
+    },
+    /// Stop this folder handing down a login.
+    ClearFolderLogin(u64),
     FolderToggled {
         node: u64,
         expanded: bool,
@@ -159,6 +171,8 @@ pub struct NodeInfo {
     pub kind: NodeKind,
     /// Where it connects to; empty for folders.
     pub host: String,
+    /// Folders only: it hands down a login.
+    pub login: bool,
 }
 
 /// The tree, built off the main thread so that showing it costs nothing there.
@@ -167,6 +181,8 @@ pub struct TreeUpdate {
     pub nodes: HashMap<u64, NodeInfo>,
     /// The snippets, sorted by name: they change whenever the rest can.
     pub snippets: Vec<SnippetRow>,
+    /// The logins folders hand down, for the connection form.
+    pub logins: Vec<InheritedLogin>,
 }
 
 /// What a new database is to be protected with.
@@ -229,6 +245,16 @@ pub enum VaultEvent {
     PasswordOutcome(String, String, bool),
     Settings(Box<SettingsDraft>),
     Draft(Box<ConnectionDraft>),
+    /// The login folder `node` hands down, to be shown for changing. Its password stays in the
+    /// vault: only whether there is one comes along.
+    FolderLogin {
+        node: u64,
+        folder: String,
+        username: String,
+        password: bool,
+        /// The stored key, as the connection form names it.
+        key: String,
+    },
     /// The connection was saved from "save and connect".
     Saved {
         node: u64,
@@ -678,6 +704,10 @@ impl Actor {
                 self.asked_remote_key = false;
                 self.run_sync(true);
             },
+            Request::EditFolderLogin(node) => match self.folder_login_form(node) {
+                Ok(event) => self.send(event),
+                Err(err) => self.notice(err, true),
+            },
             Request::EditConnection(node) => match self.draft_of(node) {
                 Ok(draft) => self.send(VaultEvent::Draft(Box::new(draft))),
                 Err(err) => self.notice(err, true),
@@ -726,8 +756,20 @@ impl Actor {
             },
             Request::DeleteFolder(node) => {
                 let id = self.id_of(node)?;
-                self.open()?.delete::<Folder>(id).map_err(text)?;
+                let vault = self.open()?;
+                clear_folder_login(vault, id)?;
+                vault.delete::<Folder>(id).map_err(text)?;
                 Ok(None)
+            },
+            Request::SaveFolderLogin { node, username, password, key_path } => {
+                let id = self.id_of(node)?;
+                save_folder_login(self.open()?, id, &username, &password, &key_path)?;
+                Ok(Some("Folder login saved".to_owned()))
+            },
+            Request::ClearFolderLogin(node) => {
+                let id = self.id_of(node)?;
+                clear_folder_login(self.open()?, id)?;
+                Ok(Some("Folder login cleared".to_owned()))
             },
             Request::ImportSshConfig => self.import_ssh_config().map(Some),
             _ => Ok(None),
@@ -918,16 +960,23 @@ impl Actor {
         let vault = self.open()?;
         let folders = vault.list::<Folder>().map_err(text)?;
         let connections = vault.list::<Connection>().map_err(text)?;
+        let folder_logins = vault.list::<FolderLogin>().map_err(text)?;
         let mut rows = vault.list::<Snippet>().map_err(text)?;
         rows.sort_by_cached_key(|row| row.name.to_lowercase());
-        let (nodes, mut ids, info) = tree_nodes(folders, connections, &collapsed);
+        let logins = login_hints(&folders, &folder_logins);
+        let (nodes, mut ids, mut info) = tree_nodes(folders, connections, &collapsed);
+        for login in folder_logins.iter().filter(|login| !login.is_empty()) {
+            if let Some(node) = info.get_mut(&node_number(login.id)) {
+                node.login = true;
+            }
+        }
         ids.extend(rows.iter().map(|row| (node_number(row.id), row.id)));
         self.ids = ids;
         let snippets = rows
             .into_iter()
             .map(|row| SnippetRow { id: node_number(row.id), name: row.name, body: row.body })
             .collect();
-        Ok(TreeUpdate { model: TreeModel::new(nodes), nodes: info, snippets })
+        Ok(TreeUpdate { model: TreeModel::new(nodes), nodes: info, snippets, logins })
     }
 
     /// Change the snippet numbered `id`, or add one when there is none.
@@ -967,6 +1016,25 @@ impl Actor {
         }
     }
 
+    /// The form for the login folder `node` hands down.
+    fn folder_login_form(&mut self, node: u64) -> Result<VaultEvent, String> {
+        let id = self.id_of(node)?;
+        let vault = self.open()?;
+        let folder = vault.get::<Folder>(id).map_err(text)?.ok_or("no such folder")?;
+        let login = vault.get::<FolderLogin>(id).map_err(text)?.unwrap_or(FolderLogin::new(id));
+        let key = match login.ssh_key_id {
+            Some(key) => vault.get::<SshKey>(key).map_err(text)?,
+            None => None,
+        };
+        Ok(VaultEvent::FolderLogin {
+            node,
+            folder: folder.name,
+            username: login.username.unwrap_or_default(),
+            password: login.credential_id.is_some(),
+            key: key.map(|key| format!("{}{}", options::STORED_KEY, key.name)).unwrap_or_default(),
+        })
+    }
+
     fn known_hosts(&mut self, host: &str, port: u16) -> Result<Vec<KnownHost>, String> {
         let rows = self.open()?.list::<KnownHost>().map_err(text)?;
         Ok(rows.into_iter().filter(|row| row.host == host && row.port == port).collect())
@@ -977,6 +1045,7 @@ impl Actor {
         let id = self.id_of(node)?;
         let vault = self.open()?;
         let connection = vault.get::<Connection>(id).map_err(text)?.ok_or("no such connection")?;
+        let connection = vault.with_inherited_login(connection).map_err(text)?;
         let protocol = parse_protocol(&connection.protocol);
 
         let mut holds = Vec::new();
@@ -1012,6 +1081,7 @@ impl Actor {
                 .get::<Connection>(jump_id)
                 .map_err(text)?
                 .ok_or("its jump host no longer exists")?;
+            let jump = vault.with_inherited_login(jump).map_err(text)?;
             jumps.push(host_config(vault, &jump, &mut holds)?);
             next = jump.jump_connection_id;
         }
@@ -1123,21 +1193,13 @@ impl Actor {
 
         let mut settings = connection.options.as_deref().map(options::parse).unwrap_or_default();
         settings.remove("auth");
-        match draft.auth {
-            AuthKind::Password => connection.ssh_key_id = None,
-            AuthKind::Key => {
-                let path = draft.key_path.trim();
-                if !path.is_empty() && !path.starts_with(options::STORED_KEY) {
-                    connection.ssh_key_id =
-                        Some(ingest_key(vault, &expand_home(path), connection.ssh_key_id)?);
-                }
-                connection.credential_id = None;
-            },
-            AuthKind::Agent => {
-                settings.insert("auth".to_owned(), "agent".to_owned());
-                connection.ssh_key_id = None;
-                connection.credential_id = None;
-            },
+        let inherited = if draft.inherit {
+            use_inherited_login(vault, &mut connection, &mut settings)?
+        } else {
+            None
+        };
+        if inherited.is_none() {
+            own_login(vault, draft, &mut connection, &mut settings)?;
         }
         for key in [
             OPTION_SCALE,
@@ -1217,18 +1279,10 @@ impl Actor {
         }
         connection.options = (!settings.is_empty()).then(|| options::encode(&settings));
 
-        if !draft.password.is_empty() && draft.auth == AuthKind::Password {
-            let credential = Credential {
-                id: connection.credential_id.unwrap_or_default(),
-                name: connection.name.clone(),
-                username: connection.username.clone(),
-                secret: Secret::new(draft.password.clone()),
-                notes: None,
-            };
-            connection.credential_id = Some(credential.id);
-            vault.put(&credential).map_err(text)?;
-        }
         vault.put(&connection).map_err(text)?;
+        if let Some((credential, key)) = inherited {
+            drop_unused(vault, credential, key)?;
+        }
         replace_tunnels(vault, connection.id, forwards)?;
         Ok(connection.id)
     }
@@ -1269,6 +1323,7 @@ impl Actor {
         } else {
             AuthKind::Password
         };
+        draft.inherit = !row.has_own_login() && draft.auth != AuthKind::Agent;
         if let Some(key_id) = row.ssh_key_id
             && let Some(key) = vault.get::<SshKey>(key_id).map_err(text)?
         {
@@ -1344,18 +1399,7 @@ impl Actor {
                 vault.delete::<Tunnel>(tunnel.id).map_err(text)?;
             }
         }
-        let others = vault.list::<Connection>().map_err(text)?;
-        if let Some(credential) = row.credential_id
-            && !others.iter().any(|c| c.credential_id == Some(credential))
-        {
-            vault.delete::<Credential>(credential).map_err(text)?;
-        }
-        if let Some(key) = row.ssh_key_id
-            && !others.iter().any(|c| c.ssh_key_id == Some(key))
-        {
-            vault.delete::<SshKey>(key).map_err(text)?;
-        }
-        Ok(())
+        drop_unused(vault, row.credential_id, row.ssh_key_id)
     }
 
     fn import_ssh_config(&mut self) -> Result<String, String> {
@@ -1892,6 +1936,148 @@ fn host_config(
     Ok(HostConfig::new(row.host.clone(), user, auth).with_port(port))
 }
 
+/// Take the login the form gives `connection` as its own: method, key and password. An empty
+/// password keeps the saved one.
+fn own_login(
+    vault: &mut Vault,
+    draft: &ConnectionDraft,
+    connection: &mut Connection,
+    settings: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    match draft.auth {
+        AuthKind::Password => connection.ssh_key_id = None,
+        AuthKind::Key => {
+            let path = draft.key_path.trim();
+            if !path.is_empty() && !path.starts_with(options::STORED_KEY) {
+                connection.ssh_key_id =
+                    Some(ingest_key(vault, &expand_home(path), connection.ssh_key_id)?);
+            }
+            connection.credential_id = None;
+        },
+        AuthKind::Agent => {
+            settings.insert("auth".to_owned(), "agent".to_owned());
+            connection.ssh_key_id = None;
+            connection.credential_id = None;
+        },
+    }
+    if !draft.password.is_empty() && draft.auth == AuthKind::Password {
+        let credential = Credential {
+            id: connection.credential_id.unwrap_or_default(),
+            name: connection.name.clone(),
+            username: connection.username.clone(),
+            secret: Secret::new(draft.password.clone()),
+            notes: None,
+        };
+        connection.credential_id = Some(credential.id);
+        vault.put(&credential).map_err(text)?;
+    }
+    Ok(())
+}
+
+/// A credential and a key that something stopped referring to.
+type Unreferenced = (Option<Id>, Option<Id>);
+
+/// Have `connection` use the login a folder above it hands down, if one does, dropping its own.
+/// Returns the credential and key it no longer refers to, for [`drop_unused`].
+fn use_inherited_login(
+    vault: &mut Vault,
+    connection: &mut Connection,
+    settings: &mut BTreeMap<String, String>,
+) -> Result<Option<Unreferenced>, String> {
+    if vault.inherited_login(connection.folder_id).map_err(text)?.is_none() {
+        return Ok(None);
+    }
+    connection.username = None;
+    settings.remove("auth");
+    Ok(Some((connection.credential_id.take(), connection.ssh_key_id.take())))
+}
+
+/// Delete the credential and key if no connection or folder login refers to them any more.
+fn drop_unused(vault: &mut Vault, credential: Option<Id>, key: Option<Id>) -> Result<(), String> {
+    if credential.is_none() && key.is_none() {
+        return Ok(());
+    }
+    let connections = vault.list::<Connection>().map_err(text)?;
+    let logins = vault.list::<FolderLogin>().map_err(text)?;
+    if let Some(credential) = credential
+        && !connections.iter().any(|c| c.credential_id == Some(credential))
+        && !logins.iter().any(|l| l.credential_id == Some(credential))
+    {
+        vault.delete::<Credential>(credential).map_err(text)?;
+    }
+    if let Some(key) = key
+        && !connections.iter().any(|c| c.ssh_key_id == Some(key))
+        && !logins.iter().any(|l| l.ssh_key_id == Some(key))
+    {
+        vault.delete::<SshKey>(key).map_err(text)?;
+    }
+    Ok(())
+}
+
+/// Set the login `folder` hands down. An empty password keeps the saved one; an empty key file
+/// is none, and a stored key's name keeps it. Setting nothing at all clears it.
+fn save_folder_login(
+    vault: &mut Vault,
+    folder: Id,
+    username: &str,
+    password: &Secret,
+    key_path: &str,
+) -> Result<(), String> {
+    let name =
+        vault.get::<Folder>(folder).map_err(text)?.ok_or("that folder no longer exists")?.name;
+    let before = vault.get::<FolderLogin>(folder).map_err(text)?;
+    let mut login = before.clone().unwrap_or_else(|| FolderLogin::new(folder));
+    login.username = non_empty(username);
+    if !password.is_empty() {
+        let credential = Credential {
+            id: login.credential_id.unwrap_or_default(),
+            name: format!("Folder {name}"),
+            username: login.username.clone(),
+            secret: password.clone(),
+            notes: None,
+        };
+        login.credential_id = Some(credential.id);
+        vault.put(&credential).map_err(text)?;
+    }
+    let key = key_path.trim();
+    if key.is_empty() {
+        login.ssh_key_id = None;
+    } else if !key.starts_with(options::STORED_KEY) {
+        login.ssh_key_id = Some(ingest_key(vault, &expand_home(key), login.ssh_key_id)?);
+    }
+    if login.is_empty() {
+        vault.delete::<FolderLogin>(folder).map_err(text)?;
+    } else {
+        vault.put(&login).map_err(text)?;
+    }
+    let dropped_key =
+        before.and_then(|before| before.ssh_key_id).filter(|key| login.ssh_key_id != Some(*key));
+    drop_unused(vault, None, dropped_key)
+}
+
+/// Stop `folder` handing down a login, deleting its password and key unless something else uses
+/// them.
+fn clear_folder_login(vault: &mut Vault, folder: Id) -> Result<(), String> {
+    let Some(login) = vault.get::<FolderLogin>(folder).map_err(text)? else { return Ok(()) };
+    vault.delete::<FolderLogin>(folder).map_err(text)?;
+    drop_unused(vault, login.credential_id, login.ssh_key_id)
+}
+
+/// What the connection form needs to say which folder a login is inherited from: the folders
+/// that hand one down, by path.
+fn login_hints(folders: &[Folder], logins: &[FolderLogin]) -> Vec<InheritedLogin> {
+    logins
+        .iter()
+        .filter(|login| !login.is_empty() && folders.iter().any(|f| f.id == login.id))
+        .map(|login| InheritedLogin {
+            group: folder_path(folders, Some(login.id)),
+            username: login.username.clone().unwrap_or_default(),
+            password: login.credential_id.is_some(),
+            key: login.ssh_key_id.is_some(),
+        })
+        .collect()
+}
+
 /// Read a private key file into the vault, in `existing` if there is one. Returns its id.
 fn ingest_key(vault: &mut Vault, path: &Path, existing: Option<Id>) -> Result<Id, String> {
     let private = std::fs::read_to_string(path)
@@ -2050,7 +2236,12 @@ fn tree_nodes(folders: Vec<Folder>, connections: Vec<Connection>, collapsed: &Ha
             self.ids.insert(id, folder.id);
             self.info.insert(
                 id,
-                NodeInfo { name: folder.name.clone(), kind: NodeKind::Folder, host: String::new() },
+                NodeInfo {
+                    name: folder.name.clone(),
+                    kind: NodeKind::Folder,
+                    host: String::new(),
+                    login: false,
+                },
             );
             self.nodes.push(TreeNode {
                 id: NodeId(id),
@@ -2073,7 +2264,12 @@ fn tree_nodes(folders: Vec<Folder>, connections: Vec<Connection>, collapsed: &Ha
                 self.ids.insert(id, connection.id);
                 self.info.insert(
                     id,
-                    NodeInfo { name: connection.name.clone(), kind, host: connection.host.clone() },
+                    NodeInfo {
+                        name: connection.name.clone(),
+                        kind,
+                        host: connection.host.clone(),
+                        login: false,
+                    },
                 );
                 self.nodes.push(TreeNode {
                     id: NodeId(id),
@@ -2283,6 +2479,108 @@ mod tests {
         assert!(!from.exists() && !dir.path().join("v.rmxdb.local").exists());
         let vault = Vault::open_plain(&to).unwrap();
         assert_eq!(vault.local_state().node_id().unwrap(), node);
+    }
+
+    fn plain_vault(dir: &tempfile::TempDir) -> Vault {
+        Vault::create_plain(&dir.path().join("v.rmxdb")).unwrap()
+    }
+
+    #[test]
+    fn a_folder_login_is_saved_kept_and_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let production = folder("Production", None);
+        vault.put(&production).unwrap();
+
+        save_folder_login(&mut vault, production.id, "admin", &Secret::new("pw"), "").unwrap();
+        let login = vault.get::<FolderLogin>(production.id).unwrap().unwrap();
+        assert_eq!(login.username.as_deref(), Some("admin"));
+        let credential = login.credential_id.unwrap();
+        let saved = vault.get::<Credential>(credential).unwrap().unwrap();
+        assert_eq!(saved.secret.expose(), "pw");
+
+        // An empty password keeps the saved one; a new username is taken.
+        save_folder_login(&mut vault, production.id, "root", &Secret::new(""), "").unwrap();
+        let login = vault.get::<FolderLogin>(production.id).unwrap().unwrap();
+        assert_eq!(login.username.as_deref(), Some("root"));
+        assert_eq!(login.credential_id, Some(credential));
+
+        clear_folder_login(&mut vault, production.id).unwrap();
+        assert_eq!(vault.get::<FolderLogin>(production.id).unwrap(), None);
+        assert_eq!(vault.get::<Credential>(credential).unwrap(), None, "its password goes too");
+    }
+
+    #[test]
+    fn a_connection_with_no_login_connects_with_its_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let production = folder("Production", None);
+        let web = folder("Web", Some(production.id));
+        vault.put(&production).unwrap();
+        vault.put(&web).unwrap();
+        save_folder_login(&mut vault, production.id, "admin", &Secret::new("pw"), "").unwrap();
+        let row = Connection { host: "h".to_owned(), ..connection("web1", Some(web.id)) };
+        vault.put(&row).unwrap();
+
+        let row = vault.with_inherited_login(row).unwrap();
+        let config = host_config(&mut vault, &row, &mut Vec::new()).unwrap();
+        assert_eq!(config.user, "admin");
+        assert!(
+            config.auth.iter().any(|auth| matches!(auth, AuthMethod::Password(Some(_)))),
+            "the folder's password is offered"
+        );
+    }
+
+    #[test]
+    fn choosing_to_inherit_drops_a_connections_own_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let production = folder("Production", None);
+        vault.put(&production).unwrap();
+        let own = Credential { secret: Secret::new("own"), ..Default::default() };
+        vault.put(&own).unwrap();
+        let mut row = Connection {
+            username: Some("me".to_owned()),
+            credential_id: Some(own.id),
+            ..connection("c", Some(production.id))
+        };
+        let mut settings = BTreeMap::from([("auth".to_owned(), "agent".to_owned())]);
+
+        // Nothing to inherit: it keeps its own.
+        assert_eq!(use_inherited_login(&mut vault, &mut row, &mut settings), Ok(None));
+        assert_eq!(row.username.as_deref(), Some("me"));
+
+        save_folder_login(&mut vault, production.id, "admin", &Secret::new("pw"), "").unwrap();
+        let dropped = use_inherited_login(&mut vault, &mut row, &mut settings).unwrap();
+        assert_eq!(dropped, Some((Some(own.id), None)));
+        assert!(!row.has_own_login());
+        assert!(!settings.contains_key("auth"));
+    }
+
+    #[test]
+    fn the_tree_says_which_folders_hand_down_a_login() {
+        let production = folder("Production", None);
+        let web = folder("Web", Some(production.id));
+        let gone = Id::new();
+        let logins = vec![
+            FolderLogin {
+                username: Some("admin".to_owned()),
+                credential_id: Some(Id::new()),
+                ..FolderLogin::new(web.id)
+            },
+            FolderLogin { username: Some("x".to_owned()), ..FolderLogin::new(gone) },
+            FolderLogin::new(production.id),
+        ];
+        let hints = login_hints(&[production, web], &logins);
+        assert_eq!(
+            hints,
+            [InheritedLogin {
+                group: "Production/Web".to_owned(),
+                username: "admin".to_owned(),
+                password: true,
+                key: false,
+            }]
+        );
     }
 
     #[test]

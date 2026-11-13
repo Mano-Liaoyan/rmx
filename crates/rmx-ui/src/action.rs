@@ -338,6 +338,9 @@ pub enum UiAction {
     /// Add a folder, inside this one if any.
     TreeNewFolder(Option<NodeId>),
     TreeRenameFolder(NodeId),
+    /// Set the login a folder hands down to the connections in it, or stop it doing so.
+    TreeFolderLogin(NodeId),
+    TreeClearFolderLogin(NodeId),
     /// The fields of the prompt dialog as answered.
     PromptSubmit(Vec<Sensitive>),
     PromptCancel,

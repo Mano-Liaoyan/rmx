@@ -13,6 +13,8 @@
 //!   `VACUUM INTO` snapshot with compare-and-swap, retrying when it loses a race. The merge is
 //!   commutative and idempotent, so devices converge whatever order they sync in.
 //!
+//! Folders can hand a login down to the connections inside them: see [`inherit`].
+//!
 //! Device-local data (window layout, sync cursors) lives in [`LocalState`], outside the vault.
 //!
 //! Everything here blocks on disk, Argon2id or the network: keep it off the UI thread.
@@ -27,6 +29,7 @@
 
 mod error;
 mod hlc;
+pub mod inherit;
 mod key;
 mod kind;
 mod local_state;
@@ -47,7 +50,8 @@ pub use kind::VaultKind;
 pub use local_state::{LocalState, SyncCursor};
 pub use merge::HISTORY_LIMIT;
 pub use records::{
-    Connection, Credential, Folder, Id, KnownHost, Record, SharedSetting, Snippet, SshKey, Tunnel,
+    Connection, Credential, Folder, FolderLogin, Id, KnownHost, Record, SharedSetting, Snippet,
+    SshKey, Tunnel,
 };
 pub use schema::SCHEMA_VERSION;
 pub use secret::Secret;

@@ -4,7 +4,8 @@ mod common;
 
 use common::{creds, fast_kdf, replicas, snapshot_of};
 use rmx_vault::{
-    Connection, Credential, Folder, HISTORY_LIMIT, Id, KnownHost, Secret, SharedSetting, Vault,
+    Connection, Credential, Folder, FolderLogin, HISTORY_LIMIT, Id, KnownHost, Secret,
+    SharedSetting, Vault,
 };
 
 struct Rng(u64);
@@ -21,7 +22,7 @@ impl Rng {
 fn random_edits(vault: &mut Vault, ids: &[Id], rng: &mut Rng) {
     for round in 0..40 {
         let id = ids[rng.next(ids.len() as u64) as usize];
-        match rng.next(6) {
+        match rng.next(8) {
             0 | 1 => vault
                 .put(&Folder {
                     id,
@@ -41,6 +42,16 @@ fn random_edits(vault: &mut Vault, ids: &[Id], rng: &mut Rng) {
                 .unwrap(),
             4 => {
                 vault.delete::<Folder>(id).unwrap();
+            },
+            5 => vault
+                .put(&FolderLogin {
+                    username: Some(format!("u{}", rng.next(5))),
+                    credential_id: Some(ids[rng.next(ids.len() as u64) as usize]),
+                    ..FolderLogin::new(id)
+                })
+                .unwrap(),
+            6 => {
+                vault.delete::<FolderLogin>(id).unwrap();
             },
             _ => {
                 vault.delete::<Connection>(id).unwrap();
@@ -80,6 +91,7 @@ fn merge_is_commutative() {
         assert_eq!(left.digest().unwrap(), right.digest().unwrap(), "seed {seed}");
         assert_eq!(left.list::<Folder>().unwrap(), right.list::<Folder>().unwrap());
         assert_eq!(left.list::<Connection>().unwrap(), right.list::<Connection>().unwrap());
+        assert_eq!(left.list::<FolderLogin>().unwrap(), right.list::<FolderLogin>().unwrap());
     }
 }
 
@@ -436,6 +448,13 @@ fn every_table_round_trips() {
     v[0].put(&key).unwrap();
     v[0].put(&snippet).unwrap();
     v[0].put(&tunnel).unwrap();
+    let login = FolderLogin {
+        username: Some("admin".to_owned()),
+        credential_id: Some(credential.id),
+        ssh_key_id: Some(key.id),
+        ..FolderLogin::new(folder.id)
+    };
+    v[0].put(&login).unwrap();
     let s = snapshot_of(&mut v[0], dir.path(), "s");
     v[1].merge_snapshot(&s).unwrap();
     assert_eq!(v[1].get::<Folder>(folder.id).unwrap().unwrap(), folder);
@@ -444,10 +463,183 @@ fn every_table_round_trips() {
     assert_eq!(v[1].get::<SshKey>(key.id).unwrap().unwrap(), key);
     assert_eq!(v[1].get::<Snippet>(snippet.id).unwrap().unwrap(), snippet);
     assert_eq!(v[1].get::<Tunnel>(tunnel.id).unwrap().unwrap(), tunnel);
+    assert_eq!(v[1].get::<FolderLogin>(folder.id).unwrap().unwrap(), login);
 
     // History decodes payloads back through JSON, including nulls, quotes and booleans.
     v[0].put(&Connection { name: "c2".to_owned(), ..conn.clone() }).unwrap();
     v[0].put(&Tunnel { name: "t2".to_owned(), ..tunnel.clone() }).unwrap();
     assert_eq!(v[0].history::<Connection>(conn.id).unwrap()[0].record, conn);
     assert_eq!(v[0].history::<Tunnel>(tunnel.id).unwrap()[0].record, tunnel);
+}
+
+/// Production > Web > a connection with no login of its own, and one beside it that has one.
+struct LoginTree {
+    production: Folder,
+    web: Folder,
+    inheriting: Connection,
+    own: Connection,
+    login: FolderLogin,
+}
+
+fn login_tree(vault: &mut Vault) -> LoginTree {
+    let production = Folder { name: "Production".to_owned(), ..Default::default() };
+    let web =
+        Folder { parent_id: Some(production.id), name: "Web".to_owned(), ..Default::default() };
+    let secret =
+        Credential { name: "prod".to_owned(), secret: Secret::new("s3"), ..Default::default() };
+    let login = FolderLogin {
+        username: Some("admin".to_owned()),
+        credential_id: Some(secret.id),
+        ..FolderLogin::new(production.id)
+    };
+    let inheriting =
+        Connection { folder_id: Some(web.id), name: "web1".to_owned(), ..Default::default() };
+    let own = Connection {
+        folder_id: Some(web.id),
+        name: "web2".to_owned(),
+        username: Some("me".to_owned()),
+        ..Default::default()
+    };
+    vault.put(&production).unwrap();
+    vault.put(&web).unwrap();
+    vault.put(&secret).unwrap();
+    vault.put(&login).unwrap();
+    vault.put(&inheriting).unwrap();
+    vault.put(&own).unwrap();
+    LoginTree { production, web, inheriting, own, login }
+}
+
+#[test]
+fn inherited_logins_survive_sync_between_devices() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut v = replicas(dir.path(), 2);
+    let tree = login_tree(&mut v[0]);
+    let s = snapshot_of(&mut v[0], dir.path(), "s1");
+    v[1].merge_snapshot(&s).unwrap();
+
+    let got = v[1].with_inherited_login(tree.inheriting.clone()).unwrap();
+    assert_eq!(got.username.as_deref(), Some("admin"));
+    assert_eq!(got.credential_id, tree.login.credential_id);
+    assert_eq!(v[1].inherited_login(tree.inheriting.folder_id).unwrap(), Some(tree.login.clone()));
+    // A login of its own is never mixed with the folder's.
+    assert_eq!(v[1].with_inherited_login(tree.own.clone()).unwrap(), tree.own);
+
+    // The other device gives the nearer folder a login: it wins on both, once synced back.
+    let web_login =
+        FolderLogin { username: Some("deploy".to_owned()), ..FolderLogin::new(tree.web.id) };
+    v[1].put(&web_login).unwrap();
+    let s = snapshot_of(&mut v[1], dir.path(), "s2");
+    v[0].merge_snapshot(&s).unwrap();
+    assert_eq!(v[0].digest().unwrap(), v[1].digest().unwrap());
+    for vault in &mut v {
+        let got = vault.with_inherited_login(tree.inheriting.clone()).unwrap();
+        assert_eq!(got.username.as_deref(), Some("deploy"));
+        assert_eq!(got.credential_id, None, "the nearest login is taken whole");
+    }
+
+    // Clearing it on one device hands Production's back down everywhere.
+    v[0].delete::<FolderLogin>(tree.web.id).unwrap();
+    let s = snapshot_of(&mut v[0], dir.path(), "s3");
+    v[1].merge_snapshot(&s).unwrap();
+    let got = v[1].with_inherited_login(tree.inheriting.clone()).unwrap();
+    assert_eq!(got.username.as_deref(), Some("admin"));
+}
+
+#[test]
+fn a_deleted_folder_or_a_moved_connection_changes_what_is_inherited() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut v = replicas(dir.path(), 2);
+    let tree = login_tree(&mut v[0]);
+    let s = snapshot_of(&mut v[0], dir.path(), "s1");
+    v[1].merge_snapshot(&s).unwrap();
+
+    // Moved to the root on one device: nothing to inherit there.
+    let moved = Connection { folder_id: None, ..tree.inheriting.clone() };
+    v[1].put(&moved).unwrap();
+    // Production deleted on the other: Web is orphaned and Production's login no longer applies.
+    v[0].delete::<Folder>(tree.production.id).unwrap();
+    let (a, b) = (snapshot_of(&mut v[0], dir.path(), "a"), snapshot_of(&mut v[1], dir.path(), "b"));
+    v[0].merge_snapshot(&b).unwrap();
+    v[1].merge_snapshot(&a).unwrap();
+    assert_eq!(v[0].digest().unwrap(), v[1].digest().unwrap());
+    for vault in &mut v {
+        assert_eq!(vault.with_inherited_login(moved.clone()).unwrap(), moved);
+        assert_eq!(vault.inherited_login(Some(tree.web.id)).unwrap(), None);
+    }
+}
+
+/// Rewrites the plain vault file at `path` into what rmx wrote before folder logins existed.
+fn make_schema_v1(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE folder_logins;
+         UPDATE meta SET value = '1' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+}
+
+fn schema_version(path: &std::path::Path) -> String {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn an_old_schema_database_opens_and_merges() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new.rmxdb");
+    let mut new = Vault::create_plain(&path).unwrap();
+    let folder = Folder { name: "kept".to_owned(), ..Default::default() };
+    new.put(&folder).unwrap();
+    let old_path = snapshot_of(&mut new, dir.path(), "old.rmxdb");
+    make_schema_v1(&old_path);
+    assert_eq!(schema_version(&old_path), "1");
+
+    // A copy from a device not yet upgraded merges, adding nothing, and folder logins stay.
+    new.put(&FolderLogin { username: Some("u".to_owned()), ..FolderLogin::new(folder.id) })
+        .unwrap();
+    assert!(!new.merge_snapshot(&old_path).unwrap().changed);
+    assert!(new.get::<FolderLogin>(folder.id).unwrap().is_some());
+
+    // An old working copy opens, is upgraded in place, and takes folder logins.
+    let mut old = Vault::open_plain(&old_path).unwrap();
+    assert_eq!(old.get::<Folder>(folder.id).unwrap().unwrap(), folder);
+    assert!(old.list::<FolderLogin>().unwrap().is_empty());
+    old.put(&FolderLogin { username: Some("v".to_owned()), ..FolderLogin::new(folder.id) })
+        .unwrap();
+    drop(old);
+    assert_eq!(schema_version(&old_path), rmx_vault::SCHEMA_VERSION.to_string());
+}
+
+#[test]
+fn an_old_and_a_new_replica_with_the_same_rows_agree() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut new = Vault::create_plain(&dir.path().join("new.rmxdb")).unwrap();
+    new.put(&Folder { name: "a".to_owned(), ..Default::default() }).unwrap();
+    let before = new.digest().unwrap();
+    let old_path = snapshot_of(&mut new, dir.path(), "old.rmxdb");
+    make_schema_v1(&old_path);
+    // Nothing to send: a sync would not upload just to add an empty table.
+    assert!(!new.merge_snapshot(&old_path).unwrap().changed);
+    assert_eq!(new.digest().unwrap(), before);
+    let mut old = Vault::open_plain(&old_path).unwrap();
+    assert_eq!(old.digest().unwrap(), before);
+}
+
+#[test]
+fn a_newer_schema_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = Vault::create_plain(&dir.path().join("v.rmxdb")).unwrap();
+    let future = snapshot_of(&mut vault, dir.path(), "future.rmxdb");
+    let conn = rusqlite::Connection::open(&future).unwrap();
+    conn.execute("UPDATE meta SET value = '99' WHERE key = 'schema_version'", []).unwrap();
+    drop(conn);
+    assert!(matches!(
+        vault.merge_snapshot(&future),
+        Err(rmx_vault::Error::UnsupportedFormat { found: 99, .. })
+    ));
+    drop(vault);
+    assert!(matches!(
+        Vault::open_plain(&future),
+        Err(rmx_vault::Error::UnsupportedFormat { found: 99, .. })
+    ));
 }
