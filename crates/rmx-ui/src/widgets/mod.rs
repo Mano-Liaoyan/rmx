@@ -5,6 +5,7 @@ pub mod controls;
 pub mod empty;
 pub mod files;
 pub mod host_key;
+pub mod import_preview;
 pub mod new_connection;
 pub mod overlay;
 pub mod pane_bar;
@@ -31,6 +32,7 @@ pub use files::{
     TransferRow, TransferRowState, file_row_point, files_edges, files_fold_point, files_pane,
 };
 pub use host_key::{HostKeyStatus, HostKeyView, host_key_body, host_key_dialog};
+pub use import_preview::{ImportPreviewState, ImportProblem, ImportRow, import_preview_dialog};
 pub use new_connection::{
     AuthKind, ConnectionDraft, InheritedLogin, NewConnectionState, RdpQuality, RdpSecurity,
     ScaleChoice, SerialPortChoice, SessionLogging, VncColors, is_rustdesk_address,

@@ -34,6 +34,12 @@ pub(super) enum Reply {
     VaultRemotePassword,
     /// Nothing to do: the dialog only told something.
     Acknowledge,
+    /// Read the `.rdp` files at the paths typed.
+    ImportPaths,
+    /// The import preview: the connections it would make, in its order.
+    Import(Vec<ConnectionDraft>),
+    /// Write this connection as an `.rdp` file at the path typed.
+    ExportRdp(u64),
 }
 
 impl At<'_> {
@@ -277,7 +283,19 @@ impl At<'_> {
                     });
                 }
             },
-            Reply::Acknowledge => {},
+            // Cancelled: [`At::confirm_import`] takes the drafts when it goes ahead.
+            Reply::Acknowledge | Reply::Import(_) => {},
+            Reply::ImportPaths => {
+                if let Some(text) = &first {
+                    self.read_rdp_files(import::typed_paths(text));
+                }
+            },
+            Reply::ExportRdp(node) => {
+                if let Some(path) = first.filter(|path| !path.is_empty()) {
+                    let path = import::typed_paths(&path).pop().unwrap_or_default();
+                    self.core.vault.send(Request::ExportRdp { node, path });
+                }
+            },
             Reply::DeleteConnection(node) => {
                 if fields.is_some() {
                     self.core.vault.send(Request::DeleteConnection(node));

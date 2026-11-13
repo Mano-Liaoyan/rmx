@@ -57,7 +57,7 @@ a bastion is one setting away.
 - Quick open (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) finds any saved connection or
   command as you type.
 - A sidebar tree of your connections, with folders and live status. Hosts from `~/.ssh/config`
-  come in with one click.
+  come in with one click, and `.rdp` files from mstsc and other managers through a preview.
 - Dark and light themes, both drawn by rmx itself, so it looks the same on every platform.
 - Closing a pane, tab or window that would end live sessions asks first, naming them. Tick
   "Don't ask again", or turn it off and on in Settings.

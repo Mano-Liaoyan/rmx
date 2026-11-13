@@ -371,6 +371,17 @@ pub enum UiAction {
     SnippetSend(u64),
     /// Read the user's `~/.ssh/config` into the vault.
     ImportSshConfig,
+    /// Ask for `.rdp` files to import.
+    ImportRdpAsk,
+    /// Create what the import preview lists, the rows ticked in `include`, in this group.
+    ImportConfirm {
+        group: String,
+        include: Vec<bool>,
+    },
+    /// Ask where to write this RDP connection as an `.rdp` file.
+    TreeExportRdp(NodeId),
+    /// Show what the sidebar's add button offers, under this point.
+    SidebarAddMenu(Pos2),
     PaneSplitRight(PaneId),
     PaneSplitDown(PaneId),
     /// The user took hold of a pane by its bar: follow the primary button until it is up.

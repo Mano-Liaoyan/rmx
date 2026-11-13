@@ -84,6 +84,7 @@ const VNC_CLIPBOARD_NOTICE: &str = "VNC can only carry ASCII clipboard text: thi
 mod actions;
 mod display;
 mod handler;
+mod import;
 mod keys;
 mod lifecycle;
 mod logging;
@@ -126,6 +127,8 @@ pub enum AppEvent {
     Vault(VaultEvent),
     /// The log of a pane, to the file at this path, has stopped for this reason.
     LogFailed(PaneId, std::path::PathBuf, String),
+    /// `.rdp` files have been read, for the import preview.
+    RdpFiles(Vec<crate::rdp_file::ImportedFile>),
 }
 
 struct ProxySink(EventLoopProxy<AppEvent>);

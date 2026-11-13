@@ -1,0 +1,2 @@
+# Sample .rdp files keep the bytes mstsc writes: UTF-16, CRLF.
+*.rdp binary

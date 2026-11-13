@@ -299,6 +299,12 @@ impl Running {
                         .as_ref()
                         .map_or_else(String::new, |path| path.display().to_string());
                 }
+                // An import cannot be saved behind the lock: it is given up on.
+                if self.core.ui.locked() && matches!(self.core.answer, Some((Reply::Import(_), _)))
+                {
+                    self.core.answer = None;
+                    self.core.ui.asking = None;
+                }
                 self.core.ui.asking_hidden =
                     self.core.ui.locked() && matches!(self.core.answer, Some((_, Some(_))));
                 self.core.ui.vault_busy = false;

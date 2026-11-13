@@ -9,11 +9,12 @@ use rmx_ui::theme::{self, PANE_BAR_HEIGHT, STRIP_HEIGHT, TREE_ROW_HEIGHT};
 use rmx_ui::virtual_list::{self, window};
 use rmx_ui::widgets::tabs::{TAB_GAP, drop_index, preview_slot, slot_x, tab_width};
 use rmx_ui::widgets::{
-    ConnectionDraft, InheritedLogin, NewConnectionState, NodeKind, PaneBarView, PaneStatus, Panels,
-    PromptState, QuickItem, QuickOpenState, Reveal, SettingsDraft, SettingsState, SettingsView,
-    SyncDraft, TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState,
-    connection_tree, new_connection_dialog, pane_bar, prompt_dialog, quick_open, settings_dialog,
-    tab_strip, title_bar,
+    ConnectionDraft, ImportPreviewState, ImportProblem, ImportRow, InheritedLogin,
+    NewConnectionState, NodeKind, PaneBarView, PaneStatus, Panels, PromptState, QuickItem,
+    QuickOpenState, Reveal, SettingsDraft, SettingsState, SettingsView, SyncDraft, TabStripState,
+    TabView, TitleBarView, TreeModel, TreeNode, TreeState, connection_tree, import_preview_dialog,
+    new_connection_dialog, pane_bar, prompt_dialog, quick_open, settings_dialog, tab_strip,
+    title_bar,
 };
 use rmx_ui::{NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction};
 
@@ -836,4 +837,77 @@ fn settings_turn_the_question_before_closing_off_and_on() {
     let action = harness.click(*save, &mut draw);
     let Some(UiAction::SettingsSave(draft)) = action else { panic!("{action:?}") };
     assert!(!draft.confirm_close);
+}
+
+fn import_state() -> ImportPreviewState {
+    let row = |name: &str, notes: Vec<String>| ImportRow {
+        name: name.into(),
+        protocol: Protocol::Rdp,
+        detail: format!("{name}.example:3389 as alice"),
+        notes,
+        include: true,
+    };
+    let mut state = ImportPreviewState::new("Import .rdp files", "RDP files");
+    state.rows = vec![
+        row("web", vec!["Not used by rmx: audiomode, redirectprinters".into()]),
+        row("db", Vec::new()),
+    ];
+    state.problems =
+        vec![ImportProblem { source: "broken.rdp".into(), reason: "It has no address".into() }];
+    state
+}
+
+fn key(key: egui::Key) -> Event {
+    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn the_import_preview_lists_what_it_creates_skips_and_could_not_read() {
+    let mut harness = Harness::new();
+    let mut state = import_state();
+    let ctx = harness.ctx.clone();
+    // Past appearing, which starts it see-through.
+    for _ in 0..12 {
+        harness.frame(vec![], |_| import_preview_dialog(&ctx, &mut state));
+    }
+    let texts = painted_text(&mut harness, |_| {
+        import_preview_dialog(&ctx, &mut state);
+    });
+    for expected in [
+        "web",
+        "db.example:3389 as alice",
+        "Not used by rmx: audiomode, redirectprinters",
+        "broken.rdp: It has no address",
+        "Import 2",
+    ] {
+        assert!(texts.iter().any(|text| text.contains(expected)), "{expected} in {texts:?}");
+    }
+}
+
+#[test]
+fn the_import_preview_creates_what_is_ticked_in_the_group_typed() {
+    let mut harness = Harness::new();
+    let mut state = import_state();
+    state.group = "Imported/Windows".into();
+    state.rows[0].include = false;
+    let ctx = harness.ctx.clone();
+    harness.frame(vec![], |_| import_preview_dialog(&ctx, &mut state));
+    let action =
+        harness.frame(vec![key(egui::Key::Enter)], |_| import_preview_dialog(&ctx, &mut state));
+    assert_eq!(
+        action,
+        Some(UiAction::ImportConfirm {
+            group: "Imported/Windows".into(),
+            include: vec![false, true]
+        })
+    );
+
+    // With nothing ticked there is nothing to import, and Escape says no.
+    state.rows[1].include = false;
+    let action =
+        harness.frame(vec![key(egui::Key::Enter)], |_| import_preview_dialog(&ctx, &mut state));
+    assert_eq!(action, None);
+    let action =
+        harness.frame(vec![key(egui::Key::Escape)], |_| import_preview_dialog(&ctx, &mut state));
+    assert_eq!(action, Some(UiAction::PromptCancel));
 }

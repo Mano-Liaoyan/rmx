@@ -139,6 +139,13 @@ pub enum Request {
     SaveSettings(Box<SettingsDraft>),
     SyncNow,
     ImportSshConfig,
+    /// Save these connections, as an import's preview had them.
+    ImportConnections(Vec<ConnectionDraft>),
+    /// Write the RDP connection `node` as an `.rdp` file at `path`.
+    ExportRdp {
+        node: u64,
+        path: PathBuf,
+    },
     Plan {
         node: u64,
         reply: oneshot::Sender<Result<ConnectPlan, String>>,
@@ -799,6 +806,8 @@ impl Actor {
                 Ok(Some("Folder login cleared".to_owned()))
             },
             Request::ImportSshConfig => self.import_ssh_config().map(Some),
+            Request::ImportConnections(drafts) => self.import_connections(&drafts).map(Some),
+            Request::ExportRdp { node, path } => self.export_rdp(node, &path).map(Some),
             _ => Ok(None),
         }
     }
@@ -1361,6 +1370,30 @@ impl Actor {
         let imported = import_hosts(self.open()?, &config)?;
         let noun = if imported == 1 { "host" } else { "hosts" };
         Ok(format!("Imported {imported} {noun} from ~/.ssh/config"))
+    }
+
+    /// Save each of `drafts` as a new connection, saying how many were.
+    fn import_connections(&mut self, drafts: &[ConnectionDraft]) -> Result<String, String> {
+        for draft in drafts {
+            self.save_connection(draft)?;
+        }
+        let noun = if drafts.len() == 1 { "connection" } else { "connections" };
+        let group = drafts.first().map_or("", |draft| draft.group.trim());
+        Ok(if group.is_empty() {
+            format!("Imported {} {noun}", drafts.len())
+        } else {
+            format!("Imported {} {noun} into {group}", drafts.len())
+        })
+    }
+
+    fn export_rdp(&mut self, node: u64, path: &Path) -> Result<String, String> {
+        let draft = self.draft_of(node)?;
+        if draft.protocol != Protocol::Rdp {
+            return Err("Only RDP connections can be saved as .rdp files".to_owned());
+        }
+        std::fs::write(path, crate::rdp_file::export(&draft))
+            .map_err(|err| format!("Could not write {}: {err}", path.display()))?;
+        Ok(format!("Saved {}", path.display()))
     }
 
     fn load_settings(&mut self, theme: ThemeMode) -> Result<SettingsDraft, String> {

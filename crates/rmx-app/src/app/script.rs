@@ -139,6 +139,12 @@ impl At<'_> {
             C::Unlocked => self.core.ui.gate == Gate::Open,
             C::HostKey => matches!(self.core.ui.asking, Some(Asking::HostKey(_))),
             C::Prompt => matches!(self.core.ui.asking, Some(Asking::Fields(_))),
+            C::Import(count) => {
+                matches!(&self.core.ui.asking, Some(Asking::Import(state)) if state.rows.len() == *count)
+            },
+            C::Host(label, host) => {
+                self.core.ui.nodes.values().any(|node| node.name == *label && node.host == *host)
+            },
             C::Live => matches!(link(), Some(Link::Live)),
             C::Closed => matches!(link(), Some(Link::Closed { .. })),
             C::Failed => matches!(link(), Some(Link::Failed { .. })),
@@ -345,6 +351,12 @@ impl App {
                 }
             },
             Some(Step::Theme(mode)) => at.core.ops.push(Op::SetTheme(mode)),
+            Some(Step::ImportConfirm(group)) => {
+                if let Some(Asking::Import(state)) = &at.core.ui.asking {
+                    let include = vec![true; state.rows.len()];
+                    at.ui_action(UiAction::ImportConfirm { group, include });
+                }
+            },
             Some(Step::Edit(label)) => {
                 if let Some(node) = at.node_labelled(&label) {
                     at.core.vault.send(Request::EditConnection(node));

@@ -636,7 +636,7 @@ pub fn sidebar(
     let new = ui.interact(new_rect, id.with("new"), Sense::click());
     paint_icon_button(ui, new_rect, icons::PLUS, 14., &new);
     if new.clicked() {
-        action = Some(UiAction::NewConnection);
+        action = Some(UiAction::SidebarAddMenu(new_rect.left_bottom() + vec2(0., 4.)));
     }
 
     let list = Rect::from_min_max(

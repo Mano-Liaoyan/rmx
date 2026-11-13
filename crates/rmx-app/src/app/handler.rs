@@ -71,6 +71,11 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             },
             AppEvent::Vault(event) => running.vault_event(event),
+            AppEvent::RdpFiles(files) => {
+                if let Some(mut at) = running.at_active() {
+                    at.preview_rdp_files(files);
+                }
+            },
             AppEvent::LogFailed(id, path, why) => {
                 if let Some(mut at) = running.at_pane(id) {
                     at.log_failed(id, &path, why);
@@ -380,6 +385,13 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseWheel { delta, .. } if !consumed => {
                 at.wheel(delta, self.modifiers);
             },
+            // Each file of a drop comes on its own; the preview gathers them.
+            WindowEvent::DroppedFile(path)
+                if !at.core.ui.locked() && crate::rdp_file::is_rdp(&path) =>
+            {
+                at.core.active = at.win.key;
+                at.read_rdp_files(vec![path]);
+            },
             _ => (),
         }
     }
@@ -463,5 +475,6 @@ fn app_event_name(event: &AppEvent) -> &'static str {
         AppEvent::SerialPorts(_) => "serial-ports",
         AppEvent::Vault(_) => "vault",
         AppEvent::LogFailed(..) => "log-failed",
+        AppEvent::RdpFiles(_) => "rdp-files",
     }
 }
