@@ -316,7 +316,14 @@ fn non_empty(text: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
+/// A typed path, `~/` taken as the home directory. Quotes around the whole path are dropped, as
+/// Windows Explorer's "Copy as path" adds them and no file name holds them there.
 fn expand_home(path: &str) -> PathBuf {
+    let path = path.trim();
+    let path = ['"', '\'']
+        .iter()
+        .find_map(|quote| path.strip_prefix(*quote)?.strip_suffix(*quote))
+        .map_or(path, str::trim);
     match (path.strip_prefix("~/"), std::env::home_dir()) {
         (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(path),
@@ -1367,7 +1374,7 @@ impl Actor {
         let path = home.join(".ssh/config");
         let config = rmx_ssh::ssh_config::SshConfig::load(&path)
             .map_err(|err| format!("Could not read {}: {err}", path.display()))?;
-        let imported = import_hosts(self.open()?, &config)?;
+        let imported = import_hosts(self.open()?, &config, &home)?;
         let noun = if imported == 1 { "host" } else { "hosts" };
         Ok(format!("Imported {imported} {noun} from ~/.ssh/config"))
     }
@@ -2224,10 +2231,18 @@ fn folder_path(folders: &[Folder], mut at: Option<Id>) -> String {
     parts.join("/")
 }
 
+/// The key files OpenSSH offers when a host names none, in the order it tries them.
+const DEFAULT_KEYS: [&str; 3] = ["id_rsa", "id_ecdsa", "id_ed25519"];
+
 /// Write the hosts of `config` into the vault. Doing it twice changes nothing.
+///
+/// Each host's key is copied into the vault, so the connection still logs in on machines
+/// that sync the vault but lack the file. That is the first `IdentityFile` that can be read,
+/// or with none named, the first of OpenSSH's default keys in `home`'s `.ssh`.
 fn import_hosts(
     vault: &mut Vault,
     config: &rmx_ssh::ssh_config::SshConfig,
+    home: &Path,
 ) -> Result<usize, String> {
     let folder = Folder {
         id: Id::derived(&["ssh_config", "folder"]),
@@ -2248,6 +2263,18 @@ fn import_hosts(
                 host.identity_files.iter().map(|p| p.display().to_string()).collect();
             settings.insert("identity_files".to_owned(), files.join("\n"));
         }
+        let key_files = if host.identity_files.is_empty() {
+            DEFAULT_KEYS.iter().map(|name| home.join(".ssh").join(name)).collect()
+        } else {
+            host.identity_files.clone()
+        };
+        let ssh_key_id = match key_files.iter().find(|path| path.is_file()) {
+            Some(path) => {
+                let id = Id::derived(&["ssh_config", "key", &path.display().to_string()]);
+                Some(ingest_key(vault, path, Some(id))?)
+            },
+            None => None,
+        };
 
         // `ProxyJump a,b`: b is reached through a. Hops that are not aliases get rows of their own.
         let mut previous = None;
@@ -2281,6 +2308,7 @@ fn import_hosts(
             port: host.port,
             username: host.user.clone(),
             jump_connection_id: previous,
+            ssh_key_id,
             options: (!settings.is_empty()).then(|| options::encode(&settings)),
             ..Default::default()
         };
@@ -2528,9 +2556,11 @@ mod tests {
             "Host web\n  HostName 10.0.0.1\n  User deploy\n  ProxyJump bastion\n\
              Host bastion\n  HostName 10.0.0.2\n  Port 2200\n",
         );
-        assert_eq!(import_hosts(&mut vault, &config).unwrap(), 2);
+        let home = dir.path().join("home");
+        write_key(&home.join(".ssh/id_ed25519"), "default");
+        assert_eq!(import_hosts(&mut vault, &config, &home).unwrap(), 2);
         let digest = vault.digest().unwrap();
-        assert_eq!(import_hosts(&mut vault, &config).unwrap(), 2);
+        assert_eq!(import_hosts(&mut vault, &config, &home).unwrap(), 2);
         assert_eq!(vault.digest().unwrap(), digest);
 
         let rows = vault.list::<Connection>().unwrap();
@@ -2538,6 +2568,60 @@ mod tests {
         let bastion = rows.iter().find(|row| row.name == "bastion").unwrap();
         assert_eq!(web.jump_connection_id, Some(bastion.id));
         assert_eq!(bastion.port, Some(2200));
+        assert_eq!(vault.list::<SshKey>().unwrap().len(), 1, "both share one copy of the key");
+    }
+
+    fn write_key(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("PRIVATE {text}")).unwrap();
+        std::fs::write(path.with_extension("pub"), format!("ssh-ed25519 PUBLIC {text}")).unwrap();
+    }
+
+    fn imported_key(vault: &mut Vault, alias: &str) -> Option<SshKey> {
+        let rows = vault.list::<Connection>().unwrap();
+        let row = rows.iter().find(|row| row.name == alias).unwrap();
+        row.ssh_key_id.map(|id| vault.get::<SshKey>(id).unwrap().unwrap())
+    }
+
+    #[test]
+    fn an_imported_host_carries_its_key_in_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let home = dir.path().join("home");
+        let deploy = dir.path().join("keys/deploy");
+        write_key(&deploy, "deploy");
+        write_key(&home.join(".ssh/id_ed25519"), "default");
+        let config = rmx_ssh::ssh_config::SshConfig::parse(&format!(
+            "Host named\n  IdentityFile {missing}\n  IdentityFile {deploy}\n\
+             Host plain\n  HostName 10.0.0.3\n",
+            missing = dir.path().join("keys/gone").display(),
+            deploy = deploy.display(),
+        ));
+        import_hosts(&mut vault, &config, &home).unwrap();
+
+        let named = imported_key(&mut vault, "named").expect("the first key that exists");
+        assert_eq!(named.private_key.expose(), "PRIVATE deploy");
+        assert_eq!(named.public_key, "ssh-ed25519 PUBLIC deploy");
+        let plain = imported_key(&mut vault, "plain").expect("OpenSSH's default key");
+        assert_eq!(plain.private_key.expose(), "PRIVATE default");
+    }
+
+    #[test]
+    fn a_pasted_path_loses_its_quotes() {
+        let path = r"C:\Users\me\.ssh\id_ed25519";
+        assert_eq!(expand_home(&format!("\"{path}\"")), PathBuf::from(path));
+        assert_eq!(expand_home(&format!(" '{path}' ")), PathBuf::from(path));
+        assert_eq!(expand_home(path), PathBuf::from(path));
+        assert_eq!(expand_home("\"half"), PathBuf::from("\"half"), "one quote alone is kept");
+    }
+
+    #[test]
+    fn a_host_with_no_key_file_on_disk_imports_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = plain_vault(&dir);
+        let config = rmx_ssh::ssh_config::SshConfig::parse("Host bare\n  HostName 10.0.0.4\n");
+        import_hosts(&mut vault, &config, &dir.path().join("home")).unwrap();
+        assert!(imported_key(&mut vault, "bare").is_none());
     }
 
     fn plain(password: &str, key_file: Option<&str>, agreed: bool) -> Result<bool, String> {
