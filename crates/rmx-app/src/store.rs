@@ -1744,14 +1744,19 @@ fn clock_now() -> String {
         .map_or_else(String::new, |local| format!("{:02}:{:02}", local.hour, local.minute))
 }
 
+/// What a sync did, then when: the narrow foot of the sidebar keeps the outcome when it has to
+/// cut the line short.
 fn describe_report(report: &SyncReport) -> String {
     let what = match (report.changed_locally, report.pushed) {
-        (true, true) => "merged and pushed",
-        (true, false) => "merged",
-        (false, true) => "pushed",
-        (false, false) => "up to date",
+        (true, true) => "Merged and pushed",
+        (true, false) => "Merged",
+        (false, true) => "Pushed",
+        (false, false) => "Up to date",
     };
-    format!("Synced at {}, {what}", clock_now())
+    match clock_now() {
+        now if now.is_empty() => what.to_owned(),
+        now => format!("{what} · {now}"),
+    }
 }
 
 /// Rename, or copy and remove where the two are on different filesystems.

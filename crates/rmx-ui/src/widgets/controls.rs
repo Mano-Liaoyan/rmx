@@ -116,6 +116,23 @@ pub(crate) fn paint_icon_button(ui: &Ui, rect: Rect, glyph: char, size: f32, res
     icon(painter, rect.center(), glyph, size, color);
 }
 
+/// A button that closes something: an ✕ that turns white on red under the pointer, as window
+/// managers draw it, so that it never reads as just another control.
+pub(crate) fn paint_close_button(ui: &Ui, rect: Rect, size: f32, response: &Response) {
+    let p = palette(ui);
+    let painter = ui.painter();
+    let color = if response.is_pointer_button_down_on() {
+        painter.rect_filled(rect, CornerRadius::same(RADIUS_SM), p.danger.gamma_multiply(0.8));
+        Color32::WHITE
+    } else if response.hovered() {
+        painter.rect_filled(rect, CornerRadius::same(RADIUS_SM), p.danger);
+        Color32::WHITE
+    } else {
+        p.muted_fg
+    };
+    icon(painter, rect.center(), icons::X, size, color);
+}
+
 /// A tick box with its label, filling `rect`. Clicking anywhere in it toggles `checked`.
 pub fn checkbox(ui: &mut Ui, rect: Rect, salt: Id, checked: &mut bool, label: &str) -> Response {
     const SIDE: f32 = 16.;
