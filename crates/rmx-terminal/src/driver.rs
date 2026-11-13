@@ -34,6 +34,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::scan::{Found, Scanner};
+use crate::tap::{Direction, Taps};
 use crate::transport::{
     CloseReason, SessionEvent, TransportReader, TransportWriter, WorkingDirectory,
 };
@@ -241,6 +242,7 @@ pub(crate) fn start<R, W, L>(
     runtime: &Handle,
     parser: Parser<L>,
     size: WindowSize,
+    taps: Arc<Taps>,
 ) -> io::Result<Remote>
 where
     R: TransportReader,
@@ -254,19 +256,20 @@ where
     let (input, input_rx) = mpsc::unbounded_channel();
     let (size_tx, size_rx) = watch::channel(size);
     let track = |task: JoinHandle<()>| channel.track(task.abort_handle());
-    track(runtime.spawn(read_loop(reader, channel.clone())));
+    track(runtime.spawn(read_loop(reader, channel.clone(), taps)));
     track(runtime.spawn(write_loop(writer.clone(), input_rx, channel.clone())));
     track(runtime.spawn(resize_loop(writer, size_rx, channel.clone())));
 
     Ok(Remote { input, size: Arc::new(size_tx), channel })
 }
 
-async fn read_loop<R: TransportReader>(mut reader: R, channel: Arc<Channel>) {
+async fn read_loop<R: TransportReader>(mut reader: R, channel: Arc<Channel>, taps: Arc<Taps>) {
     loop {
         let replace_oldest = channel.wait_for_room().await;
         match reader.read().await {
             Ok(chunk) if chunk.is_empty() => {},
             Ok(chunk) => {
+                taps.output.send_with(Direction::Output, || chunk.clone());
                 if !channel.push(chunk, replace_oldest) {
                     return;
                 }
