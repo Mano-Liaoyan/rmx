@@ -54,6 +54,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const PASSWORD_ATTEMPTS: u32 = 3;
 /// The `known_hosts` type of a pinned RDP server certificate, by its SHA-256.
 const RDP_PIN_TYPE: &str = "rdp-tls-sha256";
+/// The `known_hosts` type of a pinned VNC (VeNCrypt) server certificate.
+const VNC_PIN_TYPE: &str = "vnc-tls-sha256";
 /// The `known_hosts` type of a pinned FTPS server certificate.
 const FTPS_PIN_TYPE: &str = "ftps-tls-sha256";
 /// The smallest remote desktop to ask for: RDP refuses less.
@@ -138,6 +140,8 @@ pub enum LinkEvent {
     Logging(SessionLogging),
     /// How many port forwards run, and what went wrong with the others.
     Forwards(u32, Vec<String>),
+    /// The session about to be ready crosses the network unencrypted.
+    Unencrypted,
 }
 
 /// How a pane reaches the main thread.
@@ -1112,45 +1116,77 @@ async fn run_vnc(
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let ConnectPlan { endpoint, jumps, holds, scale, follow_size, vnc_colors, .. } = plan;
-    let Endpoint { host, port, password, .. } = endpoint;
+    let Endpoint { host, port, user, password, .. } = endpoint;
     let color_depth = match vnc_colors {
         VncColors::Full => rmx_vnc::ColorDepth::Full,
         VncColors::Bits16 => rmx_vnc::ColorDepth::Bits16,
         VncColors::Bits8 => rmx_vnc::ColorDepth::Bits8,
     };
     reporter.send(LinkEvent::Target(format!("{host}:{port}")));
+    let mut username = Some(user).filter(|user| !user.is_empty());
     let mut password = password.map(|secret| secret.expose().to_owned());
 
     let setup = async {
-        let tunnel = open_tunnel(reporter, jumps, vault).await?;
+        let tunnel = open_tunnel(reporter, jumps, vault.clone()).await?;
         drop(holds);
         reporter.send(LinkEvent::Stage("Starting the session".to_owned()));
         for attempt in 0..PASSWORD_ATTEMPTS {
             let stream = open_stream(tunnel.as_ref(), &host, port).await?;
+            let (prompts_tx, prompts) = mpsc::channel(1);
             let config = rmx_vnc::Config {
+                server_name: host.clone(),
+                username: username.clone(),
                 password: password.clone(),
+                // Asking is the only way a certificate is judged here: nothing is accepted unseen.
+                certificate: rmx_vnc::CertificatePolicy::Ask(prompts_tx),
                 color_depth,
                 ..rmx_vnc::Config::default()
             };
+            let judge = judge_certificates(
+                reporter.clone(),
+                vault.clone(),
+                VNC_PIN_TYPE,
+                host.clone(),
+                port,
+                prompts,
+            );
             let connect = tokio::time::timeout(CONNECT_TIMEOUT, rmx_vnc::connect(stream, config));
-            let result = connect.await.map_err(|_| "the server did not answer".to_owned())?;
-            match result {
-                Ok(handle) => return Ok::<_, String>((handle, tunnel)),
+            tokio::pin!(judge);
+            tokio::pin!(connect);
+            let result = tokio::select! {
+                result = &mut connect => result,
+                () = &mut judge => connect.await,
+            };
+            let result = result.map_err(|_| "the server did not answer".to_owned())?;
+            let login = match result {
+                Ok(session) => {
+                    // Through SSH it is encrypted where it matters most, across the network.
+                    if !session.security.encrypted() && tunnel.is_none() {
+                        reporter.send(LinkEvent::Unencrypted);
+                    }
+                    return Ok::<_, String>((session.display, tunnel));
+                },
                 Err(
                     rmx_vnc::ConnectError::PasswordRequired | rmx_vnc::ConnectError::WrongPassword,
-                ) => {
-                    let title = format!("VNC password for {host}");
-                    let detail = retry_note(attempt + 1);
-                    let labels = vec![("Password".to_owned(), true)];
-                    let answer =
-                        ask(&reporter.proxy, Some(reporter.pane), title, detail, labels).await;
-                    let Some(typed) = answer.and_then(|answers| answers.into_iter().next()) else {
-                        return Err("A password is needed".to_owned());
-                    };
-                    password = Some(typed.expose().to_owned());
+                ) => false,
+                Err(
+                    rmx_vnc::ConnectError::LoginRequired | rmx_vnc::ConnectError::LoginRejected(_),
+                ) => true,
+                Err(rmx_vnc::ConnectError::CertificateRejected) => {
+                    return Err("The server's certificate was not trusted".to_owned());
                 },
                 Err(err) => return Err(err.to_string()),
+            };
+            let (title, labels) = vnc_login_prompt(&host, login);
+            let detail = retry_note(attempt + 1);
+            let answer = ask(&reporter.proxy, Some(reporter.pane), title, detail, labels).await;
+            let mut answers = answer.unwrap_or_default().into_iter();
+            if login {
+                let typed = answers.next().ok_or("A user name is needed")?;
+                username = Some(typed.expose().to_owned()).filter(|user| !user.is_empty());
             }
+            let typed = answers.next().ok_or("A password is needed")?;
+            password = Some(typed.expose().to_owned());
         }
         Err("The password was not accepted".to_owned())
     };
@@ -1163,22 +1199,51 @@ async fn run_vnc(
     Ok(())
 }
 
-/// Judge the server certificates a session presents.
-async fn judge_certificates(
+/// What to ask for a VNC server: a password, or with `login` a user name too.
+fn vnc_login_prompt(host: &str, login: bool) -> (String, Vec<(String, bool)>) {
+    if login {
+        let labels = vec![("User name".to_owned(), false), ("Password".to_owned(), true)];
+        (format!("VNC login for {host}"), labels)
+    } else {
+        (format!("VNC password for {host}"), vec![("Password".to_owned(), true)])
+    }
+}
+
+/// A server certificate a session waits to have judged.
+trait CertificateQuestion {
+    /// Its SHA-256, and where the verdict goes.
+    fn into_parts(self) -> ([u8; 32], oneshot::Sender<bool>);
+}
+
+impl CertificateQuestion for CertificatePrompt {
+    fn into_parts(self) -> ([u8; 32], oneshot::Sender<bool>) {
+        (self.sha256, self.answer)
+    }
+}
+
+impl CertificateQuestion for rmx_vnc::CertificatePrompt {
+    fn into_parts(self) -> ([u8; 32], oneshot::Sender<bool>) {
+        (self.sha256, self.answer)
+    }
+}
+
+/// Judge the server certificates a session presents, against those pinned as `pin_type`.
+async fn judge_certificates<P: CertificateQuestion>(
     reporter: Reporter,
     vault: VaultHandle,
+    pin_type: &str,
     host: String,
     port: u16,
-    mut prompts: mpsc::Receiver<CertificatePrompt>,
+    mut prompts: mpsc::Receiver<P>,
 ) {
     while let Some(prompt) = prompts.recv().await {
-        let CertificatePrompt { sha256, answer, .. } = prompt;
-        let known = known_keys(&vault, &host, port, RDP_PIN_TYPE).await;
+        let (sha256, answer) = prompt.into_parts();
+        let known = known_keys(&vault, &host, port, pin_type).await;
         if known.iter().any(|pin| pin == &hex(&sha256)) {
             let _ = answer.send(true);
             continue;
         }
-        let trusted = ask_certificate(&reporter, &vault, RDP_PIN_TYPE, &host, port, &sha256).await;
+        let trusted = ask_certificate(&reporter, &vault, pin_type, &host, port, &sha256).await;
         let _ = answer.send(trusted.is_some());
     }
 }
@@ -1251,8 +1316,14 @@ async fn run_rdp(
             config.connect_timeout = CONNECT_TIMEOUT;
 
             let stream = open_stream(tunnel.as_ref(), &host, port).await?;
-            let judge =
-                judge_certificates(reporter.clone(), vault.clone(), host.clone(), port, prompts);
+            let judge = judge_certificates(
+                reporter.clone(),
+                vault.clone(),
+                RDP_PIN_TYPE,
+                host.clone(),
+                port,
+                prompts,
+            );
             let connect = rmx_rdp::connect(stream, config);
             tokio::pin!(judge);
             tokio::pin!(connect);
@@ -1487,6 +1558,16 @@ mod tests {
             let direct = rustdesk_target(host, 21118, Some("ignored".into()), None);
             assert_eq!(direct, rmx_rustdesk::Target::Direct { host: host.to_owned(), port: 21118 });
         }
+    }
+
+    #[test]
+    fn a_vnc_login_asks_for_the_user_name_only_when_the_server_wants_one() {
+        let (title, labels) = vnc_login_prompt("desk", false);
+        assert_eq!(title, "VNC password for desk");
+        assert_eq!(labels, [("Password".to_owned(), true)]);
+        let (title, labels) = vnc_login_prompt("desk", true);
+        assert_eq!(title, "VNC login for desk");
+        assert_eq!(labels, [("User name".to_owned(), false), ("Password".to_owned(), true)]);
     }
 
     #[test]

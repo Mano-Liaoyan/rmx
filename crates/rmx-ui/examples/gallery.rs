@@ -275,6 +275,7 @@ impl Gallery {
             zoomed: false,
             files: true,
             broadcast: Some(false),
+            unencrypted: false,
         };
         let action = pane_bar(ui, top, &bar, &mut self.bar_reveal, std::time::Instant::now());
         self.note(action);

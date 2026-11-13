@@ -592,7 +592,7 @@ mod tests {
         let (near, far) = duplex(1 << 20);
         let stream = NotSync { inner: near, _not_sync: PhantomData };
         let (server, handle) = tokio::join!(handshake(far, width, height), connect(stream, config));
-        (server, handle.unwrap())
+        (server, handle.unwrap().display)
     }
 
     async fn next_event(handle: &mut DisplayHandle) -> DisplayEvent {
@@ -867,7 +867,7 @@ mod tests {
 
         let (_far, result) = tokio::join!(server, connect(near, Config::default()));
 
-        assert_eq!(result.unwrap_err(), ConnectError::PasswordRequired);
+        assert_eq!(result.err(), Some(ConnectError::PasswordRequired));
     }
 
     #[test]

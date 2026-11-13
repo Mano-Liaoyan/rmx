@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use egui::{CornerRadius, CursorIcon, Id, Rect, Sense, Ui, Vec2, pos2};
+use egui::{Color32, CornerRadius, CursorIcon, Id, Rect, Sense, Ui, Vec2, pos2};
 
 use crate::action::{PaneId, UiAction};
 use crate::draw::{elided_at, hline, palette};
@@ -43,10 +43,17 @@ pub struct PaneBarView<'a> {
     /// Whether it is in the broadcast group, for a pane that takes typing; `None` for one that
     /// cannot join.
     pub broadcast: Option<bool>,
+    /// The session crosses the network unencrypted, which a badge says at all times.
+    pub unencrypted: bool,
 }
 
 /// What the badge of a pane in the broadcast group says.
 const BROADCAST_BADGE: &str = "Broadcast";
+/// What the badge of an unencrypted session says, and what hovering it explains.
+const UNENCRYPTED_BADGE: &str = "Not encrypted";
+const UNENCRYPTED_TIP: &str = "This session is not encrypted: anyone on the network between \
+    here and the server can see and change it. Use a server with TLS (VeNCrypt), or reach it \
+    through an SSH jump host.";
 
 /// Draw the bar of a pane in `rect`, which is [`PANE_BAR_HEIGHT`] tall.
 pub fn pane_bar(
@@ -136,15 +143,19 @@ pub fn pane_bar(
     // The name and where it goes give way smoothly as the buttons come.
     let end = rect.right() - 8. - room * shown;
     let mut start = rect.left() + 22.;
-    // In the broadcast group, a badge says so before the name, whether the pointer is there or not.
-    if view.broadcast == Some(true) {
-        let galley =
-            painter.layout_no_wrap(BROADCAST_BADGE.to_owned(), fonts::medium(TEXT_XS), p.warning);
+    // Badges say what must not go unnoticed before the name, whether the pointer is there or not.
+    let mut badge = |text: &str, color: Color32| {
+        let galley = painter.layout_no_wrap(text.to_owned(), fonts::medium(TEXT_XS), color);
         let size = galley.size() + Vec2::new(12., 2.);
         let badge = Rect::from_min_size(pos2(start, y - size.y / 2.), size);
-        painter.rect_filled(badge, CornerRadius::same(RADIUS_SM), p.warning.gamma_multiply(0.18));
-        painter.galley(badge.min + Vec2::new(6., 1.), galley, p.warning);
+        painter.rect_filled(badge, CornerRadius::same(RADIUS_SM), color.gamma_multiply(0.18));
+        painter.galley(badge.min + Vec2::new(6., 1.), galley, color);
         start = badge.right() + 8.;
+        badge
+    };
+    let unencrypted = view.unencrypted.then(|| badge(UNENCRYPTED_BADGE, p.danger));
+    if view.broadcast == Some(true) {
+        badge(BROADCAST_BADGE, p.warning);
     }
     let (font, color) = if view.focused {
         (fonts::medium(TEXT_SM), p.foreground)
@@ -158,8 +169,11 @@ pub fn pane_bar(
             pos2(start, rect.top()),
             pos2((start + title).min(end), rect.bottom()),
         );
-        let over_name = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pos| name.contains(pos));
-        if over_name && !view.tooltip.is_empty() {
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        let over = |rect: Rect| pointer.is_some_and(|pos| rect.contains(pos));
+        if unencrypted.is_some_and(over) {
+            grab.on_hover_text(UNENCRYPTED_TIP);
+        } else if over(name) && !view.tooltip.is_empty() {
             grab.on_hover_text(view.tooltip);
         }
     }

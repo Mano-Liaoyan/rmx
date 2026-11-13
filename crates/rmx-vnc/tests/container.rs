@@ -1,4 +1,4 @@
-//! Drives a real TigerVNC server in a throwaway container.
+//! Drives a real TigerVNC server in a throwaway container, plain and over VeNCrypt.
 //!
 //! Needs podman or docker and network access for `apk`. Run with:
 //!
@@ -15,7 +15,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use rmx_display::{DisplayEvent, DisplayHandle, FrameUpdate, InputEvent, Key, buttons};
-use rmx_vnc::{Config, ConnectError, connect};
+use rmx_vnc::{CertificatePolicy, Config, ConnectError, Security, Session, connect};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 
@@ -33,13 +33,23 @@ const RED_ROOT: [u8; 4] = [0x11, 0x22, 0xaa, 0xff];
 /// A point on the root window, outside the `xev` window in the top left corner.
 const ROOT_POINT: (u32, u32) = (700, 500);
 
+/// The user X509Plain logs in as, with the same password as VNC authentication.
+const PLAIN_USER: &str = "rmx";
+
 const SCRIPT: &str = r##"
 set -eu
-apk add --no-cache --quiet tigervnc xev xsetroot xclip
+apk add --no-cache --quiet tigervnc xev xsetroot xclip openssl linux-pam shadow
 printf '%s' "$VNC_PW" | vncpasswd -f > /tmp/passwd
 chmod 600 /tmp/passwd
+# A self-signed certificate, made up for the run, and a system user for X509Plain.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+    -subj /CN=rmx-test -keyout /tmp/key.pem -out /tmp/cert.pem 2>/dev/null
+adduser -D rmx
+printf 'rmx:%s\n' "$VNC_PW" | chpasswd
+printf 'auth required pam_unix.so\naccount required pam_unix.so\n' > /etc/pam.d/vnc
 unset VNC_PW
-Xvnc :1 -rfbport 5901 -SecurityTypes VncAuth -PasswordFile /tmp/passwd \
+Xvnc :1 -rfbport 5901 -SecurityTypes "$VNC_SECURITY" -PasswordFile /tmp/passwd \
+    -X509Cert /tmp/cert.pem -X509Key /tmp/key.pem -PlainUsers rmx -PAMService vnc \
     -geometry 800x600 -depth 24 -AlwaysShared >/tmp/xvnc.log 2>&1 &
 export DISPLAY=:1
 until xsetroot -solid '#336699' 2>/dev/null; do sleep 0.1; done
@@ -57,13 +67,16 @@ struct Container {
 }
 
 impl Container {
-    fn start(password: &str) -> Self {
+    /// A server offering the TigerVNC `-SecurityTypes` in `security`, in that order.
+    fn start(security: &[&str], password: &str) -> Self {
         let engine = container_engine();
         let name = format!("rmx-vnc-test-{}-{}", std::process::id(), random_hex());
         let status = Command::new(engine)
             // The password travels in the environment, so it stays out of process listings.
             .env("VNC_PW", password)
+            .env("VNC_SECURITY", security.join(","))
             .args(["run", "--detach", "--rm", "--name", &name, "--env", "VNC_PW"])
+            .args(["--env", "VNC_SECURITY"])
             .args(["--publish", "127.0.0.1::5901"])
             .args([IMAGE, "sh", "-c", SCRIPT])
             .stdout(Stdio::null())
@@ -99,6 +112,18 @@ impl Container {
         let line = mapping.lines().next().unwrap_or_default();
         assert!(line.starts_with("127.0.0.1:"), "published beyond loopback: {mapping}");
         line.rsplit(':').next().unwrap().trim().parse().expect("bad port mapping")
+    }
+
+    /// The SHA-256 of the server's certificate, as a pin.
+    fn certificate_pin(&self) -> [u8; 32] {
+        let output = self.exec("openssl x509 -in /tmp/cert.pem -outform DER | sha256sum");
+        let text = String::from_utf8_lossy(&output.stdout);
+        let hex = text.split_whitespace().next().expect("no digest");
+        let bytes: Vec<u8> = (0..64)
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("not hex"))
+            .collect();
+        bytes.try_into().expect("not a SHA-256")
     }
 
     fn xev_log(&self) -> String {
@@ -250,8 +275,12 @@ impl Viewer {
 }
 
 async fn open(port: u16, password: &str) -> Result<DisplayHandle, ConnectError> {
-    let stream = TcpStream::connect(("127.0.0.1", port)).await.expect("no route to the container");
     let config = Config { password: Some(password.to_owned()), ..Config::default() };
+    open_with(port, config).await.map(|session| session.display)
+}
+
+async fn open_with(port: u16, config: Config) -> Result<Session, ConnectError> {
+    let stream = TcpStream::connect(("127.0.0.1", port)).await.expect("no route to the container");
     timeout(WAIT, connect(stream, config)).await.expect("the handshake hung")
 }
 
@@ -274,7 +303,7 @@ fn logged_button(log: &str, button: u32) -> bool {
 #[ignore = "needs podman or docker and network access; see the module documentation"]
 async fn a_real_server_shows_pixels_and_reacts_to_input() {
     let password = random_hex();
-    let container = Container::start(&password);
+    let container = Container::start(&["VncAuth"], &password);
     let port = container.wait_until_ready();
 
     let wrong = open(port, "not-it").await;
@@ -352,4 +381,81 @@ async fn a_real_server_shows_pixels_and_reacts_to_input() {
     viewer.send(InputEvent::Disconnect).await;
     viewer.until("Closed", |v| v.closed.is_some()).await;
     assert_eq!(viewer.closed, Some(None));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs podman or docker and network access; see the module documentation"]
+async fn vencrypt_connects_only_to_the_pinned_certificate() {
+    let password = random_hex();
+    let container = Container::start(&["X509Plain", "X509Vnc", "X509None"], &password);
+    let port = container.wait_until_ready();
+    let pin = container.certificate_pin();
+    let pinned = Config { certificate: CertificatePolicy::Pinned(pin), ..Config::default() };
+
+    // Another certificate is refused before any password is sent.
+    let mut wrong_pin = pin;
+    wrong_pin[0] ^= 1;
+    let config = Config {
+        password: Some(password.clone()),
+        certificate: CertificatePolicy::Pinned(wrong_pin),
+        ..Config::default()
+    };
+    let refused = open_with(port, config).await;
+    assert!(
+        matches!(refused, Err(ConnectError::CertificateRejected)),
+        "another certificate was accepted: {:?}",
+        refused.map(|session| session.security)
+    );
+
+    let plain = Config {
+        username: Some(PLAIN_USER.to_owned()),
+        password: Some(random_hex()),
+        ..pinned.clone()
+    };
+    let rejected = open_with(port, plain).await;
+    assert!(
+        matches!(rejected, Err(ConnectError::LoginRejected(_))),
+        "a wrong login was accepted: {:?}",
+        rejected.map(|session| session.security)
+    );
+
+    // The server lists X509Plain first: with a user name it is taken, with only a password
+    // X509Vnc, and with neither X509None.
+    let logins = [
+        (Some(PLAIN_USER), Some(password.as_str()), Security::X509Plain),
+        (None, Some(password.as_str()), Security::X509Vnc),
+        (None, None, Security::X509None),
+    ];
+    for (username, password, expected) in logins {
+        let config = Config {
+            username: username.map(str::to_owned),
+            password: password.map(str::to_owned),
+            ..pinned.clone()
+        };
+        let session = open_with(port, config).await.expect("the pinned server was refused");
+        assert_eq!(session.security, expected);
+        assert!(session.security.encrypted());
+
+        let mut viewer = Viewer::new(session.display);
+        viewer
+            .until("the first full frame", |v| {
+                (v.screen.width, v.screen.height) == (WIDTH, HEIGHT) && v.screen.fully_covered()
+            })
+            .await;
+        assert_eq!(viewer.screen.pixel(ROOT_POINT), BLUE_ROOT);
+
+        // Input crosses the TLS session too.
+        viewer.send(InputEvent::Pointer { x: 123, y: 45, buttons: 0 }).await;
+        viewer
+            .wait_for_log(&container, "the pointer move", |log| log.contains("root:(123,45)"))
+            .await;
+        viewer.send(InputEvent::Pointer { x: 100, y: 120, buttons: 0 }).await;
+        viewer
+            .wait_for_log(&container, "the pointer back", |log| log.contains("root:(100,120)"))
+            .await;
+
+        viewer.send(InputEvent::Disconnect).await;
+        viewer.until("Closed", |v| v.closed.is_some()).await;
+        container.exec("truncate -s 0 /tmp/xev.log");
+    }
 }
