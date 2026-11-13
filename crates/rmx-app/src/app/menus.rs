@@ -163,6 +163,9 @@ impl At<'_> {
                 "Ctrl+Shift+V",
                 UiAction::PanePaste(id),
             ));
+            let logging = self.pane(pane).is_some_and(|found| found.log.is_some());
+            let label = if logging { "Stop logging" } else { "Log output to a file" };
+            items.push(menu_item(icons::HARD_DRIVE_UPLOAD, label, UiAction::PaneLog(id), false));
             items.push(MenuItem::Separator);
         }
         let before = items.len();

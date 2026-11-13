@@ -162,6 +162,7 @@ impl At<'_> {
                 self.focus_pane(pane);
                 self.perform(Action::Paste);
             },
+            UiAction::PaneLog(rmx_ui::PaneId(pane)) => self.toggle_log(pane),
             UiAction::PaneDragStart(rmx_ui::PaneId(pane)) => {
                 self.win.shell.start_pane_drag(&self.win.workspace, pane);
             },

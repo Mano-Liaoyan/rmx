@@ -420,6 +420,11 @@ impl App {
                     at.toggle_scale(id);
                 }
             },
+            Some(Step::ToggleLog) => {
+                if let Some(id) = at.win.workspace.focused() {
+                    at.ui_action(UiAction::PaneLog(rmx_ui::PaneId(id)));
+                }
+            },
             Some(Step::OpenFiles) => {
                 if let Some(id) = at.win.workspace.focused() {
                     at.ui_action(UiAction::PaneOpenFiles(rmx_ui::PaneId(id)));

@@ -33,7 +33,8 @@ pub use files::{
 pub use host_key::{HostKeyStatus, HostKeyView, host_key_body, host_key_dialog};
 pub use new_connection::{
     AuthKind, ConnectionDraft, NewConnectionState, RdpQuality, RdpSecurity, ScaleChoice,
-    SerialPortChoice, VncColors, is_rustdesk_address, new_connection_body, new_connection_dialog,
+    SerialPortChoice, SessionLogging, VncColors, is_rustdesk_address, new_connection_body,
+    new_connection_dialog,
 };
 pub use overlay::{PaneOverlay, notice_rect, overlay_rect, pane_notice, pane_overlay};
 pub use pane_bar::{PaneBarView, PaneStatus, pane_bar};

@@ -31,7 +31,7 @@ use rmx_transfer::{
 };
 use rmx_ui::Protocol;
 use rmx_ui::widgets::{
-    HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, VncColors,
+    HostKeyStatus, PromptField, RdpQuality, RdpSecurity, ScaleChoice, SessionLogging, VncColors,
     is_rustdesk_address,
 };
 use rmx_vault::{KnownHost, Tunnel};
@@ -134,6 +134,8 @@ pub enum LinkEvent {
     /// What it connects to is not on this machine now. Failing, unless the pane was reopened
     /// from the last session, which waits for the user instead.
     Missing(String),
+    /// What of the session the connection says to log, sent before it is ready.
+    Logging(SessionLogging),
     /// How many port forwards run, and what went wrong with the others.
     Forwards(u32, Vec<String>),
 }
@@ -413,6 +415,8 @@ pub struct ConnectPlan {
     pub rustdesk_key: Option<String>,
     pub ftps: bool,
     pub serial: SerialConfig,
+    /// Terminals: what of the session to write to a log file.
+    pub log: SessionLogging,
 }
 
 /// What a pane needs to get connected.
@@ -465,6 +469,7 @@ pub async fn run(request: ConnectRequest) {
             return;
         },
     };
+    reporter.send(LinkEvent::Logging(plan.log));
 
     let session = async {
         match (plan.protocol, goal) {

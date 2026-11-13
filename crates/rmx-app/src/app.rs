@@ -86,6 +86,7 @@ mod display;
 mod handler;
 mod keys;
 mod lifecycle;
+mod logging;
 mod menus;
 mod panes;
 mod pointer;
@@ -123,6 +124,8 @@ pub enum AppEvent {
     /// The serial ports this machine has.
     SerialPorts(Vec<rmx_ui::widgets::SerialPortChoice>),
     Vault(VaultEvent),
+    /// The log of a pane, to the file at this path, has stopped for this reason.
+    LogFailed(PaneId, std::path::PathBuf, String),
 }
 
 struct ProxySink(EventLoopProxy<AppEvent>);
