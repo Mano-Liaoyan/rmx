@@ -136,6 +136,9 @@ pub struct ConnectionDraft {
     pub ftps: bool,
     /// Terminals: what of each session to write to a log file.
     pub log: SessionLogging,
+    /// Whether to use the login a folder above its group hands down, when one does, rather than
+    /// its own. Saving with this set clears its own username, password and key.
+    pub inherit: bool,
 }
 
 impl fmt::Debug for ConnectionDraft {
@@ -181,6 +184,7 @@ impl ConnectionDraft {
             vnc_colors: VncColors::default(),
             ftps: false,
             log: SessionLogging::Off,
+            inherit: true,
         }
     }
 
@@ -199,6 +203,74 @@ impl ConnectionDraft {
 pub fn is_rustdesk_address(host: &str) -> bool {
     let host = host.trim();
     host.contains('.') || host.contains(':')
+}
+
+/// A login a folder hands down to the connections in it and below, as the form shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InheritedLogin {
+    /// The folder, as the form's Group field names it: `Production/Web`.
+    pub group: String,
+    /// The username it gives; empty for none.
+    pub username: String,
+    /// Whether it gives a password.
+    pub password: bool,
+    /// Whether it gives a key.
+    pub key: bool,
+}
+
+impl InheritedLogin {
+    /// The login a connection in `group` inherits: that of the nearest folder, `group` itself
+    /// included, that has one.
+    pub fn nearest<'a>(logins: &'a [Self], group: &str) -> Option<&'a Self> {
+        logins
+            .iter()
+            .filter_map(|login| depth_within(&login.group, group).map(|depth| (depth, login)))
+            .max_by_key(|&(depth, _)| depth)
+            .map(|(_, login)| login)
+    }
+
+    /// The folder's own name: the last part of its group.
+    pub fn folder(&self) -> &str {
+        segments(&self.group).last().unwrap_or_default()
+    }
+
+    /// What the form says about it.
+    fn describe(&self) -> String {
+        let mut text = format!("Inherited from folder {}", self.folder());
+        let mut parts = Vec::new();
+        if !self.username.is_empty() {
+            parts.push(self.username.as_str());
+        }
+        if self.password {
+            parts.push("with a saved password");
+        }
+        if self.key {
+            parts.push("with a stored key");
+        }
+        if !parts.is_empty() {
+            text += ": ";
+            text += &parts.join(", ");
+        }
+        text
+    }
+}
+
+/// The parts of a group path, as the vault splits it.
+fn segments(path: &str) -> impl Iterator<Item = &str> {
+    path.split('/').map(str::trim).filter(|part| !part.is_empty())
+}
+
+/// How many folders deep `folder` is, if `group` is it or inside it.
+fn depth_within(folder: &str, group: &str) -> Option<usize> {
+    let mut inside = segments(group);
+    let mut depth = 0;
+    for part in segments(folder) {
+        if inside.next() != Some(part) {
+            return None;
+        }
+        depth += 1;
+    }
+    (depth > 0).then_some(depth)
 }
 
 /// A serial port this machine has.
@@ -265,12 +337,19 @@ impl NewConnectionState {
 }
 
 /// The modal dialog. `Some` is returned as it closes or when the form is submitted.
-pub fn new_connection_dialog(ctx: &Context, state: &mut NewConnectionState) -> Option<UiAction> {
+///
+/// `logins` are what folders hand down, for the form to say what a connection would inherit.
+pub fn new_connection_dialog(
+    ctx: &Context,
+    state: &mut NewConnectionState,
+    logins: &[InheritedLogin],
+) -> Option<UiAction> {
     if !state.open {
         return None;
     }
-    let modal =
-        float::modal(ctx, Id::unique("new-connection"), WIDTH, |ui| new_connection_body(ui, state));
+    let modal = float::modal(ctx, Id::unique("new-connection"), WIDTH, |ui| {
+        new_connection_body(ui, state, logins)
+    });
     let action = modal.inner.or(modal.dismissed.then_some(UiAction::ConnectionCancel));
     if action.is_some() {
         state.close();
@@ -286,11 +365,15 @@ pub fn new_connection_dialog(ctx: &Context, state: &mut NewConnectionState) -> O
 }
 
 /// The dialog's content, for hosting in any surface.
-pub fn new_connection_body(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
+pub fn new_connection_body(
+    ui: &mut Ui,
+    state: &mut NewConnectionState,
+    logins: &[InheritedLogin],
+) -> Option<UiAction> {
     ui.spacing_mut().item_spacing.y = 0.;
     match &mut state.draft {
         None => tiles_step(ui, state),
-        Some(_) => form_step(ui, state),
+        Some(_) => form_step(ui, state, logins),
     }
 }
 
@@ -413,6 +496,26 @@ fn warning(ui: &mut Ui, text: &str) {
     );
 }
 
+/// Where the login comes from, when a folder above the group hands one down: a choice between
+/// that one and its own. Returns whether to show the fields for its own.
+fn login_source(ui: &mut Ui, draft: &mut ConnectionDraft, logins: &[InheritedLogin]) -> bool {
+    let Some(found) = InheritedLogin::nearest(logins, &draft.group) else { return true };
+    row(ui, "Login", |ui| {
+        let mut selected = usize::from(!draft.inherit);
+        let options = ["Inherited", "Its own"];
+        if segmented(ui, Id::unique("cd-login"), &options, &mut selected).changed() {
+            draft.inherit = selected == 0;
+        }
+    });
+    if draft.inherit {
+        let p = palette(ui);
+        row(ui, "", |ui| {
+            ui.label(egui::RichText::new(found.describe()).size(TEXT_SM).color(p.muted_fg));
+        });
+    }
+    !draft.inherit
+}
+
 /// The ports found on this machine, as buttons filling in `device`. Returns whether to look again.
 fn port_choices(ui: &mut Ui, ports: Option<&[SerialPortChoice]>, device: &mut String) -> bool {
     let p = palette(ui);
@@ -527,7 +630,11 @@ fn display_options(ui: &mut Ui, draft: &mut ConnectionDraft, resizable: bool) {
     });
 }
 
-fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
+fn form_step(
+    ui: &mut Ui,
+    state: &mut NewConnectionState,
+    logins: &[InheritedLogin],
+) -> Option<UiAction> {
     let mut back = false;
     let mut action = None;
     let draft = state.draft.as_deref_mut()?;
@@ -606,6 +713,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         field(ui, "cd-forwards", "Forwards", &mut draft.forwards, hint, false);
                     }
                     section(ui);
+                    if login_source(ui, draft, logins) {
                     field(ui, "cd-user", "Username", &mut draft.username, "", false);
                     row(ui, "Method", |ui| {
                         let mut selected = draft.auth as usize;
@@ -642,6 +750,7 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         },
                         AuthKind::Agent => {},
                     }
+                    }
                     if protocol == Protocol::Ssh {
                         logging_options(ui, draft);
                     }
@@ -661,15 +770,10 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         }
                     });
                     section(ui);
-                    field(ui, "cd-user", "Username", &mut draft.username, "", false);
-                    field(
-                        ui,
-                        "cd-password",
-                        "Password",
-                        &mut draft.password,
-                        "",
-                        true,
-                    );
+                    if login_source(ui, draft, logins) {
+                        field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                        field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                    }
                 },
                 Protocol::Rdp => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -706,16 +810,14 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         }
                     });
                     section(ui);
-                    field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                    let own = login_source(ui, draft, logins);
+                    if own {
+                        field(ui, "cd-user", "Username", &mut draft.username, "", false);
+                    }
                     field(ui, "cd-domain", "Domain", &mut draft.domain, "", false);
-                    field(
-                        ui,
-                        "cd-password",
-                        "Password",
-                        &mut draft.password,
-                        "",
-                        true,
-                    );
+                    if own {
+                        field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                    }
                 },
                 Protocol::RustDesk => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -738,14 +840,10 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         warning(ui, "By address RustDesk serves the session unencrypted, and the peer's identity is not checked. Use it over a network you trust, such as a VPN.");
                     }
                     section(ui);
-                    field(
-                        ui,
-                        "cd-password",
-                        "Password",
-                        &mut draft.password,
-                        "Empty to ask the person at the peer",
-                        true,
-                    );
+                    if login_source(ui, draft, logins) {
+                        let hint = "Empty to ask the person at the peer";
+                        field(ui, "cd-password", "Password", &mut draft.password, hint, true);
+                    }
                 },
                 Protocol::Vnc => {
                     field(ui, "cd-jump", "Jump via", &mut draft.jump, "", false);
@@ -759,14 +857,9 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
                         }
                     });
                     section(ui);
-                    field(
-                        ui,
-                        "cd-password",
-                        "Password",
-                        &mut draft.password,
-                        "",
-                        true,
-                    );
+                    if login_source(ui, draft, logins) {
+                        field(ui, "cd-password", "Password", &mut draft.password, "", true);
+                    }
                 },
                 Protocol::Serial => logging_options(ui, draft),
             }
@@ -803,4 +896,43 @@ fn form_step(ui: &mut Ui, state: &mut NewConnectionState) -> Option<UiAction> {
         ui.ctx().request_repaint();
     }
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn login(group: &str) -> InheritedLogin {
+        InheritedLogin { group: group.to_owned(), username: group.to_owned(), ..Default::default() }
+    }
+
+    #[test]
+    fn the_nearest_folder_above_the_group_hands_down_its_login() {
+        let logins = [login("Production"), login("Production/Web"), login("Staging")];
+        let found = |group| InheritedLogin::nearest(&logins, group).map(|l| l.group.as_str());
+        assert_eq!(found("Production/Web/eu"), Some("Production/Web"));
+        assert_eq!(found(" Production / Web "), Some("Production/Web"));
+        assert_eq!(found("Production/Db"), Some("Production"));
+        assert_eq!(found("Production"), Some("Production"));
+        assert_eq!(found("ProductionX"), None);
+        assert_eq!(found(""), None);
+        assert_eq!(found("Other/Production"), None);
+    }
+
+    #[test]
+    fn it_says_where_the_login_comes_from() {
+        let full = InheritedLogin {
+            group: "Production/Web".to_owned(),
+            username: "admin".to_owned(),
+            password: true,
+            key: true,
+        };
+        assert_eq!(full.folder(), "Web");
+        assert_eq!(
+            full.describe(),
+            "Inherited from folder Web: admin, with a saved password, with a stored key"
+        );
+        let bare = InheritedLogin { group: "a".to_owned(), ..Default::default() };
+        assert_eq!(bare.describe(), "Inherited from folder a");
+    }
 }

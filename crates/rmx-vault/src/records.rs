@@ -307,6 +307,39 @@ records! {
         /// Setting value.
         value: String,
     }
+
+    /// The login a folder hands down to the connections inside it, at any depth. Its id is the
+    /// folder's: build it with [`FolderLogin::new`]. See [`crate::inherit`] for the rules.
+    ///
+    /// Added in schema version 2.
+    FolderLogin => "folder_logins" {
+        /// Login name, when not taken from the credential.
+        username: Option<String>,
+        /// Stored credential to log in with.
+        credential_id: Option<Id>,
+        /// Stored SSH key to log in with.
+        ssh_key_id: Option<Id>,
+    }
+}
+
+impl FolderLogin {
+    /// An empty login for the folder `folder`.
+    pub fn new(folder: Id) -> Self {
+        Self { id: folder, username: None, credential_id: None, ssh_key_id: None }
+    }
+
+    /// Whether it sets nothing, and so hands nothing down.
+    pub fn is_empty(&self) -> bool {
+        self.username.is_none() && self.credential_id.is_none() && self.ssh_key_id.is_none()
+    }
+}
+
+impl Connection {
+    /// Whether it sets a login of its own (a username, a credential or a key), which keeps it from
+    /// inheriting its folders'.
+    pub fn has_own_login(&self) -> bool {
+        self.username.is_some() || self.credential_id.is_some() || self.ssh_key_id.is_some()
+    }
 }
 
 impl KnownHost {

@@ -9,9 +9,9 @@ use rmx_ui::theme::{self, PANE_BAR_HEIGHT, STRIP_HEIGHT, TREE_ROW_HEIGHT};
 use rmx_ui::virtual_list::{self, window};
 use rmx_ui::widgets::tabs::{TAB_GAP, drop_index, preview_slot, slot_x, tab_width};
 use rmx_ui::widgets::{
-    NewConnectionState, NodeKind, PaneBarView, PaneStatus, QuickItem, QuickOpenState, Reveal,
-    TabStripState, TabView, TitleBarView, TreeModel, TreeNode, TreeState, connection_tree,
-    new_connection_dialog, pane_bar, quick_open, tab_strip, title_bar,
+    ConnectionDraft, InheritedLogin, NewConnectionState, NodeKind, PaneBarView, PaneStatus,
+    QuickItem, QuickOpenState, Reveal, TabStripState, TabView, TitleBarView, TreeModel, TreeNode,
+    TreeState, connection_tree, new_connection_dialog, pane_bar, quick_open, tab_strip, title_bar,
 };
 use rmx_ui::{NodeId, PaneId, Protocol, TabId, ThemeMode, UiAction};
 
@@ -381,7 +381,7 @@ fn dialog_steps_from_tiles_to_form_and_cancels() {
     // Let the float size itself and finish appearing, so it sits where it will stay.
     let ctx = harness.ctx.clone();
     for _ in 0..12 {
-        harness.frame(vec![], |_| new_connection_dialog(&ctx, &mut state));
+        harness.frame(vec![], |_| new_connection_dialog(&ctx, &mut state, &[]));
     }
 
     // The first tile is at the dialog's top-left, under the header; the dialog is centered.
@@ -389,7 +389,7 @@ fn dialog_steps_from_tiles_to_form_and_cancels() {
     let dialog_left = center.x - 270.;
     let height = 52. + 16. + 84. * 2. + 8. + 16. + 1. + 56.;
     let tile = pos2(dialog_left + 40., center.y - height / 2. + 52. + 16. + 40.);
-    let action = harness.click(tile, |ui| new_connection_dialog(ui.ctx(), &mut state));
+    let action = harness.click(tile, |ui| new_connection_dialog(ui.ctx(), &mut state, &[]));
     assert_eq!(action, None);
     assert_eq!(state.draft_mut().map(|draft| draft.protocol), Some(Protocol::Ssh));
 
@@ -401,9 +401,70 @@ fn dialog_steps_from_tiles_to_form_and_cancels() {
         repeat: false,
         modifiers: Modifiers::NONE,
     };
-    let action = harness.frame(vec![escape], |ui| new_connection_dialog(ui.ctx(), &mut state));
+    let action = harness.frame(vec![escape], |ui| new_connection_dialog(ui.ctx(), &mut state, &[]));
     assert_eq!(action, Some(UiAction::ConnectionCancel));
     assert!(!state.is_open());
+}
+
+/// Every piece of text a frame painted.
+fn painted_text(harness: &mut Harness, mut draw: impl FnMut(&mut Ui)) -> Vec<String> {
+    harness.time += 1. / 60.;
+    let raw =
+        RawInput { screen_rect: Some(SCREEN), time: Some(harness.time), ..RawInput::default() };
+    let output = harness.ctx.run_ui(raw, |ui| draw(ui));
+    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            _ => (),
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    output.drop_without_applying_deltas();
+    out
+}
+
+#[test]
+fn the_form_says_which_folder_a_login_is_inherited_from() {
+    let mut harness = Harness::new();
+    let logins = [
+        InheritedLogin {
+            group: "Production".to_owned(),
+            username: "admin".to_owned(),
+            password: true,
+            key: false,
+        },
+        InheritedLogin {
+            group: "Staging".to_owned(),
+            username: "other".to_owned(),
+            ..Default::default()
+        },
+    ];
+    let mut draft = ConnectionDraft::new(Protocol::Ssh);
+    draft.group = "Production / Web".to_owned();
+    let mut state = NewConnectionState::default();
+    state.open_draft(draft);
+    let ctx = harness.ctx.clone();
+    for _ in 0..12 {
+        harness.frame(vec![], |_| new_connection_dialog(&ctx, &mut state, &logins));
+    }
+    let text = painted_text(&mut harness, |_| {
+        new_connection_dialog(&ctx, &mut state, &logins);
+    });
+    let inherited = text.iter().find(|t| t.contains("Inherited from folder Production"));
+    assert!(inherited.is_some_and(|t| t.contains("admin")), "{text:?}");
+    assert!(!text.iter().any(|t| t == "Username"), "its own fields are hidden: {text:?}");
+
+    // Overriding shows its own fields again.
+    state.draft_mut().unwrap().inherit = false;
+    let text = painted_text(&mut harness, |_| {
+        new_connection_dialog(&ctx, &mut state, &logins);
+    });
+    assert!(text.iter().any(|t| t == "Username"), "{text:?}");
+    assert!(!text.iter().any(|t| t.contains("Inherited from")), "{text:?}");
 }
 
 #[test]
