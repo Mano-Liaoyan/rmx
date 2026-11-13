@@ -316,7 +316,14 @@ fn non_empty(text: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
+/// A typed path, `~/` taken as the home directory. Quotes around the whole path are dropped, as
+/// Windows Explorer's "Copy as path" adds them and no file name holds them there.
 fn expand_home(path: &str) -> PathBuf {
+    let path = path.trim();
+    let path = ['"', '\'']
+        .iter()
+        .find_map(|quote| path.strip_prefix(*quote)?.strip_suffix(*quote))
+        .map_or(path, str::trim);
     match (path.strip_prefix("~/"), std::env::home_dir()) {
         (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(path),
@@ -2597,6 +2604,15 @@ mod tests {
         assert_eq!(named.public_key, "ssh-ed25519 PUBLIC deploy");
         let plain = imported_key(&mut vault, "plain").expect("OpenSSH's default key");
         assert_eq!(plain.private_key.expose(), "PRIVATE default");
+    }
+
+    #[test]
+    fn a_pasted_path_loses_its_quotes() {
+        let path = r"C:\Users\me\.ssh\id_ed25519";
+        assert_eq!(expand_home(&format!("\"{path}\"")), PathBuf::from(path));
+        assert_eq!(expand_home(&format!(" '{path}' ")), PathBuf::from(path));
+        assert_eq!(expand_home(path), PathBuf::from(path));
+        assert_eq!(expand_home("\"half"), PathBuf::from("\"half"), "one quote alone is kept");
     }
 
     #[test]
